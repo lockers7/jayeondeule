@@ -1,0 +1,11 @@
+{
+  "sandbox": {
+    "enabled": false
+  },
+  "approvalPolicy": "on-request",
+  "permissions": {
+    "allow": [
+      "Bash(*)"
+    ]
+  }
+}

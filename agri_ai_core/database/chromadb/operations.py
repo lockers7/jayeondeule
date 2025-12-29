@@ -1,0 +1,631 @@
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# ChromaDB 데이터 작업 모듈
+# 벡터 임베딩 추가, 유사도 검색, 데이터 업데이트/삭제 등
+# 실제 데이터 작업을 수행하는 함수들을 제공합니다.
+# --->
+# prepare_metadata_for_chroma: 메타데이터를 ChromaDB 호환 형식으로 변환
+# clean_metadata: 메타데이터 정리 (prepare_metadata_for_chroma 별칭)
+# restore_metadata_from_chroma: ChromaDB에서 조회한 metadata를 원래 형태로 복원
+# generate_doc_id: 문서 ID 생성기
+# add_document: 문서 추가 (단일 문서)
+# get_documents: 문서 읽기 (복수 문서)
+# delete_document: 문서 삭제
+# upsert_collection_data: 문서 업서트 (있으면 업데이트, 없으면 추가)
+# upsert_documents_with_embedding: 복수 문서 업서트 (임베딩 포함)
+# query_documents: 벡터 검색
+# flatten: 기능 설명 필요
+# flatten_field: 기능 설명 필요
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+import json
+import time
+import requests
+import traceback
+import pandas as pd
+
+from decimal import Decimal
+from datetime import datetime
+
+from agri_ai_core.log_utils.log_handlers import setup_logger
+from agri_ai_core.shared_modules.config.settings import settings
+from agri_ai_core.database.chromadb.client import (
+    CHROMA_API_BASE,
+    get_collection_id_from_name,
+    get_collection
+)
+
+logger = setup_logger(__name__)
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 임베딩 차원 반환
+# --->
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def _embedding_dim() -> int:
+    return settings.embedding_dim
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# JSON 직렬화를 위한 데이터 정리
+# 값을 JSON 직렬화 가능한 형태로 변환
+#
+# Args:
+#     value: 변환할 값
+#
+# Returns:
+#     JSON 직렬화 가능한 값
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def _sanitize_for_json(value):
+    if isinstance(value, Decimal):
+        return int(value) if value == int(value) else float(value)
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(value, pd.Timestamp):
+        return value.to_pydatetime().strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(value, dict):
+        return {k: _sanitize_for_json(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_for_json(v) for v in value]
+    if isinstance(value, tuple):
+        return [_sanitize_for_json(v) for v in value]
+    if isinstance(value, set):
+        return [_sanitize_for_json(v) for v in value]
+    return value
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 메타데이터를 ChromaDB 호환 형식으로 변환
+# 메타데이터를 ChromaDB 호환 형식으로 변환
+# 문자열, 숫자, 불린값은 그대로 유지
+# 복잡한 객체(dict, list 등)는 JSON 문자열로 직렬화
+#
+# Args:
+#     metadata: 원본 메타데이터
+#
+# Returns:
+#     dict: ChromaDB 호환 메타데이터
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def prepare_metadata_for_chroma(metadata: dict) -> dict:
+    if not isinstance(metadata, dict):
+        return {}
+
+    clean_metadata = {}
+
+    for key, value in metadata.items():
+        if value is None:
+            continue
+
+        if isinstance(value, (str, int, float, bool, Decimal)):
+            clean_metadata[key] = value if not isinstance(value, Decimal) else _sanitize_for_json(value)
+        else:
+            try:
+                sanitized = _sanitize_for_json(value)
+                if isinstance(sanitized, (dict, list, tuple, set)):
+                    clean_metadata[key] = json.dumps(sanitized, ensure_ascii=False)
+                    clean_metadata[f"{key}_is_json"] = True
+                else:
+                    clean_metadata[key] = sanitized
+                    if isinstance(value, (dict, list, tuple, set)):
+                        clean_metadata[f"{key}_is_json"] = True
+            except Exception as e:
+                logger.warning(f"메타데이터 '{key}' 직렬화 실패: {e}")
+                clean_metadata[key] = str(value)
+
+    return clean_metadata
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 메타데이터 정리 (prepare_metadata_for_chroma 별칭)
+# --->
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def clean_metadata(metadata: dict) -> dict:
+    return prepare_metadata_for_chroma(metadata)
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# ChromaDB에서 조회한 metadata를 원래 형태로 복원
+# ChromaDB에서 조회한 메타데이터를 원래 형태로 복원
+#
+# Args:
+#     metadata: ChromaDB 메타데이터
+#
+# Returns:
+#     dict: 복원된 메타데이터
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def restore_metadata_from_chroma(metadata: dict) -> dict:
+    if not isinstance(metadata, dict):
+        return {}
+
+    restored_metadata = {}
+    json_flags = {}
+
+    for key, value in metadata.items():
+        if key.endswith('_is_json') and value is True:
+            original_key = key[:-8]
+            json_flags[original_key] = True
+
+    for key, value in metadata.items():
+        if key.endswith('_is_json'):
+            continue
+
+        if key in json_flags:
+            try:
+                restored_metadata[key] = json.loads(value)
+            except Exception as e:
+                logger.warning(f"메타데이터 '{key}' 역직렬화 실패: {e}")
+                restored_metadata[key] = value
+        else:
+            restored_metadata[key] = value
+
+    return restored_metadata
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 문서 ID 생성기
+# 문서 ID 생성
+#
+# Args:
+#     kind: 문서 종류 (farm, units, crops, stats, optimal, settings, learned, document, last)
+#     farm_id: 농장 ID
+#     house_id: 재배사 ID
+#     timestamp: 타임스탬프
+#
+# Returns:
+#     str: 생성된 문서 ID
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def generate_doc_id(kind=None, farm_id=None, house_id=None, timestamp=None):
+    try:
+        if timestamp is None:
+            dt = datetime.now()
+        elif isinstance(timestamp, (datetime, pd.Timestamp)):
+            dt = timestamp
+        elif isinstance(timestamp, str):
+            dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+        else:
+            raise ValueError(f"Invalid timestamp type: {type(timestamp)}")
+
+        if kind == "farm":
+            return f"{kind}_{farm_id}_{dt.strftime('%Y-%m-%d 00:00:00')}"
+
+        elif kind in ["units", "crops", "stats", "optimal", "settings", "self"]:
+            minute = dt.minute
+
+            if kind == "units":
+                bucket_min = ((minute - 1) // 3 + 1) * 3 if minute != 0 else 0
+                if bucket_min >= 60:
+                    bucket_min = 0
+                    dt = dt.replace(hour=(dt.hour + 1) % 24)
+                dt = dt.replace(minute=bucket_min, second=0, microsecond=0)
+                return f"{kind}_{farm_id}_{house_id}_{dt.strftime('%Y-%m-%d %H:%M:00')}"
+
+            elif kind == "crops":
+                return f"{kind}_{farm_id}_{house_id}_{dt.strftime('%Y-%m-%d %H:%M:%S')}"
+
+            elif kind in ["stats", "optimal", "settings", "self"]:
+                bucket_min = ((minute - 1) // 10 + 1) * 10 if minute != 0 else 0
+                if bucket_min >= 60:
+                    bucket_min = 0
+                    dt = dt.replace(hour=(dt.hour + 1) % 24)
+                dt = dt.replace(minute=bucket_min, second=0, microsecond=0)
+                return f"{kind}_{farm_id}_{house_id}_{dt.strftime('%Y-%m-%d %H:%M:00')}"
+
+        elif kind in ["document", "last"]:
+            return f"{kind}_{farm_id}_{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+
+        else:
+            logger.error(f"지원되지 않는 kind: {kind}")
+            return "Err"
+
+    except Exception as e:
+        logger.error(f"[ID 생성 오류] kind={kind}, timestamp={timestamp} - {e}")
+        return "Err"
+
+
+# 기존 함수명 호환성
+_doc_id_generator = generate_doc_id
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 문서 추가 (단일 문서)
+# 단일 문서 추가
+#
+# Args:
+#     collection_name: 컬렉션 이름
+#     doc_id: 문서 ID
+#     text: 문서 텍스트
+#     metadata: 메타데이터
+#     embedding: 임베딩 벡터
+#
+# Returns:
+#     dict: 결과
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def add_document(collection_name, doc_id, text, metadata, embedding=None):
+    logger.debug(f" add_document: collection_name: {collection_name}, doc_id: {doc_id}")
+
+    collection_id = get_collection_id_from_name(collection_name)
+    if not collection_id:
+        return {"error": "컬렉션 ID 조회 실패"}
+
+    if metadata is None:
+        metadata = {}
+    else:
+        metadata = prepare_metadata_for_chroma(metadata)
+
+    metadata["doc_id"] = doc_id
+
+    if embedding is None:
+        embedding = [0.0] * _embedding_dim()
+    if not isinstance(embedding, list) or len(embedding) != _embedding_dim():
+        return {"error": "임베딩 오류"}
+
+    url = f"{CHROMA_API_BASE}/collections/{collection_id}/add"
+    payload = {
+        "ids": [doc_id],
+        "documents": [text],
+        "metadatas": [metadata],
+        "embeddings": [embedding]
+    }
+
+    res = requests.post(url, json=payload)
+    if res.status_code in [200, 201]:
+        logger.debug(f"[add_document] 문서 추가 성공: doc_id={doc_id}")
+        return {"success": True}
+    else:
+        return {"error": f"{res.status_code}: {res.text}"}
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 문서 읽기 (복수 문서)
+# 문서 조회
+#
+# Args:
+#     collection_name: 컬렉션 이름
+#     ids: 문서 ID 목록
+#     where: 필터 조건
+#     limit: 최대 결과 수
+#     offset: 시작 위치
+#     sort: 정렬 조건
+#     where_document: 문서 필터
+#     include: 포함할 필드
+#
+# Returns:
+#     dict: 조회 결과
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def get_documents(collection_name, ids=None, where=None, limit=None, offset=None, sort=None, where_document=None, include=None):
+    collection_id = get_collection_id_from_name(collection_name)
+    if not collection_id:
+        return {"error": "컬렉션 ID를 찾을 수 없습니다."}
+
+    if ids is not None and isinstance(ids, str):
+        ids = [ids]
+
+    payload = {
+        "include": include or ["documents", "metadatas"]
+    }
+
+    if ids:
+        payload["ids"] = ids
+    if where:
+        payload["where"] = _sanitize_for_json(where)
+    if where_document:
+        payload["where_document"] = _sanitize_for_json(where_document)
+    if limit is not None:
+        payload["limit"] = limit
+    if offset is not None:
+        payload["offset"] = offset
+    if sort is not None:
+        payload["sort"] = sort
+
+    try:
+        url = f"{CHROMA_API_BASE}/collections/{collection_id}/get"
+        res = requests.post(url, json=payload)
+        if res.status_code != 200:
+            return {"error": f"{res.status_code}: {res.text}"}
+        result = res.json()
+
+        def flatten(field_name):
+            value = result.get(field_name)
+            if isinstance(value, list) and len(value) == 1 and isinstance(value[0], list):
+                return value[0]
+            return value or []
+
+        documents = flatten("documents")
+        raw_metadatas = flatten("metadatas")
+        returned_ids = flatten("ids")
+
+        restored_metadatas = []
+        for raw_metadata in raw_metadatas:
+            if isinstance(raw_metadata, dict):
+                restored_metadatas.append(restore_metadata_from_chroma(raw_metadata))
+            else:
+                restored_metadatas.append(raw_metadata)
+
+        return {
+            "documents": documents,
+            "metadatas": restored_metadatas,
+            "ids": returned_ids
+        }
+
+    except Exception as e:
+        logger.error(f"[get_documents] 예외 발생: {e}")
+        logger.error(traceback.format_exc())
+        return {"error": str(e)}
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 문서 삭제
+# 문서 삭제
+#
+# Args:
+#     collection_name: 컬렉션 이름
+#     ids: 삭제할 문서 ID 또는 ID 목록
+#
+# Returns:
+#     dict: 결과
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def delete_document(collection_name, ids):
+    logger.debug(f" delete_document: collection_name: {collection_name}, ids: {ids}")
+
+    if isinstance(ids, str):
+        ids = [ids]
+    elif isinstance(ids, list):
+        if len(ids) == 1 and isinstance(ids[0], list):
+            ids = ids[0]
+    else:
+        return {"error": f"delete_document: 예상치 못한 ids 타입: {type(ids)}"}
+
+    collection_id = get_collection_id_from_name(collection_name)
+    if not collection_id:
+        return {"error": "컬렉션 ID 조회 실패"}
+
+    url = f"{CHROMA_API_BASE}/collections/{collection_id}/delete"
+    payload = {"ids": ids}
+
+    try:
+        res = requests.post(url, json=payload)
+        if res.status_code in [200, 204]:
+            return {"success": True}
+        return {"error": f"{res.status_code}: {res.text}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 문서 업서트 (있으면 업데이트, 없으면 추가)
+# 문서 업서트
+#
+# Args:
+#     calledby: 호출자 정보
+#     collection: 컬렉션 이름
+#     doc_id: 문서 ID
+#     document: 문서 내용
+#     metadata: 메타데이터
+#
+# Returns:
+#     str: 결과 ("added", "updated", "failed")
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def upsert_collection_data(calledby, collection, doc_id, document, metadata):
+    logger.info(f" upsert_collection_data: calledby: {calledby}, collection: {collection}, doc_id: {doc_id}")
+
+    collection_name = collection if isinstance(collection, str) else str(collection)
+
+    if document is None:
+        return {"error": "문서가 제공되지 않았습니다"}
+
+    if isinstance(document, list) and all(isinstance(d, dict) for d in document):
+        valid_docs = []
+        for doc in document:
+            if "doc_id" in doc and "text" in doc:
+                meta = clean_metadata(doc.get("metadata", {}))
+                meta["doc_id"] = doc["doc_id"]
+                valid_docs.append({
+                    "doc_id": doc["doc_id"],
+                    "text": doc["text"],
+                    "metadata": meta
+                })
+        if not valid_docs:
+            return {"error": "문서 형식 오류 - list 내 유효 문서 없음"}
+        return upsert_documents_with_embedding(collection_name, valid_docs)
+
+    elif isinstance(document, str):
+        try:
+            check = get_documents(collection_name, where={"doc_id": {"$eq": doc_id}}, limit=1)
+            exists = isinstance(check, dict) and check.get("documents")
+            if exists:
+                delete_result = delete_document(collection_name, ids=[doc_id])
+                if isinstance(delete_result, dict) and delete_result.get("error"):
+                    logger.error(f"[{calledby}] 기존 문서 삭제 실패 - doc_id={doc_id}, error: {delete_result['error']}")
+                    return "failed"
+
+            result = add_document(collection_name, doc_id, text=document, metadata=metadata)
+            if isinstance(result, dict) and not result.get("error"):
+                return "added" if not exists else "updated"
+            else:
+                logger.error(f"[{calledby}] add_document 실패 - doc_id={doc_id}, error: {result.get('error')}")
+                return "failed"
+        except Exception as e:
+            logger.error(f"[{calledby}] 예외 발생 - doc_id={doc_id}, error: {e}")
+            logger.error(traceback.format_exc())
+            return "failed"
+
+    elif isinstance(document, list) and all(isinstance(d, str) for d in document):
+        if not (isinstance(doc_id, list) and isinstance(metadata, list)):
+            return {"error": "doc_id와 metadata는 반드시 리스트여야 합니다"}
+
+        if not (len(document) == len(doc_id) == len(metadata)):
+            return {"error": "문서, ID, 메타데이터 길이 불일치"}
+
+        valid_docs = []
+        for i in range(len(document)):
+            meta = clean_metadata(metadata[i])
+            meta["doc_id"] = doc_id[i]
+            valid_docs.append({
+                "doc_id": doc_id[i],
+                "text": document[i],
+                "metadata": meta
+            })
+        return upsert_documents_with_embedding(collection_name, valid_docs)
+
+    else:
+        return {"error": "문서 형식 오류 - str, list[str], list[dict] 중 하나여야 함"}
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 복수 문서 업서트 (임베딩 포함)
+# 복수 문서 업서트 (임베딩 포함)
+#
+# Args:
+#     collection_name: 컬렉션 이름
+#     docs: 문서 목록
+#
+# Returns:
+#     dict: 결과
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def upsert_documents_with_embedding(collection_name, docs):
+    logger.info(f" upsert_documents_with_embedding: collection_name: {collection_name}")
+
+    collection_id = get_collection_id_from_name(collection_name)
+    if not collection_id:
+        return {"error": "컬렉션 ID 조회 실패"}
+
+    ids, texts, metadatas, embeddings = [], [], [], []
+
+    for doc in docs:
+        doc_id = doc["doc_id"]
+        text = doc["text"]
+        raw_metadata = doc.get("metadata", {})
+
+        metadata = prepare_metadata_for_chroma(raw_metadata)
+
+        embedding = doc.get("embedding") or [0.0] * _embedding_dim()
+        if not isinstance(embedding, list) or len(embedding) != _embedding_dim():
+            logger.warning(f"[upsert_documents_with_embedding] 임베딩 형식 오류: {doc_id}")
+            continue
+
+        ids.append(doc_id)
+        texts.append(text)
+        metadatas.append(metadata)
+        embeddings.append(embedding)
+
+    if not ids:
+        return {"error": "업서트할 유효한 문서 없음"}
+
+    payload = {
+        "ids": ids,
+        "documents": texts,
+        "metadatas": metadatas,
+        "embeddings": embeddings
+    }
+
+    try:
+        url = f"{CHROMA_API_BASE}/collections/{collection_id}/upsert"
+        res = requests.post(url, json=payload)
+        if res.status_code in [200, 201]:
+            return {"success": True, "count": len(ids)}
+        return {"error": f"{res.status_code}: {res.text}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 벡터 검색
+# 벡터 검색
+#
+# Args:
+#     collection_name: 컬렉션 이름
+#     query_embeddings: 쿼리 임베딩
+#     n_results: 결과 수
+#     where: 필터 조건
+#     include: 포함할 필드
+#     where_document: 문서 필터
+#
+# Returns:
+#     dict: 검색 결과
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def query_documents(collection_name, query_embeddings=None, n_results=5, where=None, include=None, where_document=None):
+    try:
+        collection = get_collection(collection_name)
+        if "error" in collection:
+            return collection
+
+        collection_id = collection.get("id")
+        if not collection_id:
+            return {"error": f"컬렉션 ID를 가져올 수 없습니다: {collection_name}"}
+
+        if query_embeddings is None:
+            return {"error": "query_embeddings 는 필수입니다."}
+
+        if isinstance(query_embeddings, list) and query_embeddings and isinstance(query_embeddings[0], (int, float)):
+            query_embeddings = [query_embeddings]
+
+        url = f"{CHROMA_API_BASE}/collections/{collection_id}/query"
+
+        payload = {
+            "n_results": n_results,
+            "query_embeddings": query_embeddings,
+            "include": include or ["metadatas", "documents", "distances"]
+        }
+        if where:
+            sanitized_where = _sanitize_for_json(where)
+            payload["where"] = sanitized_where
+        if where_document:
+            payload["where_document"] = _sanitize_for_json(where_document)
+
+        for retry in range(3):
+            try:
+                response = requests.post(url, json=payload, timeout=30)
+                if response.status_code == 200:
+                    result = response.json()
+
+                    def flatten_field(field_name):
+                        value = result.get(field_name)
+                        if isinstance(value, list) and len(value) == 1 and isinstance(value[0], list):
+                            return value[0]
+                        return value or []
+
+                    metadatas = flatten_field("metadatas")
+                    restored_metadatas = []
+                    for metadata in metadatas:
+                        if isinstance(metadata, dict):
+                            restored_metadatas.append(restore_metadata_from_chroma(metadata))
+                        else:
+                            restored_metadatas.append(metadata)
+                    result["metadatas"] = restored_metadatas
+
+                    documents = flatten_field("documents")
+                    result["documents"] = documents
+
+                    ids = flatten_field("ids")
+                    result["ids"] = ids
+
+                    distances = flatten_field("distances")
+                    result["distances"] = distances
+
+                    matches = []
+                    for idx, doc_id in enumerate(ids):
+                        match = {
+                            "id": doc_id,
+                            "metadata": restored_metadatas[idx] if idx < len(restored_metadatas) else {},
+                        }
+                        if idx < len(documents):
+                            match["document"] = documents[idx]
+                        if idx < len(distances):
+                            match["distance"] = distances[idx]
+                        matches.append(match)
+                    result["matches"] = matches
+
+                    logger.info(f"[query_documents] '{collection_name}' 검색 성공: {len(ids)}건")
+                    return result
+                else:
+                    logger.warning(f"[query_documents] 쿼리 실패: {response.status_code} - {response.text}")
+                    time.sleep(1.5 ** retry)
+            except Exception as e:
+                logger.warning(f"[query_documents] 요청 예외 발생: {e}")
+                time.sleep(1.5 ** retry)
+
+        logger.warning("[query_documents] 최대 재시도 초과")
+        return {"matches": [], "ids": [], "documents": [], "metadatas": [], "distances": []}
+
+    except Exception as e:
+        logger.error(f"[query_documents] 예외 발생: {e}")
+        logger.error(traceback.format_exc())
+        return {"matches": [], "ids": [], "documents": [], "metadatas": [], "distances": []}
