@@ -80,21 +80,22 @@ def display_uploaded_files():
             if col3.button("삭제", key=f"del_{idx}"):
                 to_delete = idx
 
+        # 삭제는 별도 처리하여 DOM 충돌 방지
         if to_delete is not None:
             try:
-                file_path = stl.session_state.uploaded_files[to_delete]["path"]
+                file_info = stl.session_state.uploaded_files[to_delete]
+                file_path = file_info["path"]
+
+                # 파일 삭제
                 if os.path.exists(file_path):
                     os.remove(file_path)
 
-                if len(stl.session_state.uploaded_files) > to_delete:
-                    stl.session_state.uploaded_files.pop(to_delete)
+                # 리스트에서 제거
+                stl.session_state.uploaded_files.pop(to_delete)
+                stl.success(f"'{file_info['name']}' 파일이 삭제되었습니다.")
 
-                stl.rerun()
             except Exception as e:
                 stl.error(f"파일 삭제 중 오류 발생: {str(e)}")
-                if stl.session_state.uploaded_files and len(stl.session_state.uploaded_files) > to_delete:
-                    stl.session_state.uploaded_files.pop(to_delete)
-                stl.rerun()
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

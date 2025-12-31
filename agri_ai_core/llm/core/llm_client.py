@@ -33,6 +33,10 @@ _warmup_lock = threading.Lock()
 _warmup_started = False
 _llm_warmed = False
 
+# 모델 캐싱
+_cached_model_name = None
+_model_cache_lock = threading.Lock()
+
 # 환경 변수 설정
 os.environ['OLLAMA_MAX_LOADED_MODELS'] = '1'
 os.environ['OLLAMA_NUM_PARALLEL'] = '2'
@@ -55,9 +59,17 @@ def _get_available_models():
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 환경 설정에서 모델명을 가져오거나 기본값을 반환
 # 설정된 모델이 없으면 자동으로 폴백
+# 캐싱을 통해 매번 모델 목록 조회를 방지
 # --->
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def _get_model_name() -> str:
+    global _cached_model_name
+
+    # 캐시된 모델 이름이 있으면 바로 반환
+    with _model_cache_lock:
+        if _cached_model_name:
+            return _cached_model_name
+
     preferred_model = getattr(settings.model, "name", None) or "qwen3:14b"
     fallback_model = "qwen3:latest"
 
@@ -67,15 +79,21 @@ def _get_model_name() -> str:
     # 선호 모델이 있는지 확인
     if preferred_model in available_models:
         logger.debug(f"사용 중인 모델: {preferred_model}")
+        with _model_cache_lock:
+            _cached_model_name = preferred_model
         return preferred_model
 
     # 선호 모델이 없으면 폴백 모델 확인
     if fallback_model in available_models:
         logger.warning(f"선호 모델 '{preferred_model}'을 찾을 수 없어 '{fallback_model}' 사용")
+        with _model_cache_lock:
+            _cached_model_name = fallback_model
         return fallback_model
 
     # 둘 다 없으면 선호 모델 반환 (Ollama가 자동 다운로드 시도)
     logger.info(f"모델 '{preferred_model}'을 사용합니다 (필요시 자동 다운로드)")
+    with _model_cache_lock:
+        _cached_model_name = preferred_model
     return preferred_model
 
 
@@ -168,7 +186,8 @@ def get_llm_response(system_prompt=None, user_prompt=None, temperature=0.7,
                 response = ollama.chat(
                     model=model_name,
                     messages=message_payload,
-                    options=options_payload
+                    options=options_payload,
+                    keep_alive='1h'  # 모델을 1시간 동안 메모리에 유지
                 )
                 break
             except Exception as retry_err:
@@ -228,6 +247,7 @@ async def get_llm_streaming_response(prompt, temperature=0.7, top_p=0.9,
             model=model_name,
             prompt=prompt,
             stream=True,
+            keep_alive='1h',  # 모델을 1시간 동안 메모리에 유지
             options={
                 "temperature": temperature,
                 "top_p": top_p,

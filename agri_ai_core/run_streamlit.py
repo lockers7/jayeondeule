@@ -5,6 +5,14 @@
 # --->
 # main: Streamlit 앱 실행
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+import sys
+import os
+
+# 프로젝트 루트 디렉토리를 Python 경로에 추가
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 from agri_ai_core.log_utils.log_handlers import setup_logger
 from agri_ai_core.ui.streamlit_app.main import main as streamlit_main
 
