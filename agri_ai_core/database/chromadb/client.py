@@ -16,31 +16,16 @@ import requests
 from datetime import datetime
 
 from agri_ai_core.log_utils.log_handlers import setup_logger
-from agri_ai_core.shared_modules.config.settings import settings
+from agri_ai_core.database.chromadb.config import (
+    CHROMA_HOST,
+    CHROMA_PORT,
+    TENANT,
+    DATABASE,
+    CHROMA_API_BASE,
+    _COLLECTION_ID_MAP,
+)
 
 logger = setup_logger(__name__)
-
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# Chroma API 기본 경로 설정 (v2 엔드포인트 기준)
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-CHROMA_HOST = settings.vector.http_host or "127.0.0.1"
-CHROMA_PORT = settings.vector.http_port or 8000
-
-TENANT = "default_tenant"
-DATABASE = "default_database"
-CHROMA_API_BASE = f"http://{CHROMA_HOST}:{CHROMA_PORT}/api/v2/tenants/{TENANT}/databases/{DATABASE}"
-
-# 컬렉션 ID 캐시
-_COLLECTION_ID_MAP = {
-    "farm_collection": "farm_collection",
-    "source_collection": "source_collection",
-    "stats_collection": "stats_collection",
-    "optimal_collection": "optimal_collection",
-    "learned_collection": "learned_collection",
-    "setting_collection": "setting_collection",
-    "document_collection": "document_collection",
-    "last_learned_date": "last_learned_date",
-}
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -227,7 +212,7 @@ def list_collections():
 # dict: 생성된 컬렉션 정보
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def create_collection(collection_name=None, metadata=None):
-    from agri_ai_core.database.chromadb.operations import _sanitize_for_json
+    from agri_ai_core.database.chromadb.utils import _sanitize_for_json
 
     try:
         collections = list_collections()

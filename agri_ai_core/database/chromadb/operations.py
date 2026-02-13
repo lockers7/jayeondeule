@@ -26,214 +26,23 @@ from decimal import Decimal
 from datetime import datetime
 
 from agri_ai_core.log_utils.log_handlers import setup_logger
-from agri_ai_core.shared_modules.config.settings import settings
+from agri_ai_core.database.chromadb.config import CHROMA_API_BASE
 from agri_ai_core.database.chromadb.client import (
-    CHROMA_API_BASE,
     get_collection_id_from_name,
     get_collection
+)
+from agri_ai_core.database.chromadb.utils import (
+    _embedding_dim,
+    _sanitize_for_json,
+    prepare_metadata_for_chroma,
+    clean_metadata,
+    restore_metadata_from_chroma,
+    generate_doc_id,
 )
 
 logger = setup_logger(__name__)
 
 
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 임베딩 차원 반환
-# --->
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def _embedding_dim() -> int:
-    return settings.embedding_dim
-
-
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# JSON 직렬화를 위한 데이터 정리
-# 값을 JSON 직렬화 가능한 형태로 변환
-#
-# Args:
-#     value: 변환할 값
-#
-# Returns:
-#     JSON 직렬화 가능한 값
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def _sanitize_for_json(value):
-    if isinstance(value, Decimal):
-        return int(value) if value == int(value) else float(value)
-    if isinstance(value, datetime):
-        return value.strftime("%Y-%m-%d %H:%M:%S")
-    if isinstance(value, pd.Timestamp):
-        return value.to_pydatetime().strftime("%Y-%m-%d %H:%M:%S")
-    if isinstance(value, dict):
-        return {k: _sanitize_for_json(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_sanitize_for_json(v) for v in value]
-    if isinstance(value, tuple):
-        return [_sanitize_for_json(v) for v in value]
-    if isinstance(value, set):
-        return [_sanitize_for_json(v) for v in value]
-    return value
-
-
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 메타데이터를 ChromaDB 호환 형식으로 변환
-# 메타데이터를 ChromaDB 호환 형식으로 변환
-# 문자열, 숫자, 불린값은 그대로 유지
-# 복잡한 객체(dict, list 등)는 JSON 문자열로 직렬화
-#
-# Args:
-#     metadata: 원본 메타데이터
-#
-# Returns:
-#     dict: ChromaDB 호환 메타데이터
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def prepare_metadata_for_chroma(metadata: dict) -> dict:
-    if not isinstance(metadata, dict):
-        return {}
-
-    clean_metadata = {}
-
-    for key, value in metadata.items():
-        if value is None:
-            continue
-
-        if isinstance(value, (str, int, float, bool, Decimal)):
-            clean_metadata[key] = value if not isinstance(value, Decimal) else _sanitize_for_json(value)
-        else:
-            try:
-                sanitized = _sanitize_for_json(value)
-                if isinstance(sanitized, (dict, list, tuple, set)):
-                    clean_metadata[key] = json.dumps(sanitized, ensure_ascii=False)
-                    clean_metadata[f"{key}_is_json"] = True
-                else:
-                    clean_metadata[key] = sanitized
-                    if isinstance(value, (dict, list, tuple, set)):
-                        clean_metadata[f"{key}_is_json"] = True
-            except Exception as e:
-                logger.warning(f"메타데이터 '{key}' 직렬화 실패: {e}")
-                clean_metadata[key] = str(value)
-
-    return clean_metadata
-
-
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 메타데이터 정리 (prepare_metadata_for_chroma 별칭)
-# --->
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def clean_metadata(metadata: dict) -> dict:
-    return prepare_metadata_for_chroma(metadata)
-
-
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# ChromaDB에서 조회한 metadata를 원래 형태로 복원
-# ChromaDB에서 조회한 메타데이터를 원래 형태로 복원
-#
-# Args:
-#     metadata: ChromaDB 메타데이터
-#
-# Returns:
-#     dict: 복원된 메타데이터
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def restore_metadata_from_chroma(metadata: dict) -> dict:
-    if not isinstance(metadata, dict):
-        return {}
-
-    restored_metadata = {}
-    json_flags = {}
-
-    for key, value in metadata.items():
-        if key.endswith('_is_json') and value is True:
-            original_key = key[:-8]
-            json_flags[original_key] = True
-
-    for key, value in metadata.items():
-        if key.endswith('_is_json'):
-            continue
-
-        if key in json_flags:
-            try:
-                restored_metadata[key] = json.loads(value)
-            except Exception as e:
-                logger.warning(f"메타데이터 '{key}' 역직렬화 실패: {e}")
-                restored_metadata[key] = value
-        else:
-            restored_metadata[key] = value
-
-    return restored_metadata
-
-
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 문서 ID 생성기
-# 문서 ID 생성
-#
-# Args:
-#     kind: 문서 종류 (farm, units, crops, stats, optimal, settings, learned, document, last)
-#     farm_id: 농장 ID
-#     house_id: 재배사 ID
-#     timestamp: 타임스탬프
-#
-# Returns:
-#     str: 생성된 문서 ID
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def generate_doc_id(kind=None, farm_id=None, house_id=None, timestamp=None):
-    try:
-        if timestamp is None:
-            dt = datetime.now()
-        elif isinstance(timestamp, (datetime, pd.Timestamp)):
-            dt = timestamp
-        elif isinstance(timestamp, str):
-            dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
-        else:
-            raise ValueError(f"Invalid timestamp type: {type(timestamp)}")
-
-        if kind == "farm":
-            return f"{kind}_{farm_id}_{dt.strftime('%Y-%m-%d 00:00:00')}"
-
-        elif kind in ["units", "crops", "stats", "optimal", "settings", "self"]:
-            minute = dt.minute
-
-            if kind == "units":
-                bucket_min = ((minute - 1) // 3 + 1) * 3 if minute != 0 else 0
-                if bucket_min >= 60:
-                    bucket_min = 0
-                    dt = dt.replace(hour=(dt.hour + 1) % 24)
-                dt = dt.replace(minute=bucket_min, second=0, microsecond=0)
-                return f"{kind}_{farm_id}_{house_id}_{dt.strftime('%Y-%m-%d %H:%M:00')}"
-
-            elif kind == "crops":
-                return f"{kind}_{farm_id}_{house_id}_{dt.strftime('%Y-%m-%d %H:%M:%S')}"
-
-            elif kind in ["stats", "optimal", "settings", "self"]:
-                bucket_min = ((minute - 1) // 10 + 1) * 10 if minute != 0 else 0
-                if bucket_min >= 60:
-                    bucket_min = 0
-                    dt = dt.replace(hour=(dt.hour + 1) % 24)
-                dt = dt.replace(minute=bucket_min, second=0, microsecond=0)
-                return f"{kind}_{farm_id}_{house_id}_{dt.strftime('%Y-%m-%d %H:%M:00')}"
-
-        elif kind in ["document", "last"]:
-            return f"{kind}_{farm_id}_{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-
-        else:
-            logger.error(f"지원되지 않는 kind: {kind}")
-            return "Err"
-
-    except Exception as e:
-        logger.error(f"[ID 생성 오류] kind={kind}, timestamp={timestamp} - {e}")
-        return "Err"
-
-
-# 기존 함수명 호환성
-_doc_id_generator = generate_doc_id
-
-
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 문서 추가 (단일 문서)
-# 단일 문서 추가
-#
-# Args:
-#     collection_name: 컬렉션 이름
-#     doc_id: 문서 ID
-#     text: 문서 텍스트
-#     metadata: 메타데이터
-#     embedding: 임베딩 벡터
 #
 # Returns:
 #     dict: 결과
