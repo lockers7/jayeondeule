@@ -1,243 +1,178 @@
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# JSON 데이터 로더 모듈
-# JSON 형식의 데이터 파일을 읽어와 파싱하고 검증하여
-# 시스템에서 사용 가능한 형태로 로드합니다.
-# --->
-# get_training_json_path: 학습용 JSON 파일 경로 반환
-# get_units_json_path: Units JSON 파일 경로 반환
-# get_crops_json_path: Crops JSON 파일 경로 반환
-# fetch_data_from_json: JSON 파일에서 농장 운용 데이터 읽기
-# json_to_vcdb: JSON 데이터를 Vector DB에 저장 (safe_float는 data_processor에서 import)
+# RAG 적재 모듈
+# PostgreSQL에서 농장 데이터를 직접 읽어 ChromaDB(source_collection)에 저장합니다.
+# (기존 JSON 중간 파일 의존 제거)
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-import os
-import json
+import traceback
+from typing import Any, Dict, List
 
 from agri_ai_core.src.logs import setup_logger
-from agri_ai_core.config import settings
-from agri_ai_core.src.utils import clean_sensor_value, parse_boolean
 from agri_ai_core.src.chroma.client import heartbeat
-from agri_ai_core.src.ai.rag.data_processor import process_unit_data, process_crop_data, safe_float
+from agri_ai_core.src.ai.rag.data_processor import process_unit_data, process_crop_data
+from agri_ai_core.src.postgresql.reader import (
+    read_farm_house_list,
+    read_units_data,
+    read_crops_data,
+)
 
 logger = setup_logger(__name__)
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 학습용 JSON 파일 경로 반환
-# --->
-# 학습용 JSON 파일 경로 반환
+# Crops 행 키 정규화
+# DB 쿼리 별칭과 process_crop_data 기대 키를 맞춥니다.
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def get_training_json_path():
-    cache_path = settings.vector.vector_cache or ""
-    cache_dir = os.path.dirname(cache_path)
-    if cache_dir and not cache_dir.endswith('/'):
-        cache_dir = cache_dir + '/'
-    filename = settings.house_source_json or ""
-    return (cache_dir or "") + filename
+def _normalize_crop_row(crop: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(crop)
+
+    # data kind / datetime
+    normalized.setdefault("장치데이터", crop.get("작물데이터", "crops"))
+    normalized.setdefault("기록일시", crop.get("기록일시", ""))
+
+    # 기간/상태
+    normalized.setdefault("작물시작일자", crop.get("재배시작일", ""))
+    normalized.setdefault("작물종료일자", crop.get("재배종료일", ""))
+    normalized.setdefault("생육상태", crop.get("생육상태", ""))
+
+    # 수확량/가격
+    normalized.setdefault("총수확량", crop.get("총수확량", 0))
+    normalized.setdefault("1등급수확량", crop.get("등급1", 0))
+    normalized.setdefault("2등급수확량", crop.get("등급2", 0))
+    normalized.setdefault("3등급수확량", crop.get("등급3", 0))
+    normalized.setdefault("4등급수확량", crop.get("등급4", 0))
+    normalized.setdefault("5등급수확량", crop.get("등급5", 0))
+
+    normalized.setdefault("1등급가격", crop.get("등급1판매가격", 0))
+    normalized.setdefault("2등급가격", crop.get("등급2판매가격", 0))
+    normalized.setdefault("3등급가격", crop.get("등급3판매가격", 0))
+    normalized.setdefault("4등급가격", crop.get("등급4판매가격", 0))
+    normalized.setdefault("5등급가격", crop.get("등급5판매가격", 0))
+
+    normalized.setdefault("알림", crop.get("생육시기타사항", ""))
+
+    return normalized
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# Units JSON 파일 경로 반환
-# --->
-# Units JSON 파일 경로 반환
+# PostgreSQL에서 직접 학습 원천 데이터 조회
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def get_units_json_path():
-    cache_path = settings.vector.vector_cache or ""
-    cache_dir = os.path.dirname(cache_path)
-    if cache_dir and not cache_dir.endswith('/'):
-        cache_dir = cache_dir + '/'
-    filename = settings.units_temp_json or ""
-    return (cache_dir or "") + filename
-
-
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# Crops JSON 파일 경로 반환
-# --->
-# Crops JSON 파일 경로 반환
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def get_crops_json_path():
-    cache_path = settings.vector.vector_cache or ""
-    cache_dir = os.path.dirname(cache_path)
-    if cache_dir and not cache_dir.endswith('/'):
-        cache_dir = cache_dir + '/'
-    filename = settings.crops_temp_json or ""
-    return (cache_dir or "") + filename
-
-
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# JSON 파일에서 데이터 읽기
-# --->
-# JSON 파일에서 농장 운용 데이터 읽기
-# Args:
-# limit: 최대 데이터 수
-# Returns:
-# list: 데이터 목록 또는 None
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def fetch_data_from_json(limit=100000):
+def fetch_data_from_postgresql(limit: int = 100000) -> List[Dict[str, Any]]:
     try:
-        json_source_file = get_training_json_path()
-        if not os.path.exists(json_source_file):
-            logger.error(f"JSON 파일이 존재하지 않습니다: {json_source_file}")
-            return None
+        farm_houses = read_farm_house_list()
+        if not farm_houses:
+            logger.warning("PostgreSQL에서 농장/재배사 목록을 찾지 못했습니다.")
+            return []
 
-        try:
-            with open(json_source_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON 파싱 실패: {e}")
-            return None
-        except UnicodeDecodeError:
-            try:
-                with open(json_source_file, 'r', encoding='cp949') as f:
-                    data = json.load(f)
-            except Exception as e:
-                logger.error(f"다른 인코딩으로도 JSON 파싱 실패: {e}")
-                return None
+        datas: List[Dict[str, Any]] = []
+        total_units = 0
+        total_crops = 0
 
-        if data and isinstance(data, list) and len(data) > limit:
-            data = data[:limit]
+        max_rows = limit if isinstance(limit, int) and limit > 0 else None
 
-        units_total = sum(len(item.get("units", [])) for item in data)
-        crops_total = sum(len(item.get("crops", [])) for item in data)
-        logger.info(f"로컬 JSON 파일에서 데이터 읽기 성공 -> 장치: {units_total}건, 생육: {crops_total}건")
-        return data
+        for farm_house in farm_houses:
+            farm_id = farm_house.get("farm_id")
+            house_id = farm_house.get("hous_id")
+            if farm_id is None or house_id is None:
+                continue
+
+            units = read_units_data(farm_id, house_id) or []
+            crops_raw = read_crops_data(farm_id, house_id) or []
+            crops = [_normalize_crop_row(crop) for crop in crops_raw]
+
+            if max_rows is not None:
+                used = total_units + total_crops
+                remain = max_rows - used
+                if remain <= 0:
+                    break
+
+                if len(units) >= remain:
+                    units = units[:remain]
+                    crops = []
+                elif len(units) + len(crops) > remain:
+                    crops = crops[: remain - len(units)]
+
+            if not units and not crops:
+                continue
+
+            datas.append(
+                {
+                    "farm_id": str(farm_id),
+                    "house_id": str(house_id),
+                    "units": units,
+                    "crops": crops,
+                }
+            )
+
+            total_units += len(units)
+            total_crops += len(crops)
+
+            if max_rows is not None and (total_units + total_crops) >= max_rows:
+                break
+
+        logger.info(
+            "PostgreSQL 데이터 조회 완료 -> 농장/재배사: %d건, 장치: %d건, 생육: %d건",
+            len(datas),
+            total_units,
+            total_crops,
+        )
+        return datas
+
     except Exception as e:
-        logger.error(f"JSON 데이터 읽기 중 예외 발생: {str(e)}")
-        import traceback
+        logger.error(f"PostgreSQL 데이터 조회 중 오류: {e}")
         logger.error(traceback.format_exc())
-        return None
+        return []
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# JSON 데이터를 Vector DB로 변환
-# --->
-# JSON 데이터를 Vector DB에 저장
-# Args:
-# data_limit: 최대 데이터 수
-# Returns:
-# bool: 성공 여부
+# PostgreSQL 데이터를 Vector DB(source_collection)로 적재
+# 호환성을 위해 함수명은 json_to_vcdb를 유지합니다.
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def json_to_vcdb(data_limit=100000):
+def json_to_vcdb(data_limit: int = 100000) -> bool:
     try:
         status = heartbeat()
         if "error" in status:
             logger.error(f"ChromaDB REST API 연결 실패: {status.get('error')}")
             return False
 
-        datas = fetch_data_from_json(limit=data_limit)
+        datas = fetch_data_from_postgresql(limit=data_limit)
         if not datas:
-            logger.info("가져올 데이터가 없습니다 !!!")
+            logger.info("적재할 PostgreSQL 데이터가 없습니다.")
             return False
 
-        try:
-            all_units_data = []
-            all_crops_data = []
+        total_unit_success = 0
+        total_unit_failure = 0
+        total_crop_success = 0
+        total_crop_failure = 0
 
-            for idx, item in enumerate(datas, 1):
-                if "units" in item and item["units"]:
-                    try:
-                        process_unit_data(item)
-                    except Exception as e:
-                        logger.warning(f"process_unit_data 처리 중 오류: {e}")
+        for item in datas:
+            if item.get("units"):
+                unit_success, unit_failure = process_unit_data(item)
+                total_unit_success += unit_success
+                total_unit_failure += unit_failure
 
-                    for unit in item["units"]:
-                        if len(unit) < 12:
-                            continue
-                        try:
-                            unit_data = {
-                                "farm_id": unit.get("농장코드"),
-                                "farm_name": unit.get("농장명"),
-                                "house_id": unit.get("재배사코드"),
-                                "house_name": unit.get("재배사명"),
-                                "data_kind": "UNITS",
-                                "record_datetime": unit.get("기록일시"),
-                                "indoor_temperature_value": clean_sensor_value(unit.get("내부온도", "0")),
-                                "indoor_humidity_value": clean_sensor_value(unit.get("내부습도", "0")),
-                                "outdoor_temperature_value": clean_sensor_value(unit.get("외부온도", "0")),
-                                "outdoor_humidity_value": clean_sensor_value(unit.get("외부습도", "0")),
-                                "co2_concentration_value": clean_sensor_value(unit.get("co2", "0")),
-                                "water_temperature_value": clean_sensor_value(unit.get("수온", "0")),
-                                "light_level_value": clean_sensor_value(unit.get("광량", "0")),
-                                "water_level_value": clean_sensor_value(unit.get("수위", "0")),
-                                "relay_1st_flag": parse_boolean(unit.get("물가열기", False)),
-                                "relay_2st_flag": parse_boolean(unit.get("분사펌프", False)),
-                                "relay_3st_flag": parse_boolean(unit.get("배수밸브", False)),
-                                "relay_5st_flag": parse_boolean(unit.get("흡기팬", False)),
-                                "relay_6st_flag": parse_boolean(unit.get("배기팬", False)),
-                                "relay_7st_flag": parse_boolean(unit.get("조명토글", False)),
-                                "relay_8st_flag": parse_boolean(unit.get("관수밸브", False)),
-                                "relay_9st_flag": parse_boolean(unit.get("열풍기", False)),
-                                "relay_10st_flag": parse_boolean(unit.get("순환댐퍼", False)),
-                                "relay_11st_flag": parse_boolean(unit.get("흡기댐퍼", False)),
-                                "relay_14st_flag": parse_boolean(unit.get("배기댐퍼", False)),
-                                "relay_15st_flag": parse_boolean(unit.get("열풍댐퍼", False) if "열풍댐퍼" in unit else False)
-                            }
-                            all_units_data.append(unit_data)
-                        except Exception as e:
-                            logger.debug(f"장치 데이터 변환 중 오류: {str(e)}")
+            if item.get("crops"):
+                crop_success, crop_failure = process_crop_data(item)
+                total_crop_success += crop_success
+                total_crop_failure += crop_failure
 
-                if "crops" in item and item["crops"]:
-                    try:
-                        process_crop_data(item)
-                    except Exception as e:
-                        logger.warning(f"process_crop_data 처리 중 오류: {e}")
+        total_success = total_unit_success + total_crop_success
+        total_failure = total_unit_failure + total_crop_failure
 
-                    for crop in item["crops"]:
-                        try:
-                            crop_data = {
-                                "farm_id": crop.get("농장코드"),
-                                "farm_name": crop.get("농장명"),
-                                "house_id": crop.get("재배사코드"),
-                                "house_name": crop.get("재배사명"),
-                                "data_kind": "CROPS",
-                                "record_datetime": crop.get("기록일시"),
-                                "crop_strt_date": crop.get("작물시작일자", ""),
-                                "crop_end_date": crop.get("작물종료일자", ""),
-                                "code_name": crop.get("작물코드명", ""),
-                                "crop_qtty": safe_float(crop.get("작물량", "0")),
-                                "crop_grde_qtty_1": safe_float(crop.get("작물등급량1", "0")),
-                                "crop_grde_qtty_2": safe_float(crop.get("작물등급량2", "0")),
-                                "crop_grde_qtty_3": safe_float(crop.get("작물등급량3", "0")),
-                                "crop_grde_qtty_4": safe_float(crop.get("작물등급량4", "0")),
-                                "crop_grde_qtty_5": safe_float(crop.get("작물등급량5", "0")),
-                                "crop_grde_amut_1": safe_float(crop.get("작물등급금액1", "0")),
-                                "crop_grde_amut_2": safe_float(crop.get("작물등급금액2", "0")),
-                                "crop_grde_amut_3": safe_float(crop.get("작물등급금액3", "0")),
-                                "crop_grde_amut_4": safe_float(crop.get("작물등급금액4", "0")),
-                                "crop_grde_amut_5": safe_float(crop.get("작물등급금액5", "0")),
-                                "rmks": crop.get("비고", "")
-                            }
-                            all_crops_data.append(crop_data)
-                        except Exception as e:
-                            logger.debug(f"생육 데이터 변환 중 오류: {str(e)}")
+        logger.info(
+            "PostgreSQL -> Chroma 적재 완료: 성공 %d건 (units=%d, crops=%d), 실패 %d건",
+            total_success,
+            total_unit_success,
+            total_crop_success,
+            total_failure,
+        )
 
-        except Exception as e:
-            logger.error(f"데이터 처리 및 저장 중 오류: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+        if total_success == 0:
+            logger.warning("적재 성공 건수가 0건입니다.")
+            return False
 
-        try:
-            if all_units_data:
-                units_df_path = get_units_json_path()
-                with open(units_df_path, 'w', encoding='utf-8') as f:
-                    json.dump(all_units_data, f, ensure_ascii=False, indent=2, default=str)
-
-            if all_crops_data:
-                crops_df_path = get_crops_json_path()
-                with open(crops_df_path, 'w', encoding='utf-8') as f:
-                    json.dump(all_crops_data, f, ensure_ascii=False, indent=2, default=str)
-        except Exception as e:
-            logger.error(f"분석용 데이터 저장 중 오류: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-
-        json_source_file = get_training_json_path()
-        unit_house_count = len({(unit.get("farm_id"), unit.get("house_id")) for unit in all_units_data})
-        logger.info(f"전체 농장 운용 기본정보 장치정보: {unit_house_count}건, 센서정보: {len(all_units_data)}건, 생육정보: {len(all_crops_data)}건")
-        logger.info(f"JSON 파일 {json_source_file} 에서 VectorDB로 저장 완료했습니다.")
-        logger.info("Vector DB에 데이터 저장 완료했습니다.")
         return True
+
     except Exception as e:
-        logger.error(f"데이터 처리 중 전체 오류: {e}")
-        import traceback
+        logger.error(f"PostgreSQL -> Chroma 적재 중 전체 오류: {e}")
         logger.error(traceback.format_exc())
         return False
