@@ -24,9 +24,12 @@ logger = setup_logger(__name__)
 # 대화 기록 표시
 # --->
 # 채팅 기록 표시
+# Args:
+#     reverse: True면 최신 메시지를 상단에 표시 (역순)
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def display_chat_history():
-    for message in stl.session_state.messages:
+def display_chat_history(reverse: bool = False):
+    messages = stl.session_state.messages[::-1] if reverse else stl.session_state.messages
+    for message in messages:
         try:
             if isinstance(message, tuple) and len(message) == 2:
                 role, content = message

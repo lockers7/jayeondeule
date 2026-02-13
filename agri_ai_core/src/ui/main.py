@@ -90,21 +90,32 @@ def main():
 
         # 메인 채팅 영역 (오른쪽 컬럼)
         with right_col:
-            # 채팅 기록 표시
-            display_chat_history()
-
-            # 파일 첨부 확장 패널
-            with stl.expander("파일 첨부", expanded=False):
-                handle_file_upload()
-                display_uploaded_files()
-
-            # 채팅 입력
+            # ===== 최상단 고정 영역 =====
+            # 1. 채팅 입력창 (최상단)
             farm_prompt = f"[{farm_name}] 농장입니다." if farm_name else "상황버섯 자연들에"
             user_input = stl.chat_input(
-                f"어서오세요 반갑습니다. {farm_prompt} 오늘은 무엇을 도와 드릴까요?"
+                f"💬 {farm_prompt} 무엇을 도와 드릴까요?"
             )
 
-            # 사용자 입력 처리
+            # 2. 파일 첨부 영역 (항상 보이게)
+            stl.markdown("#### 📎 파일 첨부")
+            file_col1, file_col2 = stl.columns([3, 1])
+            with file_col1:
+                handle_file_upload()
+            with file_col2:
+                if stl.session_state.uploaded_files:
+                    stl.caption(f"✓ {len(stl.session_state.uploaded_files)}개 파일")
+            display_uploaded_files()
+
+            # 3. 구분선
+            stl.markdown("---")
+            stl.markdown("#### 💬 대화 기록 (최신순)")
+
+            # ===== 채팅 히스토리 영역 =====
+            # 4. 채팅 기록 표시 (역순 - 최신 것이 상단)
+            display_chat_history(reverse=True)
+
+            # ===== 사용자 입력 처리 =====
             if user_input and user_input.strip() != "":
                 current_files = stl.session_state.uploaded_files.copy()
 
