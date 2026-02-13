@@ -108,6 +108,31 @@ CHAT_STYLES = """
             background-color: #f1f8f4;
         }
 
+        /* 업로드된 파일 리스트 아이템 스타일 */
+        .stFileUploader [data-testid="stFileUploaderFile"] {
+            padding: 2px 4px !important;
+            margin: 1px 0 !important;
+            font-size: 11px !important;
+            line-height: 1.2 !important;
+        }
+
+        /* 파일 리스트 아이템 hover 배경 제거 */
+        .stFileUploader [data-testid="stFileUploaderFile"]:hover {
+            background-color: transparent !important;
+        }
+
+        /* 파일 이름 텍스트 스타일 */
+        .stFileUploader [data-testid="stFileUploaderFile"] span {
+            font-size: 11px !important;
+            line-height: 1.2 !important;
+        }
+
+        /* 파일 삭제 버튼 스타일 */
+        .stFileUploader [data-testid="stFileUploaderFile"] button {
+            padding: 1px 3px !important;
+            font-size: 10px !important;
+        }
+
         /* 첨부 파일 표시 */
         .file-attachment {
             background-color: #e7f5ea;
