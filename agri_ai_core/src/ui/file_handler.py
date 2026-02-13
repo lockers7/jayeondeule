@@ -54,8 +54,6 @@ def handle_file_upload():
                         "upload_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     }
                     stl.session_state.uploaded_files.append(file_info)
-
-                    stl.success(f"파일 '{uploaded_file.name}'이 업로드되었습니다.")
                 except Exception as e:
                     stl.error(f"파일 '{uploaded_file.name}' 업로드 중 오류 발생: {str(e)}")
 
@@ -69,16 +67,19 @@ def handle_file_upload():
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def display_uploaded_files():
     if stl.session_state.uploaded_files:
-        stl.write("첨부된 파일:")
-
         to_delete = None
         for idx, file_info in enumerate(stl.session_state.uploaded_files):
-            col1, col2, col3 = stl.columns([3, 1, 1])
+            stl.markdown("<div style='padding:6px 12px; margin:0; border-bottom:1px solid #e9ecef;'>", unsafe_allow_html=True)
+            col1, col2, col3 = stl.columns([4, 2, 1])
             size_kb = file_info["size"] / 1024
-            col1.markdown(f"**{file_info['name']}** ({size_kb:.1f} KB)")
-            col2.text(file_info["upload_time"])
-            if col3.button("삭제", key=f"del_{idx}"):
-                to_delete = idx
+            with col1:
+                stl.markdown(f"<span style='color:#28a745; font-size:13px; line-height:1.3;'>{file_info['name']} ({size_kb:.1f} KB)</span>", unsafe_allow_html=True)
+            with col2:
+                stl.markdown(f"<span style='color:#6c757d; font-size:11px; line-height:1.3;'>{file_info['upload_time']}</span>", unsafe_allow_html=True)
+            with col3:
+                if stl.button("삭제", key=f"del_{idx}"):
+                    to_delete = idx
+            stl.markdown("</div>", unsafe_allow_html=True)
 
         # 삭제는 별도 처리하여 DOM 충돌 방지
         if to_delete is not None:
@@ -92,8 +93,6 @@ def display_uploaded_files():
 
                 # 리스트에서 제거
                 stl.session_state.uploaded_files.pop(to_delete)
-                stl.success(f"'{file_info['name']}' 파일이 삭제되었습니다.")
-
             except Exception as e:
                 stl.error(f"파일 삭제 중 오류 발생: {str(e)}")
 

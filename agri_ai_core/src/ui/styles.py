@@ -81,9 +81,9 @@ CHAT_STYLES = """
         .stFileUploader {
             border: none;
             border-radius: 0;
-            padding: 6px 12px !important;
+            padding: 0 !important;
             margin: 0 !important;
-            background-color: #ffffff;
+            background-color: transparent;
             transition: all 0.2s;
         }
 
@@ -95,6 +95,12 @@ CHAT_STYLES = """
         .stFileUploader label {
             padding: 0 !important;
             margin: 0 !important;
+            display: none !important;
+        }
+
+        .stFileUploader section {
+            padding: 6px 12px !important;
+            border: none !important;
         }
 
         .stFileUploader:hover {
@@ -225,7 +231,12 @@ CHAT_STYLES = """
         /* 컬럼 내부 요소 */
         [data-testid="column"] > div {
             margin: 0 !important;
-            padding: 2px !important;
+            padding: 0 !important;
+        }
+
+        /* 파일 업로드 컨테이너 내 컬럼 */
+        .file-upload-container [data-testid="column"] {
+            padding: 4px 8px !important;
         }
 
         /* 파일 첨부 컨테이너 */
@@ -233,8 +244,24 @@ CHAT_STYLES = """
             border: 2px solid #28a745;
             border-top: none;
             background-color: #ffffff;
-            padding: 6px 12px;
-            margin: 0;
+            padding: 0 !important;
+            margin: 0 !important;
+        }
+
+        .file-upload-container > div {
+            padding: 0 !important;
+            margin: 0 !important;
+        }
+
+        /* 파일 목록 스타일 */
+        .file-list-item {
+            padding: 4px 8px !important;
+            margin: 0 !important;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .file-list-item:last-child {
+            border-bottom: none;
         }
     </style>
 """
