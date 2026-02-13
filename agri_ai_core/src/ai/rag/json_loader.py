@@ -7,8 +7,7 @@
 # get_units_json_path: Units JSON 파일 경로 반환
 # get_crops_json_path: Crops JSON 파일 경로 반환
 # fetch_data_from_json: JSON 파일에서 농장 운용 데이터 읽기
-# safe_float: 안전한 float 변환
-# json_to_vcdb: JSON 데이터를 Vector DB에 저장
+# json_to_vcdb: JSON 데이터를 Vector DB에 저장 (safe_float는 data_processor에서 import)
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import os
 import json
@@ -17,7 +16,7 @@ from agri_ai_core.src.logs import setup_logger
 from agri_ai_core.config import settings
 from agri_ai_core.src.utils import clean_sensor_value, parse_boolean
 from agri_ai_core.src.chroma.client import heartbeat
-from agri_ai_core.src.ai.rag.data_processor import process_unit_data, process_crop_data
+from agri_ai_core.src.ai.rag.data_processor import process_unit_data, process_crop_data, safe_float
 
 logger = setup_logger(__name__)
 
@@ -106,18 +105,6 @@ def fetch_data_from_json(limit=100000):
         import traceback
         logger.error(traceback.format_exc())
         return None
-
-
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 안전한 float 변환
-# --->
-# 안전한 float 변환
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def safe_float(value):
-    try:
-        return float(value)
-    except (ValueError, TypeError):
-        return 0.0
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
