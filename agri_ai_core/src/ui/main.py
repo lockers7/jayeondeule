@@ -97,15 +97,16 @@ def main():
                 f"💬 {farm_prompt} 무엇을 도와 드릴까요?"
             )
 
-            # 2. 파일 첨부 영역 (항상 보이게)
-            stl.markdown("<p style='font-size:13px; font-weight:600; margin:0; padding:3px 0; line-height:1.3; color:#495057;'>📎 파일 첨부</p>", unsafe_allow_html=True)
-            file_col1, file_col2 = stl.columns([3, 1])
+            # 2. 파일 첨부 영역 (입력창 바로 아래, 헤딩 제거)
+            stl.markdown("<div class='file-upload-container'>", unsafe_allow_html=True)
+            file_col1, file_col2 = stl.columns([4, 1])
             with file_col1:
                 handle_file_upload()
             with file_col2:
                 if stl.session_state.uploaded_files:
-                    stl.caption(f"✓ {len(stl.session_state.uploaded_files)}개 파일")
+                    stl.caption(f"📎 {len(stl.session_state.uploaded_files)}개")
             display_uploaded_files()
+            stl.markdown("</div>", unsafe_allow_html=True)
 
             # 3. 구분선
             stl.markdown("---")

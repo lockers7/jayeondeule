@@ -52,7 +52,7 @@ CHAT_STYLES = """
             color: #212529 !important;
             box-shadow: none !important;
             line-height: 1.3 !important;
-            width: calc(100% - 24px) !important;
+            width: 100% !important;
         }
 
         .stChatInput input:focus {
@@ -69,24 +69,30 @@ CHAT_STYLES = """
 
         /* 파일 첨부 영역 */
         .file-upload-section {
-            background-color: #f8f9fa;
+            background-color: #ffffff;
             border-radius: 0;
             padding: 0 !important;
             margin: 0 !important;
             border: 2px solid #28a745;
+            border-top: none;
         }
 
         /* 파일 업로드 버튼 */
         .stFileUploader {
             border: none;
             border-radius: 0;
-            padding: 4px !important;
+            padding: 6px 12px !important;
             margin: 0 !important;
             background-color: #ffffff;
             transition: all 0.2s;
         }
 
         .stFileUploader > div {
+            padding: 0 !important;
+            margin: 0 !important;
+        }
+
+        .stFileUploader label {
             padding: 0 !important;
             margin: 0 !important;
         }
@@ -220,6 +226,15 @@ CHAT_STYLES = """
         [data-testid="column"] > div {
             margin: 0 !important;
             padding: 2px !important;
+        }
+
+        /* 파일 첨부 컨테이너 */
+        .file-upload-container {
+            border: 2px solid #28a745;
+            border-top: none;
+            background-color: #ffffff;
+            padding: 6px 12px;
+            margin: 0;
         }
     </style>
 """
