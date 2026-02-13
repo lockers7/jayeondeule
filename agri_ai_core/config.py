@@ -114,9 +114,6 @@ class LoggingSettings:
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 class AppSettings:
     corps_name: Optional[str]
-    house_source_json: Optional[str]
-    units_temp_json: Optional[str]
-    crops_temp_json: Optional[str]
     embedding_dim: int
     database: DatabaseSettings
     vector: VectorStoreSettings
@@ -213,9 +210,6 @@ def get_settings() -> AppSettings:
 
     return AppSettings(
         corps_name=os.getenv("CORPS_NAME"),
-        house_source_json=os.getenv("HOUSE_SOURCE_JSON"),
-        units_temp_json=os.getenv("UNITS_TEMP_JSON"),
-        crops_temp_json=os.getenv("CROPS_TEMP_JSON"),
         embedding_dim=_get_int(os.getenv("CHROMA_EMBEDDING_DIM"), 1024) or 1024,
         database=database,
         vector=vector,

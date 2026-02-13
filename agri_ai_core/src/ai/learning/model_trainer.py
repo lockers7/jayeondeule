@@ -24,8 +24,8 @@ from agri_ai_core.src.chroma.operations import (
     upsert_collection_data,
     generate_doc_id
 )
-# NOTE: 기존 JSON export 단계 제거됨 - PostgreSQL에서 Chroma로 직접 적재
-from agri_ai_core.src.ai.rag.json_loader import json_to_vcdb
+# NOTE: PostgreSQL에서 Chroma로 직접 적재
+from agri_ai_core.src.ai.rag.postgres_loader import sync_postgresql_to_vcdb
 from agri_ai_core.src.chroma.loader import (
     get_unlearned_data,
     update_learned_source_data,
@@ -320,7 +320,7 @@ def update_ollama_model(after_date=None, top_cnt=0):
         if "error" in source_results and "not found" in str(source_results.get("error", "")).lower():
             logger.info("source_collection이 없거나 데이터가 없습니다. 데이터 초기화를 시도합니다.")
 
-            json_to_vcdb()
+            sync_postgresql_to_vcdb()
             logger.info("PostgreSQL에서 ChromaDB(source_collection) 직접 적재 완료")
 
             unlearned_datas = get_unlearned_data(after_date, top_cnt)
