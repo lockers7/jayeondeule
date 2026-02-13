@@ -1,7 +1,8 @@
 [Unit]
-Description=Reflex UI Service (Standalone)
+Description=Reflex UI Service (UI-only)
 After=network.target chromadb.service postgresql.service
 Wants=chromadb.service
+Conflicts=agriAiCore.service
 
 [Service]
 Type=simple
@@ -13,8 +14,8 @@ ExecStart=/workspace/jayeondeule/agri_ai_core/run_reflex.sh
 
 EnvironmentFile=/workspace/jayeondeule/.env
 
-# Standalone 모드 (백그라운드 서비스 포함)
-Environment="STANDALONE=true"
+# UI-only 모드 (스케줄러/백그라운드 서비스는 agriAiCore에서 관리)
+Environment="STANDALONE=false"
 
 Restart=always
 RestartSec=10

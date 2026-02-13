@@ -1,7 +1,8 @@
 [Unit]
-Description=AgriAI Core Services (Scheduler + UI: Streamlit/Reflex)
+Description=AgriAI Core Services (Scheduler + Reflex UI)
 After=network.target chromadb.service postgresql.service
 Wants=chromadb.service
+Conflicts=reflex.service
 
 [Service]
 Type=simple
@@ -14,9 +15,6 @@ ExecStart=/workspace/jayeondeule/setup/run_services.sh
 
 # 환경 변수 로드
 EnvironmentFile=/workspace/jayeondeule/.env
-
-# UI 모드 설정 (streamlit/reflex/both)
-# Environment="UI_MODE=streamlit"
 
 # 재시작 정책
 Restart=always

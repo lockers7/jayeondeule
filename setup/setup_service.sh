@@ -1,7 +1,9 @@
 #!/bin/bash
 # -*- coding: utf-8 -*-
 # =========================================================================
-# AgriAI Core + Reflex + ChromaDB systemd 서비스 설치 스크립트
+# AgriAI Core + ChromaDB systemd 서비스 설치 스크립트
+# 기본 운영은 agriAiCore.service 단일 오케스트레이션으로 관리합니다.
+# reflex.service는 UI 단독 실행이 필요할 때만 선택적으로 사용합니다.
 # =========================================================================
 
 set -e
@@ -83,7 +85,8 @@ sudo systemctl daemon-reload
 echo -e "${GREEN}서비스 활성화 중...${NC}"
 sudo systemctl enable chromadb.service
 sudo systemctl enable agriAiCore.service
-sudo systemctl enable reflex.service
+# reflex.service는 충돌 방지를 위해 기본 비활성화
+sudo systemctl disable reflex.service 2>/dev/null || true
 
 echo ""
 echo -e "${GREEN}=========================================="
@@ -92,11 +95,13 @@ echo "==========================================${NC}"
 echo ""
 echo "사용 방법:"
 echo "  - ChromaDB 시작:    sudo systemctl start chromadb"
-echo "  - agriAiCore 시작:  sudo systemctl start agriAiCore reflex"
-echo "  - 전체 시작:        sudo systemctl start chromadb agriAiCore reflex"
-echo "  - 전체 중지:        sudo systemctl stop agriAiCore reflex chromadb"
-echo "  - 상태 확인:        sudo systemctl status chromadb agriAiCore reflex"
-echo "  - 로그 확인:        sudo journalctl -u chromadb -u agriAiCore -u reflex -f"
+echo "  - 기본 시작:        sudo systemctl start chromadb agriAiCore"
+echo "  - 기본 중지:        sudo systemctl stop agriAiCore chromadb"
+echo "  - 상태 확인:        sudo systemctl status chromadb agriAiCore"
+echo "  - 로그 확인:        sudo journalctl -u chromadb -u agriAiCore -f"
+echo ""
+echo "선택 실행(단독 UI):"
+echo "  - reflex.service:   sudo systemctl start reflex   # agriAiCore와 동시 실행 불가"
 echo ""
 echo "서비스를 시작하시겠습니까? (y/n)"
 read -r response
@@ -106,14 +111,12 @@ if [[ "$response" =~ ^[Yy]$ ]]; then
     sudo systemctl start chromadb
     sleep 3
     sudo systemctl start agriAiCore
-    sudo systemctl start reflex
     sleep 3
-    sudo systemctl status chromadb agriAiCore reflex --no-pager
+    sudo systemctl status chromadb agriAiCore --no-pager
     echo ""
     echo -e "${GREEN}서비스가 시작되었습니다!${NC}"
     echo "  - ChromaDB:  http://localhost:8000"
-    echo "  - Streamlit: http://localhost:8501"
-    echo "  - Reflex:    http://localhost:3000"
+    echo "  - Reflex UI: http://localhost:3000"
 else
-    echo "서비스를 나중에 시작하려면: sudo systemctl start chromadb agriAiCore reflex"
+    echo "서비스를 나중에 시작하려면: sudo systemctl start chromadb agriAiCore"
 fi
