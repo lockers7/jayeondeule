@@ -737,7 +737,7 @@ def get_llm_response_with_tools(user_query: str, farm_name: str = None,
 
                 # 응답 필터링
                 filtered_answer = filter_llm_response(final_answer, filter_type="general")
-                return filtered_answer
+                return clean_llm_response(filtered_answer)
 
             # 도구 호출 처리
             logger.info(f"[Tool Use] {len(assistant_message.tool_calls)}개 도구 호출")
@@ -765,10 +765,12 @@ def get_llm_response_with_tools(user_query: str, farm_name: str = None,
         # 마지막 메시지가 assistant 메시지면 그것을 반환
         for msg in reversed(messages):
             if isinstance(msg, dict) and msg.get("role") == "assistant":
-                return msg.get("content", "죄송합니다. 응답을 완료할 수 없습니다.")
+                return clean_llm_response(
+                    msg.get("content", "죄송합니다. 응답을 완료할 수 없습니다.")
+                )
             elif hasattr(msg, 'content') and hasattr(msg, 'role'):
                 if msg.role == "assistant":
-                    return msg.content
+                    return clean_llm_response(msg.content)
 
         return "죄송합니다. 응답을 생성할 수 없습니다."
 

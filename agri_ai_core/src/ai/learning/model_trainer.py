@@ -370,16 +370,8 @@ def update_ollama_model(after_date=None, top_cnt=0):
                 if not record_datetime:
                     record_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     logger.warning(f"record_datetime이 없어 현재 시간으로 대체: {record_datetime}")
-                parsed_dt = parse_datetime(record_datetime)
-
-                data_hour = parsed_dt.hour if parsed_dt else current_hour
-
-                if data_hour is None:
-                    data_hour = current_hour
-
-                parsed_dt = parse_datetime(record_datetime)
-                if not parsed_dt:
-                    parsed_dt = datetime.now()
+                parsed_dt = parse_datetime(record_datetime) or datetime.now()
+                data_hour = parsed_dt.hour if parsed_dt.hour is not None else current_hour
 
                 hour_timestamp = parsed_dt.replace(minute=0, second=0, microsecond=0)
                 hour_key = hour_timestamp.strftime("%Y-%m-%d %H:00:00")

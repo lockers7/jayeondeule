@@ -412,35 +412,20 @@ def analyze_farm_optimal_conditions(data):
 # 센서 데이터 수집
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def collect_sensor_data(hour_units):
-    sensor_data = {
-        "temperature": [],
-        "humidity": [],
-        "co2": []
+    sensor_data = {"temperature": [], "humidity": [], "co2": []}
+    field_map = {
+        "temperature": "indoor_temperature_value",
+        "humidity": "indoor_humidity_value",
+        "co2": "co2_concentration_value",
     }
 
     for unit in hour_units:
         sensor_data_obj = unit.get("sensor_value", {})
-
-        temp_keys = ["indoor_temperature_value", "indoor_temperature_value"]
-        for key in temp_keys:
-            temp_value = sensor_data_obj.get(key)
-            if temp_value is not None:
-                sensor_data["temperature"].append(temp_value)
-                break
-
-        humidity_keys = ["indoor_humidity_value", "indoor_humidity_value"]
-        for key in humidity_keys:
-            humidity_value = sensor_data_obj.get(key)
-            if humidity_value is not None:
-                sensor_data["humidity"].append(humidity_value)
-                break
-
-        co2_keys = ["co2_concentration_value", "co2_concentration_value"]
-        for key in co2_keys:
-            co2_value = sensor_data_obj.get(key)
-            if co2_value is not None:
-                sensor_data["co2"].append(co2_value)
-                break
+        for metric, field_key in field_map.items():
+            raw_value = sensor_data_obj.get(field_key)
+            if raw_value is None:
+                continue
+            sensor_data[metric].append(clean_sensor_value(raw_value))
 
     return sensor_data
 

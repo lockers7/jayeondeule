@@ -11,28 +11,16 @@ from datetime import datetime
 from typing import List, Dict, Optional, Any
 from pydantic import BaseModel
 
-try:
-    from agri_ai_core.src.logs import setup_logger
-    from agri_ai_core.src.postgresql.connection import db_session
-    from agri_ai_core.src.postgresql.queries import (
-        GET_ONE_FARM,
-        GET_ONE_HOUSE,
-        GET_FARM_NAME,
-        GET_HOUSE_NAME,
-    )
-    from agri_ai_core.src.ai.query_handler_simple import query_llm_simple
-    from agri_ai_core.src.ai.llm_client import clean_llm_response
-except ModuleNotFoundError:
-    from src.logs import setup_logger
-    from src.postgresql.connection import db_session
-    from src.postgresql.queries import (
-        GET_ONE_FARM,
-        GET_ONE_HOUSE,
-        GET_FARM_NAME,
-        GET_HOUSE_NAME,
-    )
-    from src.ai.query_handler_simple import query_llm_simple
-    from src.ai.llm_client import clean_llm_response
+from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.src.postgresql.connection import db_session
+from agri_ai_core.src.postgresql.queries import (
+    GET_ONE_FARM,
+    GET_ONE_HOUSE,
+    GET_FARM_NAME,
+    GET_HOUSE_NAME,
+)
+from agri_ai_core.src.ai.query_handler_simple import query_llm_simple
+from agri_ai_core.src.ai.llm_client import clean_llm_response
 
 logger = setup_logger(__name__)
 
