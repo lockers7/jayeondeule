@@ -16,6 +16,9 @@ from agri_ai_core.src.ai.rag import embed_text, llm_document_process
 # Learning
 from agri_ai_core.src.ai.learning import verify_chroma_connection, update_ollama_model
 
+# MCP Integration
+from agri_ai_core.src.ai.mcp_client import search_web, get_current_weather
+
 __all__ = [
     # LLM
     "get_llm_response",
@@ -30,4 +33,7 @@ __all__ = [
     # Learning
     "verify_chroma_connection",
     "update_ollama_model",
+    # MCP
+    "search_web",
+    "get_current_weather",
 ]

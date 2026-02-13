@@ -304,11 +304,14 @@ async def collect_system_info(required_data: Dict[str, Any]) -> Dict[str, Any]:
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 async def collect_web_search(required_data: Dict[str, Any]) -> Dict[str, Any]:
     try:
-        # TODO: 실제 웹 검색 API 연동
-        # 현재는 mock 데이터 반환
-
         keywords = required_data.get("search_keywords", "")
         search_type = required_data.get("search_type")
+
+        # MCP web-search를 사용한 실제 웹 검색
+        from agri_ai_core.src.ai.mcp_client import search_web
+
+        # asyncio.to_thread로 동기 함수를 비동기로 실행
+        search_result = await asyncio.to_thread(search_web, keywords, max_results=5)
 
         collected_data = {
             "data_type": "web",
@@ -319,24 +322,22 @@ async def collect_web_search(required_data: Dict[str, Any]) -> Dict[str, Any]:
             "summary": ""
         }
 
-        # Mock 검색 결과
-        if "날씨" in keywords:
-            collected_data["results"] = [
-                {
-                    "title": f"{keywords} 검색 결과",
-                    "snippet": "웹 검색 기능은 추후 구현 예정입니다. 사용자에게 직접 검색을 요청하세요.",
-                    "url": "#"
-                }
-            ]
-            collected_data["summary"] = f"{keywords} 검색 결과: 웹 검색 API 연동 필요"
+        if search_result.get("success"):
+            collected_data["results"] = search_result.get("results", [])
+            num_results = len(collected_data["results"])
+            collected_data["summary"] = f"{keywords} 검색 완료: {num_results}개 결과 (MCP web-search)"
+            logger.info(f"MCP 웹 검색 성공: {num_results}개 결과")
         else:
-            collected_data["summary"] = f"{keywords} 검색 완료 (mock)"
+            error = search_result.get("error", "Unknown error")
+            collected_data["summary"] = f"{keywords} 검색 실패: {error}"
+            logger.warning(f"MCP 웹 검색 실패: {error}")
 
-        logger.info(f"웹 검색 완료: {collected_data['summary']}")
         return collected_data
 
     except Exception as e:
         logger.error(f"웹 검색 중 오류: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return {
             "data_type": "web",
             "error": str(e),

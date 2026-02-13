@@ -63,11 +63,15 @@ async def classify_query_fast(user_query: str) -> Dict[str, Any]:
    - **farm_realtime (PostgreSQL)**: 실시간 센서/릴레이 데이터 질문
      예: "1재배사 온도", "릴레이 상태", "현재 습도"
 3. **시스템정보참고**: 현재 날짜/시간/시스템 상태
-4. **웹검색**: 실시간 외부 정보 (날씨, 뉴스 등)
+   예: "지금 몇 시야?", "오늘 날짜는?", "현재 시각"
+4. **웹검색**: 실시간 외부 정보 (날씨, 뉴스 등) - MCP web-search 사용
+   예: "서울 날씨", "오늘 날씨", "기온은?", "습도 예보", "내일 비 오나?"
 
 **핵심 규칙:**
 - ⚠️ 농장/스마트팜 관련 전문 지식 → farm_knowledge 필수
 - ⚠️ "N재배사", "N농장" 같은 구체적 데이터 → farm_realtime 필수
+- ⚠️ 외부 날씨/기온/강수 정보 → 웹검색 필수 (MCP web-search)
+- ⚠️ 현재 시간/날짜 → 시스템정보참고
 - 복합 가능 (예: "스마트팜이란? 그리고 1재배사 온도는?" → farm_knowledge + farm_realtime)
 - 일반 인사/대화만 llm자체응답
 
@@ -141,6 +145,38 @@ async def classify_query_fast(user_query: str) -> Dict[str, Any]:
   },
   "confidence": 0.9,
   "reasoning": "PostgreSQL 실시간 센서/릴레이 데이터 조회 필요"
+}
+```
+
+질문: "지금 몇 시야?"
+```json
+{
+  "query_types": ["시스템정보참고"],
+  "can_answer_directly": false,
+  "required_data": {
+    "farm_knowledge": null,
+    "farm_realtime": null,
+    "system": {"current_time": true, "current_date": false, "system_status": false},
+    "web": null
+  },
+  "confidence": 1.0,
+  "reasoning": "시스템 현재 시간 정보 필요"
+}
+```
+
+질문: "서울 날씨 어때?"
+```json
+{
+  "query_types": ["웹검색"],
+  "can_answer_directly": false,
+  "required_data": {
+    "farm_knowledge": null,
+    "farm_realtime": null,
+    "system": null,
+    "web": {"search_keywords": "서울 날씨 현재 기온 습도", "search_type": "날씨"}
+  },
+  "confidence": 0.95,
+  "reasoning": "외부 실시간 날씨 정보는 MCP web-search 필요"
 }
 ```
 
