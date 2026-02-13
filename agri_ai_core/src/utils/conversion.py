@@ -7,8 +7,6 @@
 # extract_relay_data: 데이터 항목에서 릴레이 관련 정보 추출
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import json
-from datetime import datetime
-from decimal import Decimal
 
 from agri_ai_core.config import SENSOR_FIELD_MAPPING, RELAY_FIELD_MAPPING
 from agri_ai_core.src.utils.validators import clean_sensor_value, parse_boolean
@@ -84,4 +82,3 @@ def extract_relay_data(data_item):
             pass
 
     return relay_data
-
