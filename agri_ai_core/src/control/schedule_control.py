@@ -15,9 +15,9 @@ from datetime import datetime
 
 from agri_ai_core.src.logs import setup_logger
 from agri_ai_core.src.postgresql.connection import db_session
-from agri_ai_core.database.postgres import queries as dbQry
-from agri_ai_core.data_ingestion.postgres_reader import read_light_irrigation_settings
-from agri_ai_core.control.relay.relay_manager import set_relay_value
+from agri_ai_core.src.postgresql import queries as dbQry
+from agri_ai_core.src.postgresql.reader import read_light_irrigation_settings
+from agri_ai_core.src.control.relay_manager import set_relay_value
 
 logger = setup_logger(__name__)
 

@@ -26,11 +26,8 @@ import numpy as np
 from datetime import datetime
 
 from agri_ai_core.src.logs import setup_logger
-from agri_ai_core.config import (
-    STATS_INTERVAL_MINUTES,
-    RELAY_KEYS,
-    job_status_collection,
-)
+from agri_ai_core.config import STATS_INTERVAL_MINUTES, RELAY_KEYS
+from agri_ai_core.src.chroma.collections import job_status_collection
 from agri_ai_core.src.utils import clean_sensor_value
 from agri_ai_core.src.chroma.operations import upsert_collection_data
 

@@ -18,19 +18,19 @@ import traceback
 from datetime import datetime, timedelta
 
 from agri_ai_core.src.logs import setup_logger
-from agri_ai_core.config import (
+from agri_ai_core.src.chroma.collections import (
     source_collection,
     learned_collection,
     job_status_collection
 )
-from agri_ai_core.shared_modules.utils.conversion import extract_relay_data
+from agri_ai_core.src.utils.conversion import extract_relay_data
 from agri_ai_core.src.chroma.operations import (
     get_documents,
     upsert_collection_data,
     query_documents,
     generate_doc_id
 )
-from agri_ai_core.data_pipeline.vectorization.embedder import embed_text
+from agri_ai_core.src.ai.rag.embedder import embed_text
 
 logger = setup_logger(__name__)
 

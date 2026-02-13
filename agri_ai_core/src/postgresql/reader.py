@@ -18,7 +18,7 @@ from datetime import datetime
 
 from agri_ai_core.src.logs import setup_logger
 from agri_ai_core.src.postgresql.connection import db_session
-from agri_ai_core.database.postgres import queries as dbQry
+from agri_ai_core.src.postgresql import queries as dbQry
 
 logger = setup_logger(__name__)
 

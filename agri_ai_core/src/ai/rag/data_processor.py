@@ -15,7 +15,7 @@ from datetime import timedelta
 from collections import defaultdict, Counter
 
 from agri_ai_core.src.logs import setup_logger
-from agri_ai_core.config import source_collection
+from agri_ai_core.src.chroma.collections import source_collection
 from agri_ai_core.config import (
     SENSOR_MAPPING, RELAY_MAPPING, RELAY_FIELD_MAPPING
 )

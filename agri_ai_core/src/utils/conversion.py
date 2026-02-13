@@ -11,7 +11,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from agri_ai_core.config import SENSOR_FIELD_MAPPING, RELAY_FIELD_MAPPING
-from agri_ai_core.src.utils import clean_sensor_value, parse_boolean
+from agri_ai_core.src.utils.validators import clean_sensor_value, parse_boolean
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

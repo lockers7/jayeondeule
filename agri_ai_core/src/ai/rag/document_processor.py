@@ -11,10 +11,7 @@ import os
 from datetime import datetime
 
 from agri_ai_core.src.logs import setup_logger
-from agri_ai_core.config import (
-    optimal_collection,
-    document_collection
-)
+from agri_ai_core.src.chroma.collections import optimal_collection, document_collection
 from agri_ai_core.src.chroma.operations import (
     generate_doc_id,
     upsert_collection_data

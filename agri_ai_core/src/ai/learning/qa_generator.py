@@ -12,11 +12,8 @@ import ollama
 from datetime import datetime
 
 from agri_ai_core.src.logs import setup_logger
-from agri_ai_core.config import settings
-from agri_ai_core.config import (
-    NUM_PREDICT,
-    learned_collection
-)
+from agri_ai_core.config import settings, NUM_PREDICT
+from agri_ai_core.src.chroma.collections import learned_collection
 from agri_ai_core.src.chroma.operations import upsert_collection_data
 
 logger = setup_logger(__name__)

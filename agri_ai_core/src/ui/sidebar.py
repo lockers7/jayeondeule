@@ -11,7 +11,7 @@ import streamlit as stl
 
 from agri_ai_core.src.logs import setup_logger
 from agri_ai_core.src.postgresql.connection import db_session
-from agri_ai_core.database.postgres import queries as db_queries
+from agri_ai_core.src.postgresql import queries as db_queries
 from agri_ai_core.src.ui.location_handler import (
     get_available_cities,
     get_current_weather_city,

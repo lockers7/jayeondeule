@@ -15,10 +15,7 @@ import pandas as pd
 from datetime import datetime
 
 from agri_ai_core.src.logs import setup_logger
-from agri_ai_core.config import (
-    source_collection,
-    learned_collection
-)
+from agri_ai_core.src.chroma.collections import source_collection, learned_collection
 from agri_ai_core.src.utils.date_utils import parse_datetime
 from agri_ai_core.src.utils.conversion import convert_sensor_relay_data
 from agri_ai_core.src.chroma.client import heartbeat
@@ -27,7 +24,8 @@ from agri_ai_core.src.chroma.operations import (
     upsert_collection_data,
     generate_doc_id
 )
-from agri_ai_core.data_ingestion.json_exporter import run_data_export
+# NOTE: run_data_export was removed during restructuring - json files should already exist
+# from agri_ai_core.data_ingestion.json_exporter import run_data_export
 from agri_ai_core.src.ai.rag.json_loader import json_to_vcdb
 from agri_ai_core.src.chroma.loader import (
     get_unlearned_data,
@@ -323,11 +321,12 @@ def update_ollama_model(after_date=None, top_cnt=0):
         if "error" in source_results and "not found" in str(source_results.get("error", "")).lower():
             logger.info("source_collection이 없거나 데이터가 없습니다. 데이터 초기화를 시도합니다.")
 
-            run_data_export()
-            logger.info("PostgreSQL에서 JSON으로 데이터 추출 완료")
+            # NOTE: run_data_export() was removed - assuming JSON files already exist
+            # run_data_export()
+            # logger.info("PostgreSQL에서 JSON으로 데이터 추출 완료")
 
             json_to_vcdb()
-            logger.info("JSON에서 ChromaDB로 데이터 이관 완료")
+            logger.info("기존 JSON에서 ChromaDB로 데이터 이관 완료")
 
             unlearned_datas = get_unlearned_data(after_date, top_cnt)
 
