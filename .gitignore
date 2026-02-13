@@ -159,6 +159,7 @@ cython_debug/
 # ChromaDB database files (large files)
 chromadb/database/
 chromadb/cache/
+chromadb/backup_*/
 *.sqlite3
 
 # Virtual environment
