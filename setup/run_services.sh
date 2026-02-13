@@ -83,7 +83,7 @@ sleep 3
 
 # Streamlit UI 시작
 echo "Streamlit UI 시작 중..."
-$STREAMLIT_BIN run /workspace/jayeondeule/agri_ai_core/ui/streamlit_app/main.py \
+$STREAMLIT_BIN run /workspace/jayeondeule/agri_ai_core/src/ui/main.py \
     --server.port=8501 \
     --server.address=0.0.0.0 \
     --server.headless=true \
