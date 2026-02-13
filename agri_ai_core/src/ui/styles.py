@@ -5,7 +5,7 @@ CHAT_STYLES = """
     <style>
         /* 기본 스타일 */
         body {
-            background-color: #F8F9FA;
+            background-color: #FFFFFF;
             font-family: 'Noto Sans KR', sans-serif;
             font-size: 13px;
             line-height: 1.3;
@@ -44,20 +44,21 @@ CHAT_STYLES = """
         }
 
         .stChatInput input {
-            border: 2px solid #28a745 !important;
-            border-radius: 0 !important;
-            padding: 6px 12px !important;
+            border: 2px solid #2196F3 !important;
+            border-radius: 4px !important;
+            padding: 8px 12px !important;
             font-size: 13px !important;
-            font-weight: 500 !important;
+            font-weight: 400 !important;
             color: #212529 !important;
             box-shadow: none !important;
             line-height: 1.3 !important;
             width: 100% !important;
+            background-color: #FFFFFF !important;
         }
 
         .stChatInput input:focus {
-            border-color: #218838 !important;
-            box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2) !important;
+            border-color: #1976D2 !important;
+            box-shadow: 0 2px 8px rgba(33, 150, 243, 0.3) !important;
         }
 
         .stChatInput input::placeholder {
@@ -69,21 +70,21 @@ CHAT_STYLES = """
 
         /* 파일 첨부 영역 */
         .file-upload-section {
-            background-color: #ffffff;
-            border-radius: 0;
+            background-color: #E3F2FD;
+            border-radius: 4px;
             padding: 0 !important;
             margin: 0 !important;
-            border: 2px solid #28a745;
+            border: 1px solid #BBDEFB;
             border-top: none;
         }
 
         /* 파일 업로드 버튼 */
         .stFileUploader {
             border: none;
-            border-radius: 0;
+            border-radius: 4px;
             padding: 0 !important;
             margin: 0 !important;
-            background-color: transparent;
+            background-color: #E3F2FD;
             transition: all 0.2s;
         }
 
@@ -99,13 +100,14 @@ CHAT_STYLES = """
         }
 
         .stFileUploader section {
-            padding: 6px 12px !important;
-            border: none !important;
+            padding: 8px 12px !important;
+            border: 1px dashed #90CAF9 !important;
+            border-radius: 4px !important;
+            background-color: #E3F2FD !important;
         }
 
         .stFileUploader:hover {
-            border-color: #28a745;
-            background-color: #f1f8f4;
+            background-color: #BBDEFB;
         }
 
         /* 업로드된 파일 리스트 아이템 스타일 */
@@ -135,18 +137,18 @@ CHAT_STYLES = """
 
         /* 첨부 파일 표시 */
         .file-attachment {
-            background-color: #e7f5ea;
-            border-left: 2px solid #28a745;
-            border-radius: 0;
-            padding: 4px 8px !important;
-            margin: 0 !important;
+            background-color: #E3F2FD;
+            border-left: 3px solid #2196F3;
+            border-radius: 4px;
+            padding: 6px 10px !important;
+            margin: 4px 0 !important;
             font-size: 13px;
             line-height: 1.3 !important;
         }
 
         .file-name {
-            font-weight: 600;
-            color: #155724;
+            font-weight: 500;
+            color: #1976D2;
             font-size: 13px;
             line-height: 1.3 !important;
         }
@@ -155,8 +157,8 @@ CHAT_STYLES = """
         hr {
             border: none;
             height: 1px;
-            background: linear-gradient(to right, #28a745, #20c997, #28a745);
-            margin: 5px 0 !important;
+            background-color: #E0E0E0;
+            margin: 8px 0 !important;
         }
 
         /* 채팅 메시지 */
@@ -176,23 +178,26 @@ CHAT_STYLES = """
 
         /* 사용자 메시지 */
         [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
-            background-color: #fff3cd;
-            border-left: 2px solid #ffc107;
+            background-color: #E8F5E9;
+            border-left: 3px solid #4CAF50;
+            border-radius: 4px;
         }
 
         /* 어시스턴트 메시지 */
         [data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
-            background-color: #d1ecf1;
-            border-left: 2px solid #17a2b8;
+            background-color: #E3F2FD;
+            border-left: 3px solid #2196F3;
+            border-radius: 4px;
         }
 
         /* 타이틀 스타일 개선 */
         h1 {
             margin: 0 !important;
-            padding: 4px 0 !important;
-            border-bottom: 1px solid #28a745 !important;
+            padding: 8px 0 !important;
+            border-bottom: 2px solid #2196F3 !important;
             font-size: 20px !important;
             line-height: 1.3 !important;
+            color: #1976D2 !important;
         }
 
         h4 {
@@ -213,13 +218,13 @@ CHAT_STYLES = """
         /* 상단 우측 메뉴 */
         .top-right-menu {
             position: absolute;
-            top: 8px;
-            right: 10px;
+            top: 12px;
+            right: 12px;
             z-index: 1000;
         }
 
         .top-right-menu a {
-            color: #495057;
+            color: #616161;
             text-decoration: none;
             font-size: 18px;
             margin-left: 10px;
@@ -227,7 +232,7 @@ CHAT_STYLES = """
         }
 
         .top-right-menu a:hover {
-            color: #28a745;
+            color: #2196F3;
         }
 
         /* 전체 컨테이너 간격 최소화 */
@@ -266,11 +271,12 @@ CHAT_STYLES = """
 
         /* 파일 첨부 컨테이너 */
         .file-upload-container {
-            border: 2px solid #28a745;
+            border: 1px solid #BBDEFB;
             border-top: none;
-            background-color: #ffffff;
+            background-color: #E3F2FD;
             padding: 0 !important;
-            margin: 0 !important;
+            margin: 4px 0 !important;
+            border-radius: 0 0 4px 4px;
         }
 
         .file-upload-container > div {
@@ -296,11 +302,11 @@ CHAT_STYLES = """
 # 페이지 타이틀 스타일
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 PAGE_TITLE_HTML = """
-    <div style='text-align: center; padding: 0; margin: 0; position: relative;'>
-        <h1 style='color: #28a745; margin: 0; padding: 4px 0; font-size: 20px; font-weight: 700; line-height: 1.3;'>
+    <div style='text-align: center; padding: 12px 0; margin: 0; position: relative; background-color: #E3F2FD; border-radius: 4px;'>
+        <h1 style='color: #1976D2; margin: 0; padding: 4px 0; font-size: 22px; font-weight: 700; line-height: 1.3;'>
             🍄 자연들에 상황버섯 AI
         </h1>
-        <p style='color: #6c757d; font-size: 11px; margin: 0; padding: 2px 0; line-height: 1.3;'>
+        <p style='color: #616161; font-size: 12px; margin: 0; padding: 2px 0; line-height: 1.3;'>
             스마트팜 관리 및 재배 상담 서비스
         </p>
         <div class='top-right-menu'>
