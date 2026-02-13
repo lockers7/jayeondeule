@@ -104,12 +104,6 @@ def main():
                 stl.markdown(f"<div style='color:#6c757d; font-size:11px; margin:4px 0;'>📎 {len(stl.session_state.uploaded_files)}개 파일</div>", unsafe_allow_html=True)
             stl.markdown("</div>", unsafe_allow_html=True)
 
-            # 첨부 파일 목록 (파일 박스 하단, border 연결)
-            if stl.session_state.uploaded_files:
-                stl.markdown("<div style='border:2px solid #28a745; border-top:none; background:#ffffff; padding:0; margin:0;'>", unsafe_allow_html=True)
-                display_uploaded_files()
-                stl.markdown("</div>", unsafe_allow_html=True)
-
             # 3. 구분선
             stl.markdown("---")
             stl.markdown("<p style='font-size:13px; font-weight:600; margin:0; padding:3px 0; line-height:1.3; color:#495057;'>💬 대화 기록 (최신순)</p>", unsafe_allow_html=True)
