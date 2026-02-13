@@ -184,14 +184,24 @@ class ChatState(rx.State):
                         {"farm_id": str(f["farm_id"]), "farm_name": f["farm_name"]}
                         for f in farms
                     ]
-                    self.selected_farm_index = next(
+                    selected_index = next(
                         (
                             i
                             for i, farm in enumerate(self.farm_options)
                             if farm["farm_id"] == self.farm_id
                         ),
-                        0,
+                        None,
                     )
+
+                    if selected_index is None:
+                        selected_index = 0
+
+                    self.selected_farm_index = selected_index
+
+                    # 표시 라벨/내부 조회값의 불일치를 방지
+                    selected_farm = self.farm_options[selected_index]
+                    self.farm_id = selected_farm["farm_id"]
+                    self.farm_name = selected_farm["farm_name"]
                     self.load_house_options()
         except Exception as e:
             logger.error(f"농장 옵션 로드 중 오류: {e}")
