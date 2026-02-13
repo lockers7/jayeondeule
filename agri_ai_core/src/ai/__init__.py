@@ -7,8 +7,8 @@ from agri_ai_core.src.ai.llm_client import (
     initialize_background_warmup,
 )
 
-# Query Handling
-from agri_ai_core.src.ai.query_handler import query_llm_unified, process_llm_query_simple
+# Query Handling (Tool Use 방식)
+from agri_ai_core.src.ai.query_handler_simple import query_llm_simple
 
 # RAG
 from agri_ai_core.src.ai.rag import embed_text, llm_document_process
@@ -24,9 +24,8 @@ __all__ = [
     "get_llm_response",
     "get_llm_streaming_response",
     "initialize_background_warmup",
-    # Query
-    "query_llm_unified",
-    "process_llm_query_simple",
+    # Query (Tool Use)
+    "query_llm_simple",
     # RAG
     "embed_text",
     "llm_document_process",

@@ -1,5 +1,5 @@
 [Unit]
-Description=AgriAI Core Services (Scheduler + UI: Streamlit/Reflex)
+Description=Reflex UI Service (Standalone)
 After=network.target chromadb.service postgresql.service
 Wants=chromadb.service
 
@@ -9,28 +9,23 @@ User=jayeondeule
 Group=jayeondeule
 WorkingDirectory=/workspace/jayeondeule
 
-# 통합 실행 스크립트 사용
-ExecStart=/workspace/jayeondeule/setup/run_services.sh
+ExecStart=/workspace/jayeondeule/agri_ai_core/run_reflex.sh
 
-# 환경 변수 로드
 EnvironmentFile=/workspace/jayeondeule/.env
 
-# UI 모드 설정 (streamlit/reflex/both)
-# Environment="UI_MODE=streamlit"
+# Standalone 모드 (백그라운드 서비스 포함)
+Environment="STANDALONE=true"
 
-# 재시작 정책
 Restart=always
 RestartSec=10
 
-# 프로세스 종료 설정
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=30
 
-# 로그 출력
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=agriAiCore
+SyslogIdentifier=reflex
 
 [Install]
 WantedBy=multi-user.target

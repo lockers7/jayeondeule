@@ -99,7 +99,8 @@ pip install --upgrade pip -q
 # --- 핵심 프레임워크 ---
 pip install \
     pydantic \
-    streamlit
+    streamlit \
+    reflex
 
 # --- 데이터베이스 / 데이터 ---
 pip install \
@@ -110,7 +111,8 @@ pip install \
 # --- LLM / AI ---
 pip install \
     ollama \
-    chromadb
+    chromadb \
+    'uvicorn[standard]>=0.18.3'
 
 # --- 유틸리티 ---
 pip install \
@@ -126,7 +128,7 @@ log_info "Python 패키지 설치 완료"
 log_info "[5/5] 설치 검증..."
 
 FAILED=0
-for pkg in pydantic streamlit psycopg2 numpy pandas ollama chromadb dotenv requests apscheduler; do
+for pkg in pydantic streamlit reflex psycopg2 numpy pandas ollama chromadb uvicorn dotenv requests apscheduler; do
     if python3 -c "import $pkg" 2>/dev/null; then
         echo "  [OK] $pkg"
     else

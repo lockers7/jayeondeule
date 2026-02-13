@@ -3,6 +3,7 @@
    ├── ollama.service            (LLM 엔진)
    ├── chromadb.service          (벡터 DB)     ← 신규
    ├── agriAiCore.service        (Streamlit)
+   ├── reflex.service            (Reflex UI)
    └── MCP (VSCode 내 자동 실행, 별도 관리 불필요)
 
 [ChromaDB]
