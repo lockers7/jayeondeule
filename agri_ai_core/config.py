@@ -65,6 +65,9 @@ class ModelSettings:
     name: str
     prefix: Optional[str]
     units_name: Optional[str]
+    ollama_url: Optional[str]
+    embedding_model: Optional[str]
+    use_dummy_embedding: bool
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -132,8 +135,20 @@ def _get_int(value: Optional[str], default: Optional[int] = None) -> Optional[in
         return default
     try:
         return int(value)
-    except ValueError:
+    except (ValueError, TypeError):
         return default
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 다중 환경변수 키 fallback 지원
+# 첫 번째로 값이 존재하는 키를 반환
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def _get_first_env(*keys: str, default: Optional[str] = None) -> Optional[str]:
+    for key in keys:
+        value = os.getenv(key)
+        if value is not None and value != "":
+            return value
+    return default
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -149,19 +164,19 @@ def get_settings() -> AppSettings:
     load_dotenv(override=True)
 
     database = DatabaseSettings(
-        host=os.getenv("PGDB_HOST", "127.0.0.1"),
-        port=_get_int(os.getenv("PGDB_PORT"), 5432),
-        database=os.getenv("PGDB_DATABASE", ""),
-        user=os.getenv("PGDB_USER", ""),
-        password=os.getenv("PGDB_PASSWORD", ""),
+        host=_get_first_env("PGDB_HOST", "DB_HOST", default="127.0.0.1"),
+        port=_get_int(_get_first_env("PGDB_PORT", "DB_PORT"), 5432),
+        database=_get_first_env("PGDB_DATABASE", "DB_NAME", default=""),
+        user=_get_first_env("PGDB_USER", "DB_USER", default=""),
+        password=_get_first_env("PGDB_PASSWORD", "DB_PASSWORD", default=""),
     )
 
     vector = VectorStoreSettings(
         client_type=os.getenv("CLIENT_TYPE", ""),
-        backend=os.getenv("CHROMADB_BACKEND"),
+        backend=_get_first_env("CHROMADB_BACKEND", "CHROMA_DB_IMPL"),
         db_path=os.getenv("CHROMA_DB_PATH"),
-        http_host=os.getenv("CHROMA_DB_HTTP_HOST"),
-        http_port=_get_int(os.getenv("CHROMA_DB_HTTP_PORT")),
+        http_host=_get_first_env("CHROMA_DB_HTTP_HOST", "CHROMA_HOST"),
+        http_port=_get_int(_get_first_env("CHROMA_DB_HTTP_PORT", "CHROMA_PORT")),
         vector_db=os.getenv("VECTOR_DB"),
         vector_cache=os.getenv("VECTOR_CACHE"),
     )
@@ -170,6 +185,12 @@ def get_settings() -> AppSettings:
         name=os.getenv("MODEL_NAME", ""),
         prefix=os.getenv("MODEL_PREFIX"),
         units_name=os.getenv("UNITS_NAME"),
+        ollama_url=_get_first_env("OLLAMA_URL", "OLLAMA_HOST"),
+        embedding_model=os.getenv("EMBEDDING_MODEL_NAME"),
+        use_dummy_embedding=(
+            str(_get_first_env("USE_DUMMY_EMBEDDING", default="false")).lower()
+            in {"1", "true", "yes", "y"}
+        ),
     )
 
     collections = CollectionSettings(
