@@ -13,8 +13,8 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from agri_ai_core.log_utils.log_handlers import setup_logger
-from agri_ai_core.ui.streamlit_app.main import main as streamlit_main
+from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.src.ui.main import main as streamlit_main
 
 logger = setup_logger(__name__)
 
