@@ -71,19 +71,17 @@ def extract_relay_data(data_item):
 
     for key in source_relay_keys:
         if key in data_item:
-            relay_data[key] = data_item[key]
+            relay_data[key] = parse_boolean(data_item[key])
 
     if "relay_stats" in data_item:
         try:
             relay_stats = json.loads(data_item["relay_stats"]) if isinstance(data_item["relay_stats"], str) else data_item["relay_stats"]
 
             for stats_key, value in relay_stats.items():
-                source_key = RELAY_FIELD_MAPPING.get(stats_key)
-                if source_key and source_key not in relay_data:
-                    relay_data[source_key] = value
+                if stats_key in RELAY_FIELD_MAPPING and stats_key not in relay_data:
+                    relay_data[stats_key] = parse_boolean(value)
         except Exception:
             pass
 
     return relay_data
-
 

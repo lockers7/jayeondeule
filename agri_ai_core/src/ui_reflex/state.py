@@ -18,7 +18,7 @@ try:
         GET_ONE_FARM,
         GET_ONE_HOUSE,
         GET_FARM_NAME,
-        GET_FARM_HOUSE_LIST,
+        GET_HOUSE_NAME,
     )
     from agri_ai_core.src.ai.query_handler_simple import query_llm_simple
     from agri_ai_core.src.ai.llm_client import clean_llm_response
@@ -29,7 +29,7 @@ except ModuleNotFoundError:
         GET_ONE_FARM,
         GET_ONE_HOUSE,
         GET_FARM_NAME,
-        GET_FARM_HOUSE_LIST,
+        GET_HOUSE_NAME,
     )
     from src.ai.query_handler_simple import query_llm_simple
     from src.ai.llm_client import clean_llm_response
@@ -213,8 +213,8 @@ class ChatState(rx.State):
         try:
             with db_session() as database:
                 houses = database.fetch_all(
-                    query=GET_FARM_HOUSE_LIST,
-                    vals=(self.farm_id, None, None),
+                    query=GET_HOUSE_NAME,
+                    vals=(self.farm_id, self.farm_id, None, None),
                     as_dict=True
                 )
 

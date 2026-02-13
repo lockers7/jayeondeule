@@ -391,6 +391,15 @@ _THINKING_PATTERNS = [
     r'^The user (is|provided|asked|wants|mentioned|has|said)',
     r'^Looking at (this|the|what)',
     r'^Based on (this|the|what)',
+    # 데이터 검증/확인 패턴 (사용자 요청 추가)
+    r'^Double-check\s+',
+    r'^Checking\s+(if|the|that)',
+    r'^Verify\s+(if|the|that)',
+    r'^\w+\s+\d+(\.\d+)?\s*(°C|°F|%|ppm)\s+(is|are)\s+(okay|good|fine|normal|comfortable|acceptable)',
+    r'^(Temperature|Humidity|CO2|Pressure|Level)\s+\d+',
+    r'^Relays?:\s+',
+    r'^So\s+(the|this|it)\s+(system|environment|condition)',
+    r'^No\s+(immediate\s+)?action\s+(needed|required)',
 ]
 
 
@@ -596,6 +605,47 @@ def clean_llm_response(response_text):
     response_text = '\n'.join(cleaned_lines)
     response_text = re.sub(r'\n\s*\n\s*\n', '\n\n', response_text)
     response_text = re.sub(r'[ \t]+', ' ', response_text)
+    response_text = response_text.strip()
+
+    # 추가 필터링: 마침표로 구분된 짧은 영문 검증/판단 문장 제거
+    # (사용자 요청: "Double-check the numbers. Temperature 25.3°C is comfortable..." 같은 패턴)
+    if has_korean_any:
+        # 한글이 포함된 응답에서 영문 검증 문장만 제거
+        sentence_removed_count = 0
+        for line in response_text.split('\n'):
+            if any(char in line for char in '가나다라마바사아자차카타파하'):
+                continue  # 한글이 있는 줄은 건너뜀
+
+            # 마침표로 분리된 문장들 검사
+            sentences = [s.strip() for s in line.split('.') if s.strip()]
+            filtered_sentences = []
+
+            for sentence in sentences:
+                # 짧은 영문 검증/판단 문장인지 확인
+                is_verification = False
+                if len(sentence) < 200 and not any(char in sentence for char in '가나다라마바사아자차카타파하'):
+                    for pattern in _THINKING_PATTERNS:
+                        if re.match(pattern, sentence.strip(), re.IGNORECASE):
+                            is_verification = True
+                            sentence_removed_count += 1
+                            break
+
+                if not is_verification:
+                    filtered_sentences.append(sentence)
+
+            # 문장들을 다시 조립
+            if filtered_sentences:
+                new_line = '. '.join(filtered_sentences)
+                if new_line and not new_line.endswith('.'):
+                    new_line += '.'
+                response_text = response_text.replace(line, new_line)
+            else:
+                response_text = response_text.replace(line, '')
+
+        if sentence_removed_count > 0:
+            logger.debug(f"[필터] 검증/판단 문장 {sentence_removed_count}개 추가 제거")
+
+    response_text = re.sub(r'\n\s*\n\s*\n', '\n\n', response_text)
     response_text = response_text.strip()
 
     # 필터링 결과 요약 로깅

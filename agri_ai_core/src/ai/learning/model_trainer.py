@@ -397,8 +397,9 @@ def update_ollama_model(after_date=None, top_cnt=0):
                 data_kind = str(data.get("data_kind")).lower()
 
                 if "units" in data_kind:
-                    sensor_data = convert_sensor_relay_data(data)
-                    relay_data = convert_sensor_relay_data(data)
+                    converted_data = convert_sensor_relay_data(data)
+                    sensor_data = converted_data.get("sensor_data", {})
+                    relay_data = converted_data.get("relay_data", {})
 
                     unit_entry = {
                         "farm_id": farm_id,

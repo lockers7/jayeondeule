@@ -205,7 +205,7 @@ def list_collections():
 # dict: 생성된 컬렉션 정보
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def create_collection(collection_name=None, metadata=None):
-    from agri_ai_core.src.chroma.utils import _sanitize_for_json
+    from agri_ai_core.src.chroma.utils import _sanitize_for_json, _embedding_dim
 
     try:
         collections = list_collections()

@@ -13,6 +13,7 @@ __all__ = [
     # 엔트리포인트 (지연 로드)
     "db_session",
     "run_streamlit",
+    "run_reflex",
 ]
 
 
@@ -25,7 +26,7 @@ def __getattr__(name):
     if name == "db_session":
         from agri_ai_core.src.postgresql import db_session
         return db_session
-    if name == "run_streamlit":
-        from agri_ai_core.src.ui.main import main
-        return main
+    if name in ("run_streamlit", "run_reflex"):
+        from agri_ai_core.main.main import app
+        return app
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
