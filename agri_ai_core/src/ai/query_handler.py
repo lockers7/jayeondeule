@@ -19,6 +19,7 @@ from agri_ai_core.src.ai.llm_client import (
     get_llm_streaming_response
 )
 from agri_ai_core.src.ai.query_analyzer import analyze_query_unified
+from agri_ai_core.src.ai.file_processor import process_uploaded_files
 
 logger = setup_logger(__name__)
 
@@ -113,7 +114,14 @@ async def query_llm_unified(user_query, file_paths=None, farm_id=None, house_id=
         logger.info("\n[4단계] 프롬프트 생성 시작")
         default_system_prompt = "너는 스마트팜 농장 지킴이이다."
         system_prompt = default_system_prompt
-        user_prompt = f"사용자 질문: {user_query}\n답변해주세요."
+
+        # 첨부 파일 처리
+        file_content = ""
+        if file_paths:
+            logger.info(f"첨부 파일 처리 중: {len(file_paths)}개 파일")
+            file_content = process_uploaded_files(file_paths)
+
+        user_prompt = f"사용자 질문: {user_query}{file_content}\n답변해주세요."
 
         logger.info("\n[5단계] LLM 응답 생성 시작")
         if not stream:
