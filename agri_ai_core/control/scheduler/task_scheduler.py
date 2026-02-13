@@ -246,7 +246,7 @@ def get_all_jobs():
 #     data_export_func: 데이터 내보내기 함수
 #     learning_func: 학습 함수
 #     stats_func: 통계 처리 함수
-#     schedule_control_func: 조명/관수 스케줄 제어 함수
+#     schedule_control_func: 조명/관수밸브 스케줄 제어 함수
 #
 # Returns:
 #     bool: 성공 여부
@@ -281,7 +281,7 @@ def setup_default_jobs(data_export_func=None, learning_func=None, stats_func=Non
                 minutes=STATS_INTERVAL_MINUTES
             )
 
-        # 조명/관수 스케줄 제어 작업 (매 1분)
+        # 조명/관수밸브 스케줄 제어 작업 (매 1분)
         if schedule_control_func:
             add_job(
                 job_id="schedule_control_job",

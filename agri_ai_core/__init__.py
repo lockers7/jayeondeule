@@ -12,7 +12,6 @@ __all__ = [
     "setup_logger",
     # 엔트리포인트 (지연 로드)
     "db_session",
-    "create_app",
     "run_streamlit",
 ]
 
@@ -26,9 +25,6 @@ def __getattr__(name):
     if name == "db_session":
         from agri_ai_core.database.postgres.connection import db_session
         return db_session
-    if name == "create_app":
-        from agri_ai_core.api.main import create_app
-        return create_app
     if name == "run_streamlit":
         from agri_ai_core.ui.streamlit_app.main import main
         return main

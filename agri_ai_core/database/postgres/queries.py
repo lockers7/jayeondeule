@@ -13,9 +13,10 @@ GET_FARM_NAME = """SELECT DISTINCT farm_id, farm_name
                    WHERE farm_id != 0 AND (farm_id = %s OR %s IS NULL)
                    ORDER BY farm_name ASC;"""
 
-GET_HOUSE_NAME = """SELECT DISTINCT hous_id, hous_name
+GET_HOUSE_NAME = """SELECT DISTINCT farm_id, hous_id, hous_name
                     FROM FARMHOUSE_M_INFO
-                    WHERE farm_id = %s AND hous_id = %s
+                    WHERE (farm_id = %s OR %s IS NULL)
+                      AND (hous_id = %s OR %s IS NULL)
                     ORDER BY hous_name ASC;"""
 
 GET_HOUSE_ID = """SELECT DISTINCT farm_id, hous_id
@@ -137,18 +138,18 @@ GET_UNITS_VALUE = """SELECT FMI.farm_id                       AS 농장코드
                           , watr_tprt_valu                    AS 수온
                           , ligt_lvel_valu                    AS 광량
                           , watr_lvel_valu                    AS 수위
-                          , relay_1st_flag                    AS 수온히터
-                          , relay_2st_flag                    AS 습도모터
+                          , relay_1st_flag                    AS 물가열기
+                          , relay_2st_flag                    AS 분사펌프
                           , relay_3st_flag                    AS 배수밸브
-                          , relay_5st_flag                    AS 흡입모터
-                          , relay_6st_flag                    AS 배출모터
+                          , relay_5st_flag                    AS 흡기팬
+                          , relay_6st_flag                    AS 배기팬
                           , relay_7st_flag                    AS 조명토글
-                          , relay_8st_flag                    AS 관수토글
-                          , relay_9st_flag                    AS 내부히터
-                          , relay_10st_flag                   AS 순환밸브
-                          , relay_11st_flag                   AS 흡입밸브
-                          , relay_14st_flag                   AS 배출밸브
-                          , relay_15st_flag                   AS 히터밸브
+                          , relay_8st_flag                    AS 관수밸브
+                          , relay_9st_flag                    AS 열풍기
+                          , relay_10st_flag                   AS 순환댐퍼
+                          , relay_11st_flag                   AS 흡기댐퍼
+                          , relay_14st_flag                   AS 배기댐퍼
+                          , relay_15st_flag                   AS 열풍댐퍼
                        FROM FARM_M_INFO         FMI
                        JOIN FARMHOUSE_M_INFO    HMI ON HMI.farm_id = FMI.farm_id
                        JOIN SENSOR_L_RECORDING  SLR ON SLR.farm_id = HMI.farm_id AND SLR.hous_id = HMI.hous_id
@@ -223,7 +224,7 @@ GET_OPTIMAL_CONDITION = """SELECT setn_dttm      AS 저장일자
                              LIMIT 1"""
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 조명/관수 설정 조회
+# 조명/관수밸브 설정 조회
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 GET_LIGHT_IRRIGATION = """SELECT strt_time
                                , fnsh_time

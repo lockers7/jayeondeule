@@ -4,10 +4,7 @@
 상황버섯 재배 기본 지식을 ChromaDB document_collection에 추가
 """
 
-import sys
-sys.path.insert(0, '/workspace/jayeondeule')
-
-from agri_ai_core.database.chromadb.operations import upsert_documents
+from agri_ai_core.database.chromadb.operations import upsert_documents_with_embedding
 from agri_ai_core.database.chromadb.collections import document_collection
 from agri_ai_core.data_pipeline.vectorization.embedder import embed_text
 
@@ -72,18 +69,18 @@ knowledge_docs = [
         "id": "mushroom_ventilation_001",
         "content": """
 상황버섯 재배사 환기 방법:
-1. 내부순환: 순환밸브 ON, 흡입/배출밸브 OFF
+1. 내부순환: 순환댐퍼 ON, 흡입/배기댐퍼 OFF
    - 재배사 내부 공기만 순환
    - 온도/습도 균일화에 효과적
 
-2. 외부순환: 순환밸브 OFF, 흡입밸브 ON, 배출밸브 ON
+2. 외부순환: 순환댐퍼 OFF, 흡기댐퍼 ON, 배기댐퍼 ON
    - 외부 공기 흡입 + 내부 공기 배출
    - CO2 농도 조절, 온도 조절에 효과적
 
-3. 흡입순환: 흡입밸브만 ON
+3. 흡입순환: 흡기댐퍼만 ON
    - 외부 온도가 내부보다 낮을 때 사용
 
-4. 배출순환: 배출밸브만 ON
+4. 배출순환: 배기댐퍼만 ON
    - 내부 열기 배출
         """.strip(),
         "metadata": {
@@ -95,15 +92,15 @@ knowledge_docs = [
         "id": "mushroom_heating_001",
         "content": """
 상황버섯 재배사 가온 방법:
-1. 수온히터 + 포그:
-   - 지하수(15-17도)를 수온히터로 가열
-   - 습도모터로 물안개 발생
+1. 물가열기 + 포그:
+   - 지하수(15-17도)를 물가열기로 가열
+   - 분사펌프로 물안개 발생
    - 상단 덕트를 통해 재배사 내부로 분사
    - 온도 상승 + 습도 유지 효과
 
-2. 내부히터:
+2. 열풍기:
    - 직접 공기를 가열
-   - 히터밸브를 통해 따뜻한 공기 흡입
+   - 열풍댐퍼를 통해 따뜻한 공기 흡입
    - 비용이 높아 외부 온도가 낮을 때만 사용
 
 3. 외부 온도 활용:
@@ -211,18 +208,15 @@ def main():
 
     collection_name = document_collection()
     if not collection_name:
-        print("❌ 오류: document_collection이 설정되지 않음")
+        print("오류: document_collection이 설정되지 않음")
         return
 
     print(f"\n컬렉션: {collection_name}")
     print(f"추가할 문서: {len(knowledge_docs)}건")
     print()
 
-    # 각 문서의 임베딩 생성 및 ChromaDB에 저장
-    ids = []
-    documents = []
-    embeddings = []
-    metadatas = []
+    # 각 문서의 임베딩 생성
+    docs_to_upsert = []
 
     for i, doc in enumerate(knowledge_docs, 1):
         print(f"[{i}/{len(knowledge_docs)}] {doc['metadata']['topic']} 처리 중...", end=" ")
@@ -230,30 +224,29 @@ def main():
         # 임베딩 생성
         embedding = embed_text(doc['content'])
         if not embedding:
-            print("❌ 임베딩 실패")
+            print("임베딩 실패")
             continue
 
-        ids.append(doc['id'])
-        documents.append(doc['content'])
-        embeddings.append(embedding)
-        metadatas.append(doc['metadata'])
+        docs_to_upsert.append({
+            "doc_id": doc['id'],
+            "text": doc['content'],
+            "metadata": doc['metadata'],
+            "embedding": embedding
+        })
 
-        print("✓")
+        print("완료")
 
     # ChromaDB에 저장
-    print(f"\nChromaDB에 {len(ids)}건 저장 중...")
-    result = upsert_documents(
+    print(f"\nChromaDB에 {len(docs_to_upsert)}건 저장 중...")
+    result = upsert_documents_with_embedding(
         collection_name=collection_name,
-        ids=ids,
-        documents=documents,
-        embeddings=embeddings,
-        metadatas=metadatas
+        docs=docs_to_upsert
     )
 
     if "error" in result:
-        print(f"❌ 저장 실패: {result['error']}")
+        print(f"저장 실패: {result['error']}")
     else:
-        print(f"✓ 저장 완료: {len(ids)}건")
+        print(f"저장 완료: {len(docs_to_upsert)}건")
         print()
         print("추가된 지식:")
         for doc in knowledge_docs:

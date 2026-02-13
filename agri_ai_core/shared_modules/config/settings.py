@@ -111,8 +111,6 @@ class LoggingSettings:
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 class AppSettings:
     corps_name: Optional[str]
-    fastapi_url: Optional[str]
-    fastapi_get_url: Optional[str]
     house_source_json: Optional[str]
     units_temp_json: Optional[str]
     crops_temp_json: Optional[str]
@@ -194,8 +192,6 @@ def get_settings() -> AppSettings:
 
     return AppSettings(
         corps_name=os.getenv("CORPS_NAME"),
-        fastapi_url=os.getenv("FASTAPI_URL"),
-        fastapi_get_url=os.getenv("FASTAPI_GET_URL"),
         house_source_json=os.getenv("HOUSE_SOURCE_JSON"),
         units_temp_json=os.getenv("UNITS_TEMP_JSON"),
         crops_temp_json=os.getenv("CROPS_TEMP_JSON"),

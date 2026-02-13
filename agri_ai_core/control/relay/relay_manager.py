@@ -37,7 +37,7 @@ def set_relay_value(farm_id, house_id, relay_settings):
         relay_mapping = get_relay_mapping(house_id)
 
         # 릴레이 설정 초기화 (relay_*_flag만 사용)
-        # 1호 재배사 히터밸브(relay_15st_flag)는 항상 ON 유지
+        # 1호 재배사 열풍댐퍼(relay_15st_flag)는 항상 ON 유지
         heater_valve_on = (str(house_id) == "1")
 
         relay_values = {
@@ -45,8 +45,8 @@ def set_relay_value(farm_id, house_id, relay_settings):
             "relay_2st_flag": False,
             "relay_3st_flag": True,   # 배수밸브 기본 ON
             "relay_4st_flag": False,
-            "relay_5st_flag": True,   # 흡입모터 기본 ON
-            "relay_6st_flag": True,   # 배출모터 기본 ON
+            "relay_5st_flag": True,   # 흡기팬 기본 ON
+            "relay_6st_flag": True,   # 배기팬 기본 ON
             "relay_7st_flag": False,
             "relay_8st_flag": False,
             "relay_9st_flag": False,
@@ -55,7 +55,7 @@ def set_relay_value(farm_id, house_id, relay_settings):
             "relay_12st_flag": False,
             "relay_13st_flag": False,
             "relay_14st_flag": False,
-            "relay_15st_flag": heater_valve_on,  # 1호 재배사 히터밸브 항상 ON
+            "relay_15st_flag": heater_valve_on,  # 1호 재배사 열풍댐퍼 항상 ON
             "relay_16st_flag": False,
         }
 
@@ -63,7 +63,7 @@ def set_relay_value(farm_id, house_id, relay_settings):
         # lighting_flag, irrigation_flag 같은 별칭을 relay_*_flag로 변환
         alias_mapping = {
             "lighting_flag": "relay_7st_flag",     # 조명토글
-            "irrigation_flag": "relay_8st_flag",   # 관수토글
+            "irrigation_flag": "relay_8st_flag",   # 관수밸브
         }
 
         for key, value in relay_settings.items():
@@ -72,7 +72,7 @@ def set_relay_value(farm_id, house_id, relay_settings):
             if actual_key in relay_values:
                 relay_values[actual_key] = value
 
-        # 1호 재배사 히터밸브 강제 ON (덮어쓰기 방지)
+        # 1호 재배사 열풍댐퍼 강제 ON (덮어쓰기 방지)
         if str(house_id) == "1":
             relay_values["relay_15st_flag"] = True
 

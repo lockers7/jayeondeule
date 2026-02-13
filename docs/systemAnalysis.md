@@ -321,7 +321,7 @@ h:\Workspace\agri_ai_core\
 
 #### 공통 안전 규칙 (relay/common.py)
 - 규칙 강제:
-  - RULE_1: 온수기와 실내히터 동시 ON 불가
+  - RULE_1: 온수기와 열풍기 동시 ON 불가
   - RULE_2: 최소 하나의 공기 경로 유지
   - RULE_3: CO2 응답 요구사항
   - RULE_4: 안전 임계값

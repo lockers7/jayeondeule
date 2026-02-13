@@ -7,8 +7,8 @@
 # should_execute_weekdays: 요일 기반 실행 여부 확인
 # is_time_in_range: 현재 시간이 스케줄 시간 범위 내인지 확인
 # control_lighting_schedule: 조명 스케줄 제어
-# control_irrigation_schedule: 관수 스케줄 제어
-# control_all_schedules: 모든 재배사 조명/관수 스케줄 제어
+# control_irrigation_schedule: 관수밸브 스케줄 제어
+# control_all_schedules: 모든 재배사 조명/관수밸브 스케줄 제어
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import traceback
 from datetime import datetime
@@ -212,8 +212,8 @@ def control_lighting_schedule(farm_id, house_id):
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 관수 스케줄 제어
-# 관수 스케줄에 따라 관수 제어
+# 관수밸브 스케줄 제어
+# 관수밸브 스케줄에 따라 관수밸브 제어
 #
 # Args:
 #     farm_id: 농장 ID
@@ -224,15 +224,15 @@ def control_lighting_schedule(farm_id, house_id):
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def control_irrigation_schedule(farm_id, house_id):
     try:
-        # 관수 설정 조회 (dlte_yn = False만)
+        # 관수밸브 설정 조회 (dlte_yn = False만)
         irrigation_settings = read_light_irrigation_settings(farm_id, house_id, 'water')
 
         if not irrigation_settings:
-            logger.debug(f"농장 {farm_id}, 재배사 {house_id}: 관수 스케줄 없음")
+            logger.debug(f"농장 {farm_id}, 재배사 {house_id}: 관수밸브 스케줄 없음")
             return {
                 "success": True,
                 "action": "none",
-                "message": "관수 스케줄이 설정되지 않음"
+                "message": "관수밸브 스케줄이 설정되지 않음"
             }
 
         # 현재 시간
@@ -240,7 +240,7 @@ def control_irrigation_schedule(farm_id, house_id):
         current_time = now.time()
         current_date = now.date()
 
-        # 관수를 켜야 하는 시간대인지 확인
+        # 관수밸브를 켜야 하는 시간대인지 확인
         should_turn_on = False
         active_schedules = []
 
@@ -303,24 +303,24 @@ def control_irrigation_schedule(farm_id, house_id):
         if result.get("success"):
             status = "ON" if should_turn_on else "OFF"
             schedule_info = f" (스케줄: {', '.join(active_schedules)})" if active_schedules else ""
-            logger.info(f"농장 {farm_id}, 재배사 {house_id}: 관수 {status}{schedule_info}")
+            logger.info(f"농장 {farm_id}, 재배사 {house_id}: 관수밸브 {status}{schedule_info}")
 
             return {
                 "success": True,
                 "action": "irrigation_controlled",
                 "status": status,
                 "schedules": active_schedules,
-                "message": f"관수 {status}"
+                "message": f"관수밸브 {status}"
             }
         else:
-            logger.error(f"농장 {farm_id}, 재배사 {house_id}: 관수 제어 실패 - {result.get('message')}")
+            logger.error(f"농장 {farm_id}, 재배사 {house_id}: 관수밸브 제어 실패 - {result.get('message')}")
             return {
                 "success": False,
-                "message": f"관수 제어 실패: {result.get('message')}"
+                "message": f"관수밸브 제어 실패: {result.get('message')}"
             }
 
     except Exception as e:
-        logger.error(f"관수 스케줄 제어 중 오류: {e}")
+        logger.error(f"관수밸브 스케줄 제어 중 오류: {e}")
         logger.error(traceback.format_exc())
         return {
             "success": False,
@@ -329,8 +329,8 @@ def control_irrigation_schedule(farm_id, house_id):
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 모든 재배사 조명/관수 스케줄 제어
-# 모든 농장/재배사의 조명 및 관수 스케줄 제어
+# 모든 재배사 조명/관수밸브 스케줄 제어
+# 모든 농장/재배사의 조명 및 관수밸브 스케줄 제어
 #
 # Returns:
 #     dict: 전체 제어 결과
@@ -341,7 +341,7 @@ def control_all_schedules():
             # 모든 활성 재배사 조회
             houses = database.fetch_all(
                 query=dbQry.GET_HOUSE_NAME,
-                vals=(None, None),
+                vals=(None, None, None, None),
                 as_dict=True
             )
 
@@ -367,7 +367,7 @@ def control_all_schedules():
                 # 조명 제어
                 light_result = control_lighting_schedule(farm_id, house_id)
 
-                # 관수 제어
+                # 관수밸브 제어
                 irrigation_result = control_irrigation_schedule(farm_id, house_id)
 
                 # 결과 집계

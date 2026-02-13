@@ -1,0 +1,33 @@
+{
+  "mcpServers": {
+    "postgres": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-postgres",
+        "postgresql://postgres:Wkdusemfdp1%40@127.0.0.1:5432/jayeondeule"
+      ]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/workspace/jayeondeule"
+      ]
+    },
+    "web-search": {
+      "command": "node",
+      "args": [
+        "/workspace/jayeondeule/.mcp/web-search/build/index.js"
+      ]
+    },
+    "fetch": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@kazuph/mcp-fetch"
+      ]
+    }
+  }
+}

@@ -1,7 +1,7 @@
 [Unit]
-Description=AgriAI Core Services (FastAPI + Streamlit)
-After=network.target docker.service postgresql.service
-Wants=docker.service
+Description=AgriAI Core Services (Streamlit)
+After=network.target chromadb.service postgresql.service
+Wants=chromadb.service
 
 [Service]
 Type=simple
@@ -10,11 +10,10 @@ Group=jayeondeule
 WorkingDirectory=/workspace/jayeondeule
 
 # 통합 실행 스크립트 사용
-ExecStart=/workspace/jayeondeule/run_services.sh
+ExecStart=/workspace/jayeondeule/setup/run_services.sh
 
 # 환경 변수 로드
 EnvironmentFile=/workspace/jayeondeule/.env
-Environment="PYTHONDONTWRITEBYTECODE=1"
 
 # 재시작 정책
 Restart=always

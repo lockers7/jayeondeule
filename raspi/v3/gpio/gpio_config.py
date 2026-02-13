@@ -22,21 +22,21 @@ HEATER_VALVE_ON_GPIO = 14
 DUMMY3               = 15
 
 RELAY_NAMES = {
-    "relay_1st_flag": "수온히터",
-    "relay_2st_flag": "물순환모터",
-    "relay_3st_flag": "배수모터1",
+    "relay_1st_flag": "물가열기",
+    "relay_2st_flag": "분사펌프",
+    "relay_3st_flag": "배수밸브",
     "relay_4st_flag": "미사용",
-    "relay_5st_flag": "흡입환풍모터",
-    "relay_6st_flag": "배출환풍모터",
+    "relay_5st_flag": "흡기팬",
+    "relay_6st_flag": "배기팬",
     "relay_7st_flag": "조명",
-    "relay_8st_flag": "관수",
-    "relay_9st_flag": "실내히터",
-    "relay_10st_flag": "공기순환밸브",
-    "relay_11st_flag": "공기흡입밸브",
+    "relay_8st_flag": "관수밸브",
+    "relay_9st_flag": "열풍기",
+    "relay_10st_flag": "순환댐퍼",
+    "relay_11st_flag": "흡기댐퍼",
     "relay_12st_flag": "미사용",
     "relay_13st_flag": "미사용",
-    "relay_14st_flag": "공기배출밸브",
-    "relay_15st_flag": "실내히터밸브",
+    "relay_14st_flag": "배기댐퍼",
+    "relay_15st_flag": "열풍댐퍼",
     "relay_16st_flag": "미사용",
 }
 

@@ -103,7 +103,7 @@ def get_all_houses_status(farm_id):
             house_id = None
             houses = database.fetch_all(
                 query=dbQry.GET_HOUSE_NAME,
-                vals=(farm_id, house_id),
+                vals=(farm_id, farm_id, house_id, house_id),
                 as_dict=True
             )
 
@@ -265,18 +265,18 @@ def detect_and_execute_relay_commands(response, farm_id, house_id=None):
                 executed_commands.append("자동모드로 변경됨")
 
         relay_control_patterns = {
-            r'수온히터.*켜': ('water_heater_flag', True),
-            r'수온히터.*꺼': ('water_heater_flag', False),
-            r'습도모터.*켜': ('fog_occurs_flag', True),
-            r'습도모터.*꺼': ('fog_occurs_flag', False),
+            r'물가열기.*켜': ('water_heater_flag', True),
+            r'물가열기.*꺼': ('water_heater_flag', False),
+            r'분사펌프.*켜': ('fog_occurs_flag', True),
+            r'분사펌프.*꺼': ('fog_occurs_flag', False),
             r'배수밸브.*켜': ('drainage_motor_flag', True),
             r'배수밸브.*꺼': ('drainage_motor_flag', False),
             r'환풍모터.*켜': ('exhaust_fan_flag', True),
             r'환풍모터.*꺼': ('exhaust_fan_flag', False),
             r'조명토글.*켜': ('lighting_flag', True),
             r'조명토글.*꺼': ('lighting_flag', False),
-            r'관수토글.*켜': ('irrigation_flag', True),
-            r'관수토글.*꺼': ('irrigation_flag', False),
+            r'관수밸브.*켜': ('irrigation_flag', True),
+            r'관수밸브.*꺼': ('irrigation_flag', False),
             r'히터.*켜': ('indoor_heater_flag', True),
             r'히터.*꺼': ('indoor_heater_flag', False),
         }

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # =========================================================================
 # AgriAI Core 통합 서비스 시작 스크립트
-# FastAPI 서버와 Streamlit UI를 함께 실행
+# 백그라운드 서비스(스케줄러)와 Streamlit UI를 함께 실행
 # =========================================================================
 
 set -e
@@ -17,11 +17,11 @@ export PYTHONDONTWRITEBYTECODE=1
 # .env 파일은 systemd가 직접 로드함
 
 # Python 가상환경 경로
-PYTHON_BIN="/workspace/jayeondeule/.workspace/bin/python"
-STREAMLIT_BIN="/workspace/jayeondeule/.workspace/bin/streamlit"
+PYTHON_BIN="/workspace/jayeondeule/venv/bin/python"
+STREAMLIT_BIN="/workspace/jayeondeule/venv/bin/streamlit"
 
 # PID 파일 경로
-FASTAPI_PID="/tmp/fastapi.pid"
+SCHEDULER_PID="/tmp/scheduler.pid"
 STREAMLIT_PID="/tmp/streamlit.pid"
 
 # 로그 파일 경로
@@ -45,15 +45,15 @@ cleanup() {
         rm -f "$STREAMLIT_PID"
     fi
 
-    # FastAPI 종료
-    if [ -f "$FASTAPI_PID" ]; then
-        FASTAPI_PID_NUM=$(cat "$FASTAPI_PID")
-        if kill -0 "$FASTAPI_PID_NUM" 2>/dev/null; then
-            echo "FastAPI 종료 중 (PID: $FASTAPI_PID_NUM)..."
-            kill "$FASTAPI_PID_NUM"
-            wait "$FASTAPI_PID_NUM" 2>/dev/null || true
+    # 스케줄러 종료
+    if [ -f "$SCHEDULER_PID" ]; then
+        SCHEDULER_PID_NUM=$(cat "$SCHEDULER_PID")
+        if kill -0 "$SCHEDULER_PID_NUM" 2>/dev/null; then
+            echo "스케줄러 종료 중 (PID: $SCHEDULER_PID_NUM)..."
+            kill "$SCHEDULER_PID_NUM"
+            wait "$SCHEDULER_PID_NUM" 2>/dev/null || true
         fi
-        rm -f "$FASTAPI_PID"
+        rm -f "$SCHEDULER_PID"
     fi
 
     echo "모든 서비스 종료 완료"
@@ -71,14 +71,14 @@ echo "  AgriAI Core 서비스 시작"
 echo "=========================================="
 echo ""
 
-# FastAPI 서버 시작
-echo "FastAPI 서버 시작 중..."
-$PYTHON_BIN /workspace/jayeondeule/run_to_fastapi.py >> "$LOG_DIR/fastapi.log" 2>&1 &
-FASTAPI_PID_NUM=$!
-echo $FASTAPI_PID_NUM > "$FASTAPI_PID"
-echo "FastAPI 서버 시작됨 (PID: $FASTAPI_PID_NUM)"
+# 백그라운드 서비스 시작 (ChromaDB 연결, 스케줄러)
+echo "백그라운드 서비스 시작 중 (스케줄러)..."
+$PYTHON_BIN -m agri_ai_core.run_scheduler >> "$LOG_DIR/scheduler.log" 2>&1 &
+SCHEDULER_PID_NUM=$!
+echo $SCHEDULER_PID_NUM > "$SCHEDULER_PID"
+echo "백그라운드 서비스 시작됨 (PID: $SCHEDULER_PID_NUM)"
 
-# FastAPI 서버가 준비될 때까지 대기
+# 초기화 완료 대기
 sleep 3
 
 # Streamlit UI 시작
@@ -96,9 +96,7 @@ echo ""
 echo "=========================================="
 echo "  서비스 시작 완료"
 echo "=========================================="
-echo "  - FastAPI: http://0.0.0.0:8088"
 echo "  - Streamlit: http://0.0.0.0:8501"
-echo "  - API Docs: http://0.0.0.0:8088/docs"
 echo "=========================================="
 echo ""
 

@@ -127,8 +127,8 @@ SELECT
     watr_tprt_valu AS 수온,
     ligt_lvel_valu AS 광량,
     watr_lvel_valu AS 수위,
-    relay_1st_flag AS 수온히터,
-    relay_2st_flag AS 습도모터,
+    relay_1st_flag AS 물가열기,
+    relay_2st_flag AS 분사펌프,
     -- ... (16개 릴레이)
 FROM FARM_M_INFO FMI
 JOIN FARMHOUSE_M_INFO HMI ON HMI.farm_id = FMI.farm_id
@@ -303,10 +303,10 @@ indoor_temperature_value: 18.5, indoor_humidity_value: 75.2,
 outdoor_temperature_value: 12.3, outdoor_humidity_value: 65.8,
 co2_concentration_value: 450.0, water_temperature_value: 20.1,
 light_level_value: 1200.0, water_level_value: 80.0,
-수온히터: 작동중(True), 습도모터: 미작동(False), 배수밸브: 미작동(False),
-흡입모터: 작동중(True), 배출모터: 미작동(False), 조명토글: 작동중(True),
-관수토글: 미작동(False), 내부히터: 미작동(False), 순환밸브: 작동중(True),
-흡입밸브: 미작동(False), 배출밸브: 미작동(False), 히터밸브: 작동중(True),
+물가열기: 작동중(True), 분사펌프: 미작동(False), 배수밸브: 미작동(False),
+흡기팬: 작동중(True), 배기팬: 미작동(False), 조명토글: 작동중(True),
+관수밸브: 미작동(False), 열풍기: 미작동(False), 순환댐퍼: 작동중(True),
+흡기댐퍼: 미작동(False), 배기댐퍼: 미작동(False), 열풍댐퍼: 작동중(True),
 학습여부: False
 ```
 
@@ -407,7 +407,7 @@ Content-Type: application/json
 | `read_current_sensor_info(farm_id, house_id)` | 현재 센서 정보 조회 | GET_NOW_UNIT_INFO | dict |
 | `read_latest_relay_info(farm_id, house_id)` | 최신 릴레이 정보 조회 | GET_LATEST_RELAY_INFO | dict |
 | `read_sensor_history(farm_id, house_id, days, limit)` | 센서 히스토리 조회 | GET_SENSOR_HISTORY | list[dict] |
-| `read_light_irrigation_settings(farm_id, house_id, unit_type)` | 조명/관수 설정 조회 | GET_LIGHT_IRRIGATION | list[dict] |
+| `read_light_irrigation_settings(farm_id, house_id, unit_type)` | 조명/관수밸브 설정 조회 | GET_LIGHT_IRRIGATION | list[dict] |
 | `update_last_get_time(farm_id, house_id, get_time)` | 조회 시간 업데이트 | SET_FARMHOUSE_INFO | bool |
 
 #### `agri_ai_core/database/postgres/connection.py`
@@ -550,18 +550,18 @@ SQL 쿼리 문자열 상수 정의
 
 | PostgreSQL 컬럼 | 한글명 | ChromaDB 필드 | 제어 장치 |
 |----------------|--------|---------------|----------|
-| `relay_1st_flag` | 수온히터 | `water_heater_flag` | 수온 히터 |
-| `relay_2st_flag` | 습도모터 | `humidity_motor_flag` | 습도 제어 모터 |
+| `relay_1st_flag` | 물가열기 | `water_heater_flag` | 수온 히터 |
+| `relay_2st_flag` | 분사펌프 | `humidity_motor_flag` | 습도 제어 모터 |
 | `relay_3st_flag` | 배수밸브 | `drainage_valve_flag` | 배수 밸브 |
-| `relay_5st_flag` | 흡입모터 | `suction_motor_flag` | 흡입 팬 모터 |
-| `relay_6st_flag` | 배출모터 | `exhaust_motor_flag` | 배출 팬 모터 |
+| `relay_5st_flag` | 흡기팬 | `suction_motor_flag` | 흡입 팬 모터 |
+| `relay_6st_flag` | 배기팬 | `exhaust_motor_flag` | 배출 팬 모터 |
 | `relay_7st_flag` | 조명토글 | `lighting_flag` | 조명 ON/OFF |
-| `relay_8st_flag` | 관수토글 | `irrigation_flag` | 관수 ON/OFF |
-| `relay_9st_flag` | 내부히터 | `indoor_heater_flag` | 내부 난방 히터 |
-| `relay_10st_flag` | 순환밸브 | `circulation_valve_flag` | 순환 밸브 |
-| `relay_11st_flag` | 흡입밸브 | `suction_valve_flag` | 흡입 밸브 |
-| `relay_14st_flag` | 배출밸브 | `exhaust_valve_flag` | 배출 밸브 |
-| `relay_15st_flag` | 히터밸브 | `heater_valve_flag` | 히터 밸브 |
+| `relay_8st_flag` | 관수밸브 | `irrigation_flag` | 관수밸브 ON/OFF |
+| `relay_9st_flag` | 열풍기 | `indoor_heater_flag` | 내부 난방 히터 |
+| `relay_10st_flag` | 순환댐퍼 | `circulation_valve_flag` | 순환 밸브 |
+| `relay_11st_flag` | 흡기댐퍼 | `suction_valve_flag` | 흡입 밸브 |
+| `relay_14st_flag` | 배기댐퍼 | `exhaust_valve_flag` | 배출 밸브 |
+| `relay_15st_flag` | 열풍댐퍼 | `heater_valve_flag` | 히터 밸브 |
 
 ### 5.3 작물 데이터 매핑
 

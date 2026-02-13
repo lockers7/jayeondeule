@@ -19,18 +19,18 @@ from datetime import datetime
 # --->
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 class RelaySettings(BaseModel):
-    water_heater: bool = Field(False, description="수온히터")
-    fog_motor: bool = Field(False, description="습도모터")
+    water_heater: bool = Field(False, description="물가열기")
+    fog_motor: bool = Field(False, description="분사펌프")
     drainage_valve: bool = Field(False, description="배수밸브")
-    intake_fan: bool = Field(False, description="흡입모터")
-    exhaust_fan: bool = Field(False, description="배출모터")
+    intake_fan: bool = Field(False, description="흡기팬")
+    exhaust_fan: bool = Field(False, description="배기팬")
     lighting: bool = Field(False, description="조명토글")
-    irrigation: bool = Field(False, description="관수토글")
-    indoor_heater: bool = Field(False, description="내부히터")
-    circulation_valve: bool = Field(False, description="순환밸브")
-    intake_valve: bool = Field(False, description="흡입밸브")
-    exhaust_valve: bool = Field(False, description="배출밸브")
-    heater_valve: bool = Field(False, description="히터밸브")
+    irrigation: bool = Field(False, description="관수밸브")
+    indoor_heater: bool = Field(False, description="열풍기")
+    circulation_valve: bool = Field(False, description="순환댐퍼")
+    intake_valve: bool = Field(False, description="흡기댐퍼")
+    exhaust_valve: bool = Field(False, description="배기댐퍼")
+    heater_valve: bool = Field(False, description="열풍댐퍼")
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

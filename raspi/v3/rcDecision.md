@@ -4,12 +4,12 @@
 ## 주요 요구사항 정리
 - 입력 데이터: 실내/실외 온도, 실내 습도, 실내 조도, 수온, 실내 CO₂, 기타 센서값과 모든 릴레이 현재 상태.
 - 온도 제어:
-  - 실내온도 ≤ 26 ℃: 수온히터(`relay_1st_flag`) On, 공기순환밸브(`relay_10st_flag`) On, 10초 지연 후 흡입팬(`relay_5st_flag`)·배출팬(`relay_6st_flag`) On, 배수밸브(`relay_3st_flag`) On, 수온 ≥ 36 ℃ 시 포그(`relay_2st_flag`) On, 수온 ≤ 30 ℃ 시 포그 Off.
-  - 실내온도 ≥ 29 ℃: 수온히터 Off, 공기순환밸브 On 유지, 흡입팬·배출팬 Off, 배수밸브 On, 포그 Off.
-- 수온 안전: 수온 ≥ 45 ℃ 이면 수온히터 Off.
+  - 실내온도 ≤ 26 ℃: 물가열기(`relay_1st_flag`) On, 순환댐퍼(`relay_10st_flag`) On, 10초 지연 후 흡입팬(`relay_5st_flag`)·배출팬(`relay_6st_flag`) On, 배수밸브(`relay_3st_flag`) On, 수온 ≥ 36 ℃ 시 포그(`relay_2st_flag`) On, 수온 ≤ 30 ℃ 시 포그 Off.
+  - 실내온도 ≥ 29 ℃: 물가열기 Off, 순환댐퍼 On 유지, 흡입팬·배출팬 Off, 배수밸브 On, 포그 Off.
+- 수온 안전: 수온 ≥ 45 ℃ 이면 물가열기 Off.
 - CO₂ 제어:
-  - 실내 CO₂ ≥ 1500 ppm: 공기배출밸브(`relay_14st_flag`) On, 10초 지연 후 배출환풍모터(`relay_6st_flag`) On.
-  - 실내 CO₂ ≤ 700 ppm: 배출환풍모터 Off, 10초 지연 후 공기배출밸브 Off.
+  - 실내 CO₂ ≥ 1500 ppm: 배기댐퍼(`relay_14st_flag`) On, 10초 지연 후 배기팬(`relay_6st_flag`) On.
+  - 실내 CO₂ ≤ 700 ppm: 배기팬 Off, 10초 지연 후 배기댐퍼 Off.
 - 기존 칠러 보호 로직 및 다른 제어 흐름은 유지.
 
 ## 구현 계획

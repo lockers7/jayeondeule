@@ -4,17 +4,20 @@
 # Streamlit 세션에서 관리합니다.
 # --->
 # initialize_session_state: Streamlit 세션 상태 초기화
-# get_default_farm_info: API에서 기본 농장 정보 조회
+# get_default_farm_info: DB에서 직접 기본 농장 정보 조회
 # add_user_message: 사용자 메시지 추가
 # add_assistant_message: 어시스턴트 메시지 추가
 # clear_messages: 메시지 기록 초기화
 # get_messages: 메시지 기록 반환
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-import requests
 import streamlit as stl
 from datetime import datetime
 
-from agri_ai_core.shared_modules.config.settings import settings
+from agri_ai_core.log_utils.log_handlers import setup_logger
+from agri_ai_core.database.postgres.connection import db_session
+from agri_ai_core.database.postgres.queries import GET_ONE_FARM, GET_ONE_HOUSE
+
+logger = setup_logger(__name__)
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -57,42 +60,44 @@ def initialize_session_state():
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 기본 농장 정보 조회
 # --->
-# API에서 기본 농장 정보 조회
+# DB에서 직접 기본 농장 정보 조회
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def get_default_farm_info():
     if stl.session_state.farm_name and stl.session_state.house_name:
         return
 
-    api_urls = [
-        "http://localhost:8088",
-        "http://127.0.0.1:8088",
-        settings.fastapi_url or "http://localhost:8088"
-    ]
-
-    for api_url in api_urls:
-        try:
-            response = requests.get(
-                f"{api_url}/get_default_farm_info",
-                timeout=5
-            )
-
-            if response.status_code == 200:
-                farm_info = response.json()
-                stl.session_state.farm_id = farm_info.get("farm_id", 1)
-                stl.session_state.house_id = farm_info.get("house_id", 1)
-                stl.session_state.farm_name = farm_info.get("farm_name", "기본농장")
-                stl.session_state.house_name = farm_info.get("house_name", "기본재배사")
+    try:
+        with db_session() as database:
+            farm = database.fetch_one(GET_ONE_FARM)
+            if not farm:
+                logger.warning("등록된 농장이 없습니다. 기본값을 사용합니다.")
+                _set_default_farm()
                 return
 
-        except requests.exceptions.ConnectionError:
-            continue
-        except requests.exceptions.Timeout:
-            continue
-        except Exception as e:
-            stl.warning(f"API 요청 실패 ({api_url}): {str(e)}")
-            continue
+            farm_id = farm.get("farm_id")
+            farm_name = farm.get("farm_name", "기본농장")
 
-    stl.warning("FastAPI 서버에 연결할 수 없습니다. 기본값을 사용합니다.")
+            house = database.fetch_one(GET_ONE_HOUSE, (farm_id,))
+            if not house:
+                logger.warning(f"농장 {farm_id}에 재배사가 없습니다. 기본값 사용")
+                house_id = 1
+                house_name = "기본재배사"
+            else:
+                house_id = house.get("hous_id")
+                house_name = house.get("hous_name", "기본재배사")
+
+            stl.session_state.farm_id = str(farm_id)
+            stl.session_state.house_id = str(house_id)
+            stl.session_state.farm_name = farm_name
+            stl.session_state.house_name = house_name
+            logger.info(f"기본 농장 정보 로드: farm={farm_name}, house={house_name}")
+
+    except Exception as e:
+        logger.error(f"기본 농장 정보 조회 중 오류: {e}")
+        _set_default_farm()
+
+
+def _set_default_farm():
     stl.session_state.farm_id = 1
     stl.session_state.house_id = 1
     stl.session_state.farm_name = "기본농장"

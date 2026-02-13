@@ -114,24 +114,24 @@ COLLECTION_NAMES = [
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 RELAY_COMBINATIONS = {
     "내부순환": {
-        "air_circulation_valve_flag": True,   # 순환밸브 가동
-        "air_intake_valve_flag": False,       # 흡입밸브 가동중지
-        "air_exhaust_valve_flag": False       # 배출밸브 가동중지
+        "air_circulation_valve_flag": True,   # 순환댐퍼 가동
+        "air_intake_valve_flag": False,       # 흡기댐퍼 가동중지
+        "air_exhaust_valve_flag": False       # 배기댐퍼 가동중지
     },
     "외부순환": {
-        "air_circulation_valve_flag": False,  # 순환밸브 가동중지
-        "air_intake_valve_flag": True,        # 흡입밸브 가동
-        "air_exhaust_valve_flag": True        # 배출밸브 가동
+        "air_circulation_valve_flag": False,  # 순환댐퍼 가동중지
+        "air_intake_valve_flag": True,        # 흡기댐퍼 가동
+        "air_exhaust_valve_flag": True        # 배기댐퍼 가동
     },
     "공기흡입": {
-        "air_circulation_valve_flag": False,  # 순환밸브 가동중지
-        "air_intake_valve_flag": True,        # 흡입밸브 가동
-        "air_exhaust_valve_flag": False       # 배출밸브 가동중지
+        "air_circulation_valve_flag": False,  # 순환댐퍼 가동중지
+        "air_intake_valve_flag": True,        # 흡기댐퍼 가동
+        "air_exhaust_valve_flag": False       # 배기댐퍼 가동중지
     },
     "공기배출": {
-        "air_circulation_valve_flag": False,  # 순환밸브 가동중지
-        "air_intake_valve_flag": False,       # 흡입밸브 가동중지
-        "air_exhaust_valve_flag": True        # 배출밸브 가동
+        "air_circulation_valve_flag": False,  # 순환댐퍼 가동중지
+        "air_intake_valve_flag": False,       # 흡기댐퍼 가동중지
+        "air_exhaust_valve_flag": True        # 배기댐퍼 가동
     }
 }
 
@@ -141,8 +141,8 @@ RELAY_COMBINATIONS = {
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 ENVIRONMENT_RECOMMENDATIONS = {
     "낮은온도": [
-        {"relay": "water_heater_flag", "state": True, "reason": "수온히터를 가동하여 습도 조절용 물의 온도를 높여 내부온도 상승"},
-        {"relay": "indoor_heater_flag", "state": True, "reason": "내부히터를 가동하여 직접적으로 내부온도 상승"}
+        {"relay": "water_heater_flag", "state": True, "reason": "물가열기를 가동하여 습도 조절용 물의 온도를 높여 내부온도 상승"},
+        {"relay": "indoor_heater_flag", "state": True, "reason": "열풍기를 가동하여 직접적으로 내부온도 상승"}
     ],
     "높은온도_외부온도낮음": [
         {"relay": "air_circulation_valve_flag", "state": False, "reason": "내부 공기 순환 중지"},
@@ -156,7 +156,7 @@ ENVIRONMENT_RECOMMENDATIONS = {
         {"relay": "air_exhaust_valve_flag", "state": True, "reason": "내부 공기 배출"}
     ],
     "낮은습도": [
-        {"relay": "fog_occurs_flag", "state": True, "reason": "습도모터 가동으로 포그 분사하여 습도 상승"},
+        {"relay": "fog_occurs_flag", "state": True, "reason": "분사펌프 가동으로 포그 분사하여 습도 상승"},
         {"relay": "air_circulation_valve_flag", "state": True, "reason": "내부 공기 순환으로 습도 균일화"},
         {"relay": "air_intake_valve_flag", "state": False, "reason": "외부 공기 흡입 차단"},
         {"relay": "air_exhaust_valve_flag", "state": False, "reason": "내부 습도 유지를 위해 배출 차단"}

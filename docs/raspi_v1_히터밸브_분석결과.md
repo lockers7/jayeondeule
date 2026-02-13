@@ -1,16 +1,16 @@
-# raspi/v1 히터밸브 OFF 로직 분석 결과
+# raspi/v1 열풍댐퍼 OFF 로직 분석 결과
 
 ## 분석 일시
 2025-12-17 23:00
 
 ## 분석 대상
-`./raspi/v1` 디렉토리 하위 Python 코드에서 히터밸브(relay_15st_flag)를 OFF로 설정하는 로직 여부 확인
+`./raspi/v1` 디렉토리 하위 Python 코드에서 열풍댐퍼(relay_15st_flag)를 OFF로 설정하는 로직 여부 확인
 
 ---
 
 ## 결론
 
-**히터밸브를 직접 OFF로 설정하는 로직은 발견되지 않음**
+**열풍댐퍼를 직접 OFF로 설정하는 로직은 발견되지 않음**
 
 ---
 
@@ -31,18 +31,18 @@ USING_RELAY_CNT = 15
 ```
 
 **2호 재배사 릴레이 매핑:**
-- relay_1st: 수온히터1
-- relay_2st: 물순환모터
+- relay_1st: 물가열기1
+- relay_2st: 분사펌프
 - relay_3st: 라디에이터
-- relay_4st: 수온히터2
+- relay_4st: 물가열기2
 - relay_5st: **조명** (1호/3호와 다름, 1호/3호는 relay_7st)
-- relay_6st: **관수** (1호/3호와 다름, 1호/3호는 relay_8st)
-- relay_7st: 흡입환풍모터
-- relay_8st: 배출환풍모터
-- relay_9st: 공기순환밸브
-- relay_10st: 공기흡입밸브
-- relay_11st: 공기배출밸브
-- relay_12st: 배수모터
+- relay_6st: **관수밸브** (1호/3호와 다름, 1호/3호는 relay_8st)
+- relay_7st: 흡기팬
+- relay_8st: 배기팬
+- relay_9st: 순환댐퍼
+- relay_10st: 흡기댐퍼
+- relay_11st: 배기댐퍼
+- relay_12st: 배수밸브
 - relay_13st~15st: **미사용**
 - relay_16st: **미사용** (데이터베이스에만 존재, GPIO 없음)
 
@@ -133,8 +133,8 @@ INSERT_RELAY_STATUS_SQL = "INSERT INTO RELAY_L_RECORDING (..., relay_15st_flag, 
 | 항목 | 1호 재배사 | 2호 재배사 |
 |------|-----------|-----------|
 | 조명 릴레이 | relay_7st_flag | relay_5st_flag |
-| 관수 릴레이 | relay_8st_flag | relay_6st_flag |
-| 히터밸브 | relay_15st_flag (항상 ON 유지 필요) | relay_15st_flag (미사용) |
+| 관수밸브 릴레이 | relay_8st_flag | relay_6st_flag |
+| 열풍댐퍼 | relay_15st_flag (항상 ON 유지 필요) | relay_15st_flag (미사용) |
 | 라디에이터 | 없음 | relay_3st_flag |
 | 릴레이 개수 | 16개 (DB) | 15개 (GPIO) + 1개 (DB only) |
 | 제어 코드 | `agri_ai_core/*` | `raspi/v1/*` |
@@ -145,7 +145,7 @@ INSERT_RELAY_STATUS_SQL = "INSERT INTO RELAY_L_RECORDING (..., relay_15st_flag, 
 
 ### 검색 패턴
 1. `relay.*15` - relay_15 관련 모든 참조
-2. `히터밸브` - 한글 키워드
+2. `열풍댐퍼` - 한글 키워드
 3. `heater.*valve` - 영문 키워드
 4. `relay_15st_flag.*False` - relay_15를 False로 설정하는 로직
 
@@ -162,14 +162,14 @@ INSERT_RELAY_STATUS_SQL = "INSERT INTO RELAY_L_RECORDING (..., relay_15st_flag, 
 ## 결론 및 권장사항
 
 ### 현재 상태
-✓ **raspi/v1 코드에서 히터밸브를 OFF로 설정하는 로직 없음**
+✓ **raspi/v1 코드에서 열풍댐퍼를 OFF로 설정하는 로직 없음**
 ✓ **데이터베이스 값을 그대로 따름**
 ✓ **relay_16st_flag 하드코딩 문제 수정 완료**
 
-### 1호 재배사 히터밸브 보호
-1호 재배사 히터밸브는 `agri_ai_core/control/relay/relay_manager.py`에서 보호됨:
+### 1호 재배사 열풍댐퍼 보호
+1호 재배사 열풍댐퍼는 `agri_ai_core/control/relay/relay_manager.py`에서 보호됨:
 ```python
-# 1호 재배사 히터밸브 항상 ON
+# 1호 재배사 열풍댐퍼 항상 ON
 if str(house_id) == "1":
     relay_values["relay_15st_flag"] = True
 ```
@@ -182,5 +182,5 @@ if str(house_id) == "1":
 ---
 
 **분석 완료 시간:** 2025-12-17 23:10
-**상태:** ✓ 히터밸브 OFF 로직 없음 확인 완료
+**상태:** ✓ 열풍댐퍼 OFF 로직 없음 확인 완료
 **추가 조치:** 없음

@@ -30,8 +30,7 @@ from agri_ai_core.ui.streamlit_app.location_handler import (
 )
 from agri_ai_core.ui.streamlit_app.chat_handler import (
     display_chat_history,
-    process_message_with_modules,
-    send_streaming_message_with_files
+    process_message_with_modules
 )
 from agri_ai_core.ui.streamlit_app.sidebar import render_sidebar
 
@@ -131,26 +130,14 @@ def main():
                 # 어시스턴트 응답
                 with stl.chat_message("assistant"):
                     try:
-                        # 모듈 방식으로 처리 시도
-                        try:
-                            bot_response = process_message_with_modules(
-                                user_input,
-                                current_files,
-                                farm_id=farm_id,
-                                house_id=house_id,
-                                farm_name=farm_name,
-                                house_name=house_name
-                            )
-                        except Exception as module_error:
-                            stl.warning(f"모듈 방식 처리 실패, 서버 API 방식으로 전환: {str(module_error)}")
-                            bot_response = send_streaming_message_with_files(
-                                user_input,
-                                current_files,
-                                farm_id=farm_id,
-                                house_id=house_id,
-                                farm_name=farm_name,
-                                house_name=house_name
-                            )
+                        bot_response = process_message_with_modules(
+                            user_input,
+                            current_files,
+                            farm_id=farm_id,
+                            house_id=house_id,
+                            farm_name=farm_name,
+                            house_name=house_name
+                        )
 
                         # 어시스턴트 메시지 저장
                         bot_message = {"role": "assistant", "content": bot_response}

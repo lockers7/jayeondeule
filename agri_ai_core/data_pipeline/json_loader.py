@@ -171,18 +171,18 @@ def json_to_vcdb(data_limit=100000):
                                 "water_temperature_value": clean_sensor_value(unit.get("수온", "0")),
                                 "light_level_value": clean_sensor_value(unit.get("광량", "0")),
                                 "water_level_value": clean_sensor_value(unit.get("수위", "0")),
-                                "relay_1st_flag": parse_boolean(unit.get("수온히터", False)),
-                                "relay_2st_flag": parse_boolean(unit.get("습도모터", False)),
+                                "relay_1st_flag": parse_boolean(unit.get("물가열기", False)),
+                                "relay_2st_flag": parse_boolean(unit.get("분사펌프", False)),
                                 "relay_3st_flag": parse_boolean(unit.get("배수밸브", False)),
-                                "relay_5st_flag": parse_boolean(unit.get("흡입모터", False)),
-                                "relay_6st_flag": parse_boolean(unit.get("배출모터", False)),
+                                "relay_5st_flag": parse_boolean(unit.get("흡기팬", False)),
+                                "relay_6st_flag": parse_boolean(unit.get("배기팬", False)),
                                 "relay_7st_flag": parse_boolean(unit.get("조명토글", False)),
-                                "relay_8st_flag": parse_boolean(unit.get("관수토글", False)),
-                                "relay_9st_flag": parse_boolean(unit.get("내부히터", False)),
-                                "relay_10st_flag": parse_boolean(unit.get("순환밸브", False)),
-                                "relay_11st_flag": parse_boolean(unit.get("흡입밸브", False)),
-                                "relay_14st_flag": parse_boolean(unit.get("배출밸브", False)),
-                                "relay_15st_flag": parse_boolean(unit.get("히터밸브", False) if "히터밸브" in unit else False)
+                                "relay_8st_flag": parse_boolean(unit.get("관수밸브", False)),
+                                "relay_9st_flag": parse_boolean(unit.get("열풍기", False)),
+                                "relay_10st_flag": parse_boolean(unit.get("순환댐퍼", False)),
+                                "relay_11st_flag": parse_boolean(unit.get("흡기댐퍼", False)),
+                                "relay_14st_flag": parse_boolean(unit.get("배기댐퍼", False)),
+                                "relay_15st_flag": parse_boolean(unit.get("열풍댐퍼", False) if "열풍댐퍼" in unit else False)
                             }
                             all_units_data.append(unit_data)
                         except Exception as e:

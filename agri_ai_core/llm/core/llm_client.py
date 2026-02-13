@@ -49,8 +49,14 @@ os.environ['OLLAMA_KEEP_ALIVE'] = '1h'
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def _get_available_models():
     try:
-        models = ollama.list()
-        return [model['name'] for model in models.get('models', [])]
+        result = ollama.list()
+        # ollama 패키지 v0.4+ : ListResponse 객체 (result.models[].model)
+        # ollama 패키지 v0.3- : dict (result['models'][].name)
+        if hasattr(result, 'models'):
+            return [m.model for m in result.models]
+        elif isinstance(result, dict):
+            return [m['name'] for m in result.get('models', [])]
+        return []
     except Exception as e:
         logger.warning(f"Ollama 모델 목록 조회 실패: {e}")
         return []

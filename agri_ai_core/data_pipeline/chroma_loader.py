@@ -332,7 +332,7 @@ def generate_document_text(meta: dict) -> str:
         f"온도 {get('indoor_temperature_value')}°C, 습도 {get('indoor_humidity_value')}%, "
         f"co₂농도 {get('co2_concentration_value')}ppm, 급수: {get('fog_occurs_flag')}, "
         f"난방: {get('indoor_heater_flag')}, 조명토글: {get('lighting_flag')}, "
-        f"환기: {get('exhaust_fan_flag')}, 관수토글: {get('irrigation_flag')}."
+        f"환기: {get('exhaust_fan_flag')}, 관수밸브: {get('irrigation_flag')}."
     )
 
 
