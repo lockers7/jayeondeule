@@ -82,9 +82,10 @@ def call_mcp_tool(tool_name: str, arguments: Dict[str, Any], timeout: int = 30) 
 
         process.stdin.write(json.dumps(call_request) + "\n")
         process.stdin.flush()
-        process.stdin.close()
+        # stdin.close() 제거 - communicate()가 자동으로 닫음
 
         # 응답 수신 (타임아웃 적용)
+        # communicate()는 stdin을 자동으로 닫으므로 명시적 close() 불필요
         stdout, stderr = process.communicate(timeout=timeout)
 
         if stderr:
@@ -138,6 +139,15 @@ def call_mcp_tool(tool_name: str, arguments: Dict[str, Any], timeout: int = 30) 
 def search_web(query: str, max_results: int = 5) -> Dict[str, Any]:
     """웹 검색을 수행합니다."""
     try:
+        # query 유효성 검사
+        if not query or query.strip() == "":
+            logger.warning("웹 검색 쿼리가 비어있습니다. 검색을 건너뜁니다.")
+            return {
+                "success": False,
+                "error": "Empty search query",
+                "results": []
+            }
+
         logger.info(f"웹 검색 시작: {query}")
 
         result = call_mcp_tool(
