@@ -7,10 +7,9 @@
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import traceback
 
-from agri_ai_core.log_utils.log_handlers import setup_logger
-from agri_ai_core.database.chromadb.client import heartbeat, ensure_required_collections_exist
-from agri_ai_core.control.scheduler.task_scheduler import setup_scheduler, start_scheduler, stop_scheduler, setup_default_jobs
-from agri_ai_core.control.relay.schedule_control import control_all_schedules
+from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.src.chroma import heartbeat, ensure_required_collections_exist
+from agri_ai_core.src.control import setup_scheduler, start_scheduler, stop_scheduler, setup_default_jobs, control_all_schedules
 
 logger = setup_logger(__name__)
 

@@ -9,7 +9,7 @@ import signal
 import sys
 
 from agri_ai_core.startup import initialize_app, shutdown_app
-from agri_ai_core.log_utils.log_handlers import setup_logger
+from agri_ai_core.src.logs import setup_logger
 
 logger = setup_logger(__name__)
 
