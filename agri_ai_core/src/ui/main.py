@@ -98,7 +98,7 @@ def main():
             )
 
             # 2. 파일 첨부 영역 (항상 보이게)
-            stl.markdown("<p style='font-size:12px; font-weight:600; margin:0; padding:2px 0; line-height:0.9; color:#495057;'>📎 파일 첨부</p>", unsafe_allow_html=True)
+            stl.markdown("<p style='font-size:13px; font-weight:600; margin:0; padding:3px 0; line-height:1.3; color:#495057;'>📎 파일 첨부</p>", unsafe_allow_html=True)
             file_col1, file_col2 = stl.columns([3, 1])
             with file_col1:
                 handle_file_upload()
@@ -109,7 +109,7 @@ def main():
 
             # 3. 구분선
             stl.markdown("---")
-            stl.markdown("<p style='font-size:12px; font-weight:600; margin:0; padding:2px 0; line-height:0.9; color:#495057;'>💬 대화 기록 (최신순)</p>", unsafe_allow_html=True)
+            stl.markdown("<p style='font-size:13px; font-weight:600; margin:0; padding:3px 0; line-height:1.3; color:#495057;'>💬 대화 기록 (최신순)</p>", unsafe_allow_html=True)
 
             # ===== 채팅 히스토리 영역 =====
             # 4. 채팅 기록 표시 (역순 - 최신 것이 상단)
