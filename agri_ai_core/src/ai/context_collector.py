@@ -231,21 +231,18 @@ async def collect_farm_realtime_data(required_data: Dict[str, Any]) -> Dict[str,
 #     dict: 수집된 시스템 정보
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 async def collect_system_info(required_data: Dict[str, Any]) -> Dict[str, Any]:
+    collected_data = {
+        "data_type": "system",
+        "timestamp": datetime.now().isoformat(),
+        "datetime": {},
+        "system": {},
+        "summary": ""
+    }
+
+    summary_parts = []
+
     try:
-        import platform
-        import psutil
-
-        collected_data = {
-            "data_type": "system",
-            "timestamp": datetime.now().isoformat(),
-            "datetime": {},
-            "system": {},
-            "summary": ""
-        }
-
-        summary_parts = []
-
-        # 날짜/시간 정보
+        # 날짜/시간 정보 (항상 사용 가능)
         if required_data.get("current_time") or required_data.get("current_date"):
             now = datetime.now()
             collected_data["datetime"] = {
@@ -259,20 +256,31 @@ async def collect_system_info(required_data: Dict[str, Any]) -> Dict[str, Any]:
                 f"현재 {collected_data['datetime']['현재날짜']} {collected_data['datetime']['현재시간']}"
             )
 
-        # 시스템 상태
+        # 시스템 상태 (psutil 필요)
         if required_data.get("system_status"):
-            cpu_percent = await asyncio.to_thread(psutil.cpu_percent, interval=0.5)
-            memory = await asyncio.to_thread(psutil.virtual_memory)
+            try:
+                import platform
+                import psutil
 
-            collected_data["system"] = {
-                "플랫폼": platform.system(),
-                "CPU사용률": f"{cpu_percent}%",
-                "메모리사용률": f"{memory.percent}%",
-                "가동시간": str(timedelta(seconds=int(await asyncio.to_thread(lambda: __import__('time').time() - psutil.boot_time()))))
-            }
-            summary_parts.append(
-                f"시스템 정상 (CPU {cpu_percent}%, 메모리 {memory.percent}%)"
-            )
+                cpu_percent = await asyncio.to_thread(psutil.cpu_percent, interval=0.5)
+                memory = await asyncio.to_thread(psutil.virtual_memory)
+
+                collected_data["system"] = {
+                    "플랫폼": platform.system(),
+                    "CPU사용률": f"{cpu_percent}%",
+                    "메모리사용률": f"{memory.percent}%",
+                    "가동시간": str(timedelta(seconds=int(await asyncio.to_thread(lambda: __import__('time').time() - psutil.boot_time()))))
+                }
+                summary_parts.append(
+                    f"시스템 정상 (CPU {cpu_percent}%, 메모리 {memory.percent}%)"
+                )
+            except ImportError:
+                logger.warning("psutil 모듈이 없어 시스템 상태 정보를 수집할 수 없습니다")
+                collected_data["system"] = {"오류": "psutil 모듈 없음"}
+                summary_parts.append("시스템 상태 정보 수집 불가 (psutil 미설치)")
+            except Exception as e:
+                logger.warning(f"시스템 상태 수집 실패: {e}")
+                collected_data["system"] = {"오류": str(e)}
 
         collected_data["summary"] = ", ".join(summary_parts) if summary_parts else "시스템 정보 수집 완료"
 
@@ -281,11 +289,24 @@ async def collect_system_info(required_data: Dict[str, Any]) -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f"시스템 정보 수집 중 오류: {e}")
-        return {
-            "data_type": "system",
-            "error": str(e),
-            "summary": f"시스템 정보 수집 실패: {str(e)}"
-        }
+        # 최소한 현재 시간은 제공
+        try:
+            now = datetime.now()
+            return {
+                "data_type": "system",
+                "datetime": {
+                    "현재시간": now.strftime("%H:%M:%S"),
+                    "현재날짜": now.strftime("%Y년 %m월 %d일"),
+                    "한글요일": ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"][now.weekday()],
+                },
+                "summary": f"현재 {now.strftime('%Y년 %m월 %d일')} {now.strftime('%H:%M:%S')}"
+            }
+        except:
+            return {
+                "data_type": "system",
+                "error": str(e),
+                "summary": f"시스템 정보 수집 실패: {str(e)}"
+            }
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
