@@ -3,12 +3,26 @@
 # LLM이 요청한 도구를 실제로 실행하는 모듈
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import json
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Dict, Any
 
 from agri_ai_core.src.logs import setup_logger
 
 logger = setup_logger(__name__)
+
+
+def _json_default(value: Any) -> Any:
+    """json.dumps 기본 직렬화로 처리할 수 없는 타입 변환."""
+    if isinstance(value, Decimal):
+        if value.is_nan() or value.is_infinite():
+            return str(value)
+        if value == value.to_integral_value():
+            return int(value)
+        return float(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return str(value)
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -49,29 +63,45 @@ def search_farm_knowledge(query: str, n_results: int = 3) -> Dict[str, Any]:
         dict: 검색 결과
     """
     try:
+        from agri_ai_core.src.ai.rag.embedder import embed_text
         from agri_ai_core.src.chroma.collections import document_collection
+        from agri_ai_core.src.chroma.operations import query_documents
 
-        collection = document_collection()
-        if collection is None:
+        collection_name = document_collection()
+        if not collection_name:
             return {
                 "success": False,
                 "error": "지식 데이터베이스에 연결할 수 없습니다.",
                 "results": []
             }
 
-        results = collection.query(
-            query_texts=[query],
-            n_results=n_results
+        query_embedding = embed_text(query)
+        if not query_embedding:
+            return {
+                "success": False,
+                "error": "검색 임베딩 생성에 실패했습니다.",
+                "results": [],
+            }
+
+        results = query_documents(
+            collection_name=collection_name,
+            query_embeddings=[query_embedding],
+            n_results=max(1, int(n_results or 3)),
         )
 
-        documents = results.get('documents', [[]])[0]
-        metadatas = results.get('metadatas', [[]])[0]
+        if "error" in results:
+            return {"success": False, "error": results["error"], "results": []}
+
+        documents = results.get('documents', []) or []
+        metadatas = results.get('metadatas', []) or []
+        distances = results.get('distances', []) or []
 
         formatted_results = []
-        for doc, meta in zip(documents, metadatas):
+        for idx, (doc, meta) in enumerate(zip(documents, metadatas)):
             formatted_results.append({
                 "content": doc[:500],  # 처음 500자만
-                "metadata": meta
+                "metadata": meta,
+                "distance": distances[idx] if idx < len(distances) else None,
             })
 
         logger.info(f"[Tool] search_farm_knowledge: {len(formatted_results)}개 결과")
@@ -108,34 +138,54 @@ def get_farm_realtime_data(house_id: str, farm_id: str = None, data_type: str = 
         dict: 실시간 데이터
     """
     try:
-        # TODO: PostgreSQL 클라이언트 구현 필요
-        # 현재는 더미 데이터 반환
-        logger.warning(f"[Tool] get_farm_realtime_data: PostgreSQL 클라이언트 미구현 - 더미 데이터 반환")
+        from agri_ai_core.src.postgresql.connection import db_session
+        from agri_ai_core.src.postgresql.queries import GET_ONE_FARM
+        from agri_ai_core.src.postgresql.reader import (
+            read_current_sensor_info,
+            read_latest_relay_info,
+        )
+
+        if not house_id:
+            return {
+                "success": False,
+                "error": "house_id는 필수입니다.",
+                "house_id": house_id
+            }
+
+        target_farm_id = farm_id
+        if not target_farm_id:
+            with db_session() as database:
+                farm = database.fetch_one(GET_ONE_FARM)
+                if farm and farm.get("farm_id") is not None:
+                    target_farm_id = str(farm.get("farm_id"))
+
+        if not target_farm_id:
+            return {
+                "success": False,
+                "error": "farm_id를 확인할 수 없습니다.",
+                "house_id": house_id
+            }
 
         result = {
             "success": True,
+            "farm_id": str(target_farm_id),
             "house_id": house_id,
             "timestamp": datetime.now().isoformat(),
-            "note": "실제 데이터베이스 연결 구현 필요"
         }
 
-        # 더미 센서 데이터
         if data_type in ["sensor", "all"]:
-            result["sensor"] = {
-                "temperature": 25.3,
-                "humidity": 65.2,
-                "co2": 450,
-                "timestamp": datetime.now().isoformat()
-            }
+            sensor = read_current_sensor_info(target_farm_id, house_id)
+            result["sensor"] = sensor or {}
 
-        # 더미 릴레이 상태
         if data_type in ["relay", "all"]:
-            result["relay"] = {
-                "heater": "OFF",
-                "cooler": "OFF",
-                "humidifier": "ON",
-                "timestamp": datetime.now().isoformat()
-            }
+            relay = read_latest_relay_info(target_farm_id, house_id)
+            result["relay"] = relay or {}
+
+        if (
+            (data_type in ["sensor", "all"] and not result.get("sensor"))
+            and (data_type in ["relay", "all"] and not result.get("relay"))
+        ):
+            result["note"] = "조회된 실시간 데이터가 없습니다."
 
         return result
 
@@ -151,13 +201,12 @@ def get_farm_realtime_data(house_id: str, farm_id: str = None, data_type: str = 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 웹 검색
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def search_web(query: str, search_type: str = "일반") -> Dict[str, Any]:
+def search_web(query: str) -> Dict[str, Any]:
     """
     MCP를 통한 웹 검색
 
     Args:
         query: 검색 키워드
-        search_type: 검색 유형
 
     Returns:
         dict: 검색 결과
@@ -166,7 +215,10 @@ def search_web(query: str, search_type: str = "일반") -> Dict[str, Any]:
         from agri_ai_core.src.ai.mcp_client import search_web as mcp_search
 
         result = mcp_search(query, max_results=3)
-        logger.info(f"[Tool] search_web: '{query}' 검색 완료")
+        result_count = 0
+        if isinstance(result, dict) and isinstance(result.get("results"), list):
+            result_count = len(result.get("results", []))
+        logger.info(f"[Tool] search_web(MCP): query='{query}' success={result.get('success')} results={result_count}")
 
         return result
 
@@ -214,8 +266,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
 
         elif tool_name == "search_web":
             result = search_web(
-                query=tool_args.get("query"),
-                search_type=tool_args.get("search_type", "일반")
+                query=tool_args.get("query")
             )
 
         else:
@@ -224,7 +275,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
                 "error": f"알 수 없는 도구: {tool_name}"
             }
 
-        return json.dumps(result, ensure_ascii=False, indent=2)
+        return json.dumps(result, ensure_ascii=False, indent=2, default=_json_default)
 
     except Exception as e:
         logger.error(f"도구 실행 중 오류: {e}")
@@ -234,4 +285,4 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
         return json.dumps({
             "success": False,
             "error": str(e)
-        }, ensure_ascii=False)
+        }, ensure_ascii=False, default=_json_default)

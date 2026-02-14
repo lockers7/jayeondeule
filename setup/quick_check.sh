@@ -58,9 +58,20 @@ echo "[4] HTTP 테스트:"
 # localhost(IPv6 우선) 환경 이슈를 피하기 위해 127.0.0.1 우선 사용
 frontend_code="$(curl -s -o /dev/null -m 3 -w "%{http_code}" http://127.0.0.1:3000/ || true)"
 if [ "$frontend_code" = "000" ]; then
-    # Reflex 빌드/기동 지연을 고려해 짧게 재시도
-    sleep 2
-    frontend_code="$(curl -s -o /dev/null -m 3 -w "%{http_code}" http://127.0.0.1:3000/ || true)"
+    # Reflex 빌드/기동 지연을 고려해 단계적 재시도 (최대 30초)
+    retry_count=0
+    max_retries=10
+    while [ "$retry_count" -lt "$max_retries" ]; do
+        if ! ps aux | grep -E "(reflex run|bun --bun run export|gunicorn)" | grep -v grep >/dev/null 2>&1; then
+            break
+        fi
+        sleep 3
+        frontend_code="$(curl -s -o /dev/null -m 3 -w "%{http_code}" http://127.0.0.1:3000/ || true)"
+        if [ "$frontend_code" != "000" ]; then
+            break
+        fi
+        retry_count=$((retry_count + 1))
+    done
 fi
 echo "  Frontend (3000): $frontend_code"
 if [ "$frontend_code" = "000" ]; then

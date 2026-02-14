@@ -16,9 +16,7 @@
 # flatten: 기능 설명 필요
 # flatten_field: 기능 설명 필요
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-import json
 import time
-import requests
 import traceback
 import pandas as pd
 
@@ -26,6 +24,7 @@ from decimal import Decimal
 from datetime import datetime
 
 from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.src.ai.mcp_client import mcp_http_request
 from agri_ai_core.src.chroma.config import CHROMA_API_BASE
 from agri_ai_core.src.chroma.client import (
     get_collection_id_from_name,
@@ -41,6 +40,15 @@ from agri_ai_core.src.chroma.utils import (
 )
 
 logger = setup_logger(__name__)
+
+
+def _http_post(url: str, payload: dict, timeout: int = 30):
+    return mcp_http_request(
+        method="POST",
+        url=url,
+        json_body=payload,
+        timeout=timeout,
+    )
 
 
 #
@@ -74,12 +82,12 @@ def add_document(collection_name, doc_id, text, metadata, embedding=None):
         "embeddings": [embedding]
     }
 
-    res = requests.post(url, json=payload)
-    if res.status_code in [200, 201]:
+    status_code, _, text = _http_post(url, payload, timeout=20)
+    if status_code in [200, 201]:
         logger.debug(f"[add_document] 문서 추가 성공: doc_id={doc_id}")
         return {"success": True}
     else:
-        return {"error": f"{res.status_code}: {res.text}"}
+        return {"error": f"{status_code}: {text}"}
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -126,10 +134,11 @@ def get_documents(collection_name, ids=None, where=None, limit=None, offset=None
 
     try:
         url = f"{CHROMA_API_BASE}/collections/{collection_id}/get"
-        res = requests.post(url, json=payload)
-        if res.status_code != 200:
-            return {"error": f"{res.status_code}: {res.text}"}
-        result = res.json()
+        status_code, result, text = _http_post(url, payload, timeout=20)
+        if status_code != 200:
+            return {"error": f"{status_code}: {text}"}
+        if not isinstance(result, dict):
+            return {"error": "Chroma get 응답 파싱 실패"}
 
         def flatten(field_name):
             value = result.get(field_name)
@@ -190,10 +199,10 @@ def delete_document(collection_name, ids):
     payload = {"ids": ids}
 
     try:
-        res = requests.post(url, json=payload)
-        if res.status_code in [200, 204]:
+        status_code, _, text = _http_post(url, payload, timeout=20)
+        if status_code in [200, 204]:
             return {"success": True}
-        return {"error": f"{res.status_code}: {res.text}"}
+        return {"error": f"{status_code}: {text}"}
     except Exception as e:
         return {"error": str(e)}
 
@@ -327,10 +336,10 @@ def upsert_documents_with_embedding(collection_name, docs):
 
     try:
         url = f"{CHROMA_API_BASE}/collections/{collection_id}/upsert"
-        res = requests.post(url, json=payload)
-        if res.status_code in [200, 201]:
+        status_code, _, text = _http_post(url, payload, timeout=30)
+        if status_code in [200, 201]:
             return {"success": True, "count": len(ids)}
-        return {"error": f"{res.status_code}: {res.text}"}
+        return {"error": f"{status_code}: {text}"}
     except Exception as e:
         return {"error": str(e)}
 
@@ -381,9 +390,12 @@ def query_documents(collection_name, query_embeddings=None, n_results=5, where=N
 
         for retry in range(3):
             try:
-                response = requests.post(url, json=payload, timeout=30)
-                if response.status_code == 200:
-                    result = response.json()
+                status_code, result, text = _http_post(url, payload, timeout=30)
+                if status_code == 200:
+                    if not isinstance(result, dict):
+                        logger.warning("[query_documents] 응답 JSON 파싱 실패")
+                        time.sleep(1.5 ** retry)
+                        continue
 
                     def flatten_field(field_name):
                         value = result.get(field_name)
@@ -425,7 +437,7 @@ def query_documents(collection_name, query_embeddings=None, n_results=5, where=N
                     logger.info(f"[query_documents] '{collection_name}' 검색 성공: {len(ids)}건")
                     return result
                 else:
-                    logger.warning(f"[query_documents] 쿼리 실패: {response.status_code} - {response.text}")
+                    logger.warning(f"[query_documents] 쿼리 실패: {status_code} - {text}")
                     time.sleep(1.5 ** retry)
             except Exception as e:
                 logger.warning(f"[query_documents] 요청 예외 발생: {e}")

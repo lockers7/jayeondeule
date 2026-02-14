@@ -12,11 +12,11 @@
 # create_collection: 컬렉션 생성
 # ensure_required_collections_exist: 필수 컬렉션 존재 확인 및 생성
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-import requests
 from datetime import datetime
 
 from agri_ai_core.src.logs import setup_logger
 from agri_ai_core.config import settings
+from agri_ai_core.src.ai.mcp_client import mcp_http_request
 from agri_ai_core.src.chroma.config import (
     CHROMA_HOST,
     CHROMA_PORT,
@@ -27,6 +27,16 @@ from agri_ai_core.src.chroma.config import (
 )
 
 logger = setup_logger(__name__)
+
+
+def _http_request(method: str, url: str, payload=None, timeout: int = 10):
+    normalized_method = (method or "GET").upper()
+    return mcp_http_request(
+        method=normalized_method,
+        url=url,
+        json_body=payload,
+        timeout=timeout,
+    )
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -50,12 +60,14 @@ def get_chroma_url(endpoint: str, collection_id: str = None):
 def heartbeat():
     try:
         url = get_chroma_url("heartbeat")
-        res = requests.get(url, timeout=5)
-        if res.status_code == 200:
-            return res.json()
+        status_code, data, text = _http_request("GET", url, timeout=5)
+        if status_code == 200:
+            if isinstance(data, dict):
+                return data
+            return {}
         else:
-            logger.warning(f"서버 상태 확인 실패: 상태 코드 {res.status_code}")
-            return {"error": f"서버 상태 확인 실패: {res.status_code}"}
+            logger.warning(f"서버 상태 확인 실패: 상태 코드 {status_code}")
+            return {"error": f"서버 상태 확인 실패: {status_code} {text}"}
     except Exception as e:
         logger.error(f"서버 상태 확인 중 오류: {e}")
         return {"error": f"서버 상태 확인 중 오류: {e}"}
@@ -71,13 +83,13 @@ def heartbeat():
 def get_version():
     try:
         url = f"http://{CHROMA_HOST}:{CHROMA_PORT}/api/v2/version"
-        res = requests.get(url, timeout=5)
-        if res.status_code == 200:
-            version = res.json() if res.headers.get("content-type") == "application/json" else res.text
+        status_code, data, text = _http_request("GET", url, timeout=5)
+        if status_code == 200:
+            version = data if data is not None else text
             logger.info(f" ChromaDB 서버 버전 정보 확인 완료 버젼: {version}")
             return version
         else:
-            logger.warning(f" 버전 확인 실패: {res.status_code}")
+            logger.warning(f" 버전 확인 실패: {status_code}")
             return "unknown"
     except Exception as e:
         logger.exception(f" 버전 조회 예외 발생: {e}")
@@ -147,9 +159,9 @@ def get_collection(collection_name):
 
         if collection_id:
             url = f"{CHROMA_API_BASE}/collections/{collection_id}"
-            res = requests.get(url)
-            if res.status_code == 200:
-                return res.json()
+            status_code, data, _ = _http_request("GET", url, timeout=10)
+            if status_code == 200 and isinstance(data, dict):
+                return data
 
         return create_collection(collection_name)
     except Exception as e:
@@ -172,9 +184,9 @@ def get_collection(collection_name):
 def list_collections():
     try:
         url = f"{CHROMA_API_BASE}/collections"
-        res = requests.get(url, timeout=10)
-        res.raise_for_status()
-        collections_json = res.json()
+        status_code, collections_json, text = _http_request("GET", url, timeout=10)
+        if status_code != 200:
+            return {"error": f"컬렉션 목록 조회 실패: {status_code} {text}"}
 
         if isinstance(collections_json, list):
             for collection in collections_json:
@@ -225,20 +237,21 @@ def create_collection(collection_name=None, metadata=None):
         }
 
         url = f"{CHROMA_API_BASE}/collections"
-        res = requests.post(url, json=payload)
-        if res.status_code in [200, 201]:
-            result = res.json()
+        status_code, result, text = _http_request("POST", url, payload=payload, timeout=10)
+        if status_code in [200, 201]:
+            if not isinstance(result, dict):
+                result = {"name": collection_name}
             _COLLECTION_ID_MAP[collection_name] = result.get("id")
             logger.info(f" 컬렉션 '{collection_name}' 생성 성공 (dim={_embedding_dim()}): {result}")
             return result
         else:
-            logger.error(f" 컬렉션 '{collection_name}' 생성 실패: {res.status_code} - {res.text}")
+            logger.error(f" 컬렉션 '{collection_name}' 생성 실패: {status_code} - {text}")
 
             collection_id = _COLLECTION_ID_MAP.get(collection_name)
             if collection_id:
                 return {"id": collection_id, "name": collection_name}
 
-            return {"error": f"컬렉션 생성 실패: {res.status_code} {res.text}"}
+            return {"error": f"컬렉션 생성 실패: {status_code} {text}"}
     except Exception as e:
         logger.error(f" 컬렉션 '{collection_name}' 생성 실패: {e}")
 

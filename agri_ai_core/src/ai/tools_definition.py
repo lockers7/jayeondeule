@@ -81,19 +81,13 @@ def get_available_tools() -> List[Dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "search_web",
-                "description": "인터넷에서 최신 정보를 검색합니다. 날씨, 뉴스, 기온 예보 등 실시간 외부 정보가 필요할 때 사용합니다.",
+                "description": "인터넷에서 최신 정보를 검색합니다. 날씨/뉴스/환율/주가 등 시의성이 중요한 외부 정보가 필요할 때 우선 사용합니다.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "query": {
                             "type": "string",
                             "description": "검색할 키워드"
-                        },
-                        "search_type": {
-                            "type": "string",
-                            "description": "검색 유형",
-                            "enum": ["날씨", "뉴스", "일반"],
-                            "default": "일반"
                         }
                     },
                     "required": ["query"]
@@ -129,4 +123,16 @@ def get_system_prompt_with_tools(farm_name: str = None) -> str:
 - 한글로 친절하게 답변합니다.
 - 정보가 부족하면 솔직하게 말합니다.
 - 농장주 입장에서 실용적인 조언을 제공합니다.
+- 사용자가 URL을 제공하면 해당 URL 본문 근거를 최우선으로 반영합니다.
+- 최신/실시간/오늘/최근 정보 질문은 웹 검색 근거(예: Google/Naver 결과)를 우선 반영합니다.
+- 내부 추론/독백/분석 과정을 절대 출력하지 않습니다.
+- 답변 시작부터 결론과 조치만 제시합니다.
+- 금지 표현 예: "First,", "Hmm,", "Wait,", "So the main points..."
+- 영어 내부메모, 임시 정리문, 번역 전 문장을 출력하지 않습니다.
+- 최종 사용자에게 보여줄 순수 답변 본문만 출력합니다.
+
+**출력 형식(강제):**
+- 불필요한 서두 없이 바로 핵심 상태를 제시합니다.
+- 필요시 항목형으로 "핵심 정보"와 "추천 조치"만 작성합니다.
+- think/thinking, reasoning, chain-of-thought 성격의 문장은 절대 출력하지 않습니다.
 """

@@ -19,6 +19,68 @@ PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # 서비스명
 CORE_SERVICE="agriAiCore.service"
+ENV_FILE="/workspace/jayeondeule/.env"
+
+get_reflex_env() {
+    if [ -n "${REFLEX_ENV:-}" ]; then
+        echo "$REFLEX_ENV"
+        return
+    fi
+
+    if [ -f "$ENV_FILE" ]; then
+        local env_value
+        env_value="$(grep '^REFLEX_ENV=' "$ENV_FILE" | tail -1 | cut -d'=' -f2- | tr -d '\"' | tr -d ' ' || true)"
+        if [ -n "$env_value" ]; then
+            echo "$env_value"
+            return
+        fi
+    fi
+
+    echo "prod"
+}
+
+is_port_listening() {
+    local port_hex
+    port_hex="$(printf '%04X' "$1")"
+    awk -v p="$port_hex" '
+        NR > 1 {
+            split($2, addr, ":")
+            if (toupper(addr[2]) == p && $4 == "0A") {
+                found = 1
+                exit 0
+            }
+        }
+        END { if (!found) exit 1 }
+    ' /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
+
+wait_reflex_ready() {
+    local timeout_sec="${1:-90}"
+    local waited=0
+    local reflex_env
+    reflex_env="$(get_reflex_env)"
+
+    while [ "$waited" -lt "$timeout_sec" ]; do
+        if ! service_active "$CORE_SERVICE"; then
+            return 1
+        fi
+
+        if [ "$reflex_env" = "prod" ]; then
+            if is_port_listening 3000; then
+                return 0
+            fi
+        else
+            if is_port_listening 3000 && is_port_listening 8001; then
+                return 0
+            fi
+        fi
+
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    return 1
+}
 
 # -------------------------------------------------------------------
 # 도움말
@@ -70,9 +132,9 @@ restart_services() {
 start_system() {
     echo -e "${GREEN}AgriAI Core 시스템 시작 중...${NC}"
     start_services
-    sleep 3
+    echo "Reflex 기동 대기 중..."
 
-    if service_active "$CORE_SERVICE"; then
+    if service_active "$CORE_SERVICE" && wait_reflex_ready 120; then
         echo -e "${GREEN}✓ 시스템이 정상적으로 시작되었습니다${NC}"
         echo ""
         echo "접속 정보:"
@@ -109,9 +171,9 @@ stop_system() {
 restart_system() {
     echo -e "${YELLOW}AgriAI Core 시스템 재시작 중...${NC}"
     restart_services
-    sleep 3
+    echo "Reflex 기동 대기 중..."
 
-    if service_active "$CORE_SERVICE"; then
+    if service_active "$CORE_SERVICE" && wait_reflex_ready 120; then
         echo -e "${GREEN}✓ 시스템이 정상적으로 재시작되었습니다${NC}"
         echo ""
         echo "접속 정보:"

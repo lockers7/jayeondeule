@@ -14,6 +14,13 @@ set -e
 # 작업 디렉토리 이동
 cd /workspace/jayeondeule
 
+# .env 로드 (systemd 외 수동 실행 경로 동일 동작 보장)
+if [ -f "/workspace/jayeondeule/.env" ]; then
+    set -a
+    . "/workspace/jayeondeule/.env"
+    set +a
+fi
+
 # Python 캐시 파일 생성 방지
 export PYTHONDONTWRITEBYTECODE=1
 

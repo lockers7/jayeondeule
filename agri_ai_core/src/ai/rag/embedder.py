@@ -15,10 +15,11 @@ import time
 import hashlib
 import logging
 import numpy as np
-import requests
 from collections import OrderedDict
+from typing import Any, Optional
 
 from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.src.ai.mcp_client import mcp_http_request
 from agri_ai_core.config import settings
 from agri_ai_core.config import EMBEDDING_MODEL_NAME
 
@@ -31,6 +32,34 @@ _embedding_cache = OrderedDict()
 _EMBEDDING_CACHE_MAX = 256
 _EMBEDDING_SERVICE_DISABLED = False
 _EMBEDDING_FAILURE_REASON = None
+
+
+def _mcp_get_status(url: str, timeout: int = 5) -> Optional[int]:
+    status_code, _, _ = mcp_http_request(
+        method="GET",
+        url=url,
+        timeout=max(3, min(int(timeout), 10)),
+    )
+    return status_code if status_code > 0 else None
+
+
+def _extract_embedding_from_payload(data: Any):
+    if not isinstance(data, dict):
+        return None
+
+    embedding = data.get("embedding")
+
+    if (not embedding) and isinstance(data.get("embeddings"), list) and data["embeddings"]:
+        first = data["embeddings"][0]
+        if isinstance(first, list):
+            embedding = first
+
+    if (not embedding) and isinstance(data.get("data"), list) and data["data"]:
+        first = data["data"][0]
+        if isinstance(first, dict) and isinstance(first.get("embedding"), list):
+            embedding = first["embedding"]
+
+    return embedding
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -61,15 +90,12 @@ def _get_expected_dim() -> int:
 # bool: 서버 상태 정상 여부
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def check_ollama_health():
-    try:
-        ollama_url = _get_ollama_url()
-        v = requests.get(ollama_url + "/api/version", timeout=5)
-        if v.status_code != 200:
-            return False
-        t = requests.get(ollama_url + "/api/tags", timeout=5)
-        return t.status_code == 200
-    except Exception:
+    ollama_url = _get_ollama_url()
+    version_status = _mcp_get_status(ollama_url + "/api/version", timeout=5)
+    if version_status != 200:
         return False
+    tags_status = _mcp_get_status(ollama_url + "/api/tags", timeout=5)
+    return tags_status == 200
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -179,29 +205,32 @@ def embed_text(text, timeout=60, max_retries=5):
     for attempt in range(max_retries):
         try:
             start_time = time.time()
-
-            response = requests.post(
-                ollama_url + "/api/embeddings",
-                json=payload,
-                timeout=dynamic_timeout
+            status_code, data, error_text = mcp_http_request(
+                method="POST",
+                url=ollama_url + "/api/embeddings",
+                json_body=payload,
+                timeout=int(dynamic_timeout),
             )
-
             elapsed_time = time.time() - start_time
-            logger.debug(f"[embed_text] 요청 완료 (시도 {attempt + 1}/{max_retries}): {elapsed_time:.2f}초")
+            logger.debug(f"[embed_text] MCP 요청 완료 (시도 {attempt + 1}/{max_retries}): {elapsed_time:.2f}초")
 
-            response.raise_for_status()
-            data = response.json()
-            embedding = data.get("embedding")
+            if status_code in (400, 404, 422):
+                if not _EMBEDDING_SERVICE_DISABLED:
+                    logger.info(f"[embed_text] 임베딩 엔드포인트 {status_code} 응답 → 더미 임베딩 전환")
+                _EMBEDDING_SERVICE_DISABLED = True
+                _EMBEDDING_FAILURE_REASON = f"http_status_{status_code}"
+                return generate_dummy_embedding(text)
 
-            if (not embedding) and isinstance(data.get("embeddings"), list) and data["embeddings"]:
-                first = data["embeddings"][0]
-                if isinstance(first, list):
-                    embedding = first
+            if status_code >= 500 or status_code == 0:
+                last_error = f"HTTP 오류: {status_code} {error_text}"
+                if attempt < max_retries - 1:
+                    wait_time = min(30, 5 + (attempt * 3))
+                    logger.info(f"[embed_text] {wait_time}초 대기 후 재시도... (서버 오류)")
+                    time.sleep(wait_time)
+                    continue
+                break
 
-            if (not embedding) and isinstance(data.get("data"), list) and data["data"]:
-                first = data["data"][0]
-                if isinstance(first, dict) and isinstance(first.get("embedding"), list):
-                    embedding = first["embedding"]
+            embedding = _extract_embedding_from_payload(data)
 
             if embedding and isinstance(embedding, list) and len(embedding) > 0:
                 if len(embedding) == expected_dim:
@@ -219,55 +248,6 @@ def embed_text(text, timeout=60, max_retries=5):
             else:
                 logger.debug(f"[embed_text] 임베딩 응답이 비어있음/스키마 불일치: {str(data)[:160]} → 더미 폴백")
                 return generate_dummy_embedding(text)
-
-        except requests.exceptions.Timeout as e:
-            elapsed_time = time.time() - start_time
-            logger.warning(f"[embed_text] 타임아웃 발생 (시도 {attempt + 1}/{max_retries}): {elapsed_time:.2f}초 경과")
-            last_error = f"타임아웃: {e}"
-
-            if attempt < max_retries - 1:
-                wait_time = min(30, (2 ** attempt) + 5)
-                logger.info(f"[embed_text] {wait_time}초 대기 후 재시도... (타임아웃)")
-                time.sleep(wait_time)
-
-                dynamic_timeout = min(300, dynamic_timeout * 1.5)
-                logger.debug(f"[embed_text] 다음 시도 타임아웃: {dynamic_timeout:.1f}초")
-                continue
-
-        except requests.exceptions.ConnectionError as e:
-            logger.warning(f"[embed_text] 연결 오류 (시도 {attempt + 1}/{max_retries}): {e}")
-            last_error = f"연결 오류: {e}"
-
-            if attempt < max_retries - 1:
-                wait_time = min(60, 10 + (attempt * 5))
-                logger.info(f"[embed_text] {wait_time}초 대기 후 재시도... (연결 오류)")
-                time.sleep(wait_time)
-
-                if not check_ollama_health():
-                    logger.error("[embed_text] 서버 상태 지속적으로 불량 - 더미 임베딩 생성")
-                    return generate_dummy_embedding(text)
-                continue
-
-        except requests.exceptions.HTTPError as e:
-            status = e.response.status_code if e.response is not None else None
-
-            if status in (400, 404, 422):
-                if not _EMBEDDING_SERVICE_DISABLED:
-                    logger.info(f"[embed_text] 임베딩 엔드포인트 {status} 응답 → 더미 임베딩 전환, 이후 요청은 더미를 사용합니다.")
-                _EMBEDDING_SERVICE_DISABLED = True
-                _EMBEDDING_FAILURE_REASON = f"http_status_{status}"
-                return generate_dummy_embedding(text)
-
-            logger.warning(f"[embed_text] HTTP 오류 (시도 {attempt + 1}/{max_retries}): {e}")
-            last_error = f"HTTP 오류: {e}"
-
-            if status is not None and status >= 500 and attempt < max_retries - 1:
-                wait_time = min(30, 5 + (attempt * 3))
-                logger.info(f"[embed_text] {wait_time}초 대기 후 재시도... (서버 오류)")
-                time.sleep(wait_time)
-                continue
-
-            break
 
         except Exception as e:
             logger.warning(f"[embed_text] 예외 발생 (시도 {attempt + 1}/{max_retries}): {e}")

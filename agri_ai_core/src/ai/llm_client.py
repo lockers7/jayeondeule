@@ -18,9 +18,18 @@ import os
 import re
 import time
 import json
-import ollama
+import html
 import threading
 import traceback
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from urllib import error as urlerror
+from urllib import request as urlrequest
+from urllib.parse import urlparse
+
+try:
+    import ollama
+except Exception:
+    ollama = None
 
 from agri_ai_core.src.logs import setup_logger
 from agri_ai_core.config import settings
@@ -38,6 +47,7 @@ _llm_warmed = False
 # 모델 캐싱
 _cached_model_name = None
 _model_cache_lock = threading.Lock()
+_direct_ollama_disabled_reason: Optional[str] = None
 
 # 환경 변수 설정
 os.environ['OLLAMA_MAX_LOADED_MODELS'] = '1'
@@ -45,23 +55,628 @@ os.environ['OLLAMA_NUM_PARALLEL'] = '2'
 os.environ['OLLAMA_KEEP_ALIVE'] = '1h'
 
 
+def _get_ollama_url() -> str:
+    return (
+        getattr(settings.model, "ollama_url", None)
+        or os.getenv("OLLAMA_URL")
+        or "http://localhost:11434"
+    )
+
+
+def _is_true(value: Any) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _use_mcp_fetch() -> bool:
+    # MCP fetch는 환경 의존성이 커서 기본값은 비활성화한다.
+    return _is_true(os.getenv("USE_MCP_FETCH", "false"))
+
+
+def _use_ollama_package() -> bool:
+    return ollama is not None and _is_true(os.getenv("USE_OLLAMA_PACKAGE", "true"))
+
+
+def _use_direct_ollama_http() -> bool:
+    return _is_true(os.getenv("USE_DIRECT_OLLAMA_HTTP", "true"))
+
+
+def _is_direct_ollama_enabled() -> bool:
+    return _use_direct_ollama_http() and not _direct_ollama_disabled_reason
+
+
+def _disable_direct_ollama_http(reason: str) -> None:
+    global _direct_ollama_disabled_reason
+    if _direct_ollama_disabled_reason:
+        return
+    _direct_ollama_disabled_reason = reason
+    logger.warning(f"Ollama direct HTTP 비활성화: {reason}")
+
+
+def _is_connection_related_error(err: Exception) -> bool:
+    message = str(err).lower()
+    return any(
+        keyword in message
+        for keyword in (
+            "failed to connect to ollama",
+            "ollama connection error",
+            "operation not permitted",
+            "connection refused",
+            "timed out",
+            "timeout",
+            "mcp server disabled at runtime: fetch",
+            "mcp timeout: fetch",
+            "direct http is unavailable",
+            "no available ollama transport",
+        )
+    )
+
+
+def _pkg_ollama_list_models() -> List[str]:
+    if not _use_ollama_package():
+        return []
+
+    result = ollama.list()
+    names: List[str] = []
+
+    if hasattr(result, "models"):
+        for model in getattr(result, "models", []) or []:
+            name = getattr(model, "model", None) or getattr(model, "name", None)
+            if isinstance(name, str) and name.strip():
+                names.append(name)
+        return names
+
+    if isinstance(result, dict):
+        for model in result.get("models", []) or []:
+            if not isinstance(model, dict):
+                continue
+            name = model.get("model") or model.get("name")
+            if isinstance(name, str) and name.strip():
+                names.append(name)
+    return names
+
+
+def _pkg_ollama_chat(
+    model: str,
+    messages: List[Dict[str, Any]],
+    options: Optional[Dict[str, Any]] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    keep_alive: Optional[str] = None,
+) -> Any:
+    if not _use_ollama_package():
+        raise RuntimeError("ollama package unavailable")
+
+    payload: Dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+    }
+    if options:
+        payload["options"] = options
+    if tools:
+        payload["tools"] = tools
+    if keep_alive:
+        payload["keep_alive"] = keep_alive
+
+    return ollama.chat(**payload)
+
+
+def _pkg_ollama_generate_text(
+    model: str,
+    prompt: str,
+    options: Optional[Dict[str, Any]] = None,
+    keep_alive: Optional[str] = None,
+) -> str:
+    if not _use_ollama_package():
+        raise RuntimeError("ollama package unavailable")
+
+    payload: Dict[str, Any] = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+    }
+    if options:
+        payload["options"] = options
+    if keep_alive:
+        payload["keep_alive"] = keep_alive
+
+    result = ollama.generate(**payload)
+    if isinstance(result, dict):
+        if isinstance(result.get("response"), str):
+            return result.get("response", "")
+        message = result.get("message")
+        if isinstance(message, dict) and isinstance(message.get("content"), str):
+            return message.get("content", "")
+
+    if hasattr(result, "response"):
+        response_text = getattr(result, "response", "")
+        if isinstance(response_text, str):
+            return response_text
+
+    message = getattr(result, "message", None)
+    if message and hasattr(message, "content"):
+        content = getattr(message, "content", "")
+        if isinstance(content, str):
+            return content
+
+    return ""
+
+
+def _build_ollama_url(path: str) -> str:
+    base = _get_ollama_url().rstrip("/")
+    if path.startswith("/"):
+        return f"{base}{path}"
+    return f"{base}/{path}"
+
+
+def _direct_ollama_json(
+    path: str,
+    method: str = "GET",
+    json_body: Optional[Dict[str, Any]] = None,
+    timeout: int = 120,
+) -> Dict[str, Any]:
+    url = _build_ollama_url(path)
+    body_bytes = None
+    headers: Dict[str, str] = {}
+
+    if json_body is not None:
+        body_bytes = json.dumps(json_body, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    req = urlrequest.Request(url=url, data=body_bytes, method=(method or "GET").upper(), headers=headers)
+    try:
+        with urlrequest.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+    except urlerror.HTTPError as http_err:
+        body = ""
+        try:
+            body = http_err.read().decode("utf-8", errors="replace")
+        except Exception:
+            body = str(http_err)
+        raise RuntimeError(f"Ollama HTTP {http_err.code}: {body[:200]}")
+    except urlerror.URLError as url_err:
+        reason_text = str(url_err.reason)
+        if "operation not permitted" in reason_text.lower():
+            _disable_direct_ollama_http("runtime network permission denied")
+            raise RuntimeError("Ollama direct HTTP is unavailable in this runtime")
+        raise RuntimeError(f"Ollama connection error: {url_err.reason}")
+    except Exception as err:
+        raise RuntimeError(f"Ollama direct request failed: {err}")
+
+    if not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception as err:
+        raise RuntimeError(f"Ollama JSON parse error: {err}")
+    if not isinstance(parsed, dict):
+        raise RuntimeError("Ollama response is not a JSON object")
+    return parsed
+
+
+def _direct_ollama_list_models(timeout: int = 8) -> List[str]:
+    data = _direct_ollama_json(path="/api/tags", method="GET", timeout=timeout)
+    models = data.get("models", [])
+    names: List[str] = []
+    if isinstance(models, list):
+        for model in models:
+            if isinstance(model, dict):
+                name = model.get("name") or model.get("model")
+                if isinstance(name, str) and name.strip():
+                    names.append(name)
+    return names
+
+
+def _direct_ollama_chat(
+    model: str,
+    messages: List[Dict[str, Any]],
+    options: Optional[Dict[str, Any]] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    keep_alive: Optional[str] = None,
+    timeout: int = 120,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+    }
+    if options:
+        payload["options"] = options
+    if tools:
+        payload["tools"] = tools
+    if keep_alive:
+        payload["keep_alive"] = keep_alive
+
+    return _direct_ollama_json(path="/api/chat", method="POST", json_body=payload, timeout=timeout)
+
+
+def _direct_ollama_generate_text(
+    model: str,
+    prompt: str,
+    options: Optional[Dict[str, Any]] = None,
+    keep_alive: Optional[str] = None,
+    timeout: int = 120,
+) -> str:
+    payload: Dict[str, Any] = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+    }
+    if options:
+        payload["options"] = options
+    if keep_alive:
+        payload["keep_alive"] = keep_alive
+
+    data = _direct_ollama_json(path="/api/generate", method="POST", json_body=payload, timeout=timeout)
+    if isinstance(data.get("response"), str):
+        return data.get("response", "")
+    message = data.get("message")
+    if isinstance(message, dict) and isinstance(message.get("content"), str):
+        return message.get("content", "")
+    return ""
+
+
+def _mcp_ollama_list_models(timeout: int = 20) -> List[str]:
+    from agri_ai_core.src.ai.mcp_client import mcp_fetch_json
+
+    result = mcp_fetch_json(url=f"{_get_ollama_url()}/api/tags", method="GET", timeout=timeout)
+    if not result.get("success"):
+        raise RuntimeError(result.get("error") or "MCP tags call failed")
+
+    data = result.get("data")
+    if not isinstance(data, dict):
+        return []
+
+    models = data.get("models", [])
+    names: List[str] = []
+    if isinstance(models, list):
+        for model in models:
+            if isinstance(model, dict):
+                name = model.get("name") or model.get("model")
+                if isinstance(name, str) and name.strip():
+                    names.append(name)
+    return names
+
+
+def _mcp_ollama_chat(
+    model: str,
+    messages: List[Dict[str, Any]],
+    options: Optional[Dict[str, Any]] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    keep_alive: Optional[str] = None,
+    timeout: int = 120,
+) -> Dict[str, Any]:
+    from agri_ai_core.src.ai.mcp_client import mcp_fetch_json
+
+    payload: Dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+    }
+    if options:
+        payload["options"] = options
+    if tools:
+        payload["tools"] = tools
+    if keep_alive:
+        payload["keep_alive"] = keep_alive
+
+    result = mcp_fetch_json(
+        url=f"{_get_ollama_url()}/api/chat",
+        method="POST",
+        json_body=payload,
+        timeout=timeout,
+    )
+    if not result.get("success"):
+        raise RuntimeError(result.get("error") or "MCP chat call failed")
+
+    data = result.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError("Ollama chat 응답 파싱 실패")
+    return data
+
+
+def _mcp_ollama_generate_text(
+    model: str,
+    prompt: str,
+    options: Optional[Dict[str, Any]] = None,
+    keep_alive: Optional[str] = None,
+    timeout: int = 120,
+) -> str:
+    from agri_ai_core.src.ai.mcp_client import mcp_fetch_json
+
+    payload: Dict[str, Any] = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+    }
+    if options:
+        payload["options"] = options
+    if keep_alive:
+        payload["keep_alive"] = keep_alive
+
+    result = mcp_fetch_json(
+        url=f"{_get_ollama_url()}/api/generate",
+        method="POST",
+        json_body=payload,
+        timeout=timeout,
+    )
+    if not result.get("success"):
+        raise RuntimeError(result.get("error") or "MCP generate call failed")
+
+    data = result.get("data")
+    if not isinstance(data, dict):
+        return ""
+    if isinstance(data.get("response"), str):
+        return data.get("response", "")
+    message = data.get("message")
+    if isinstance(message, dict) and isinstance(message.get("content"), str):
+        return message.get("content", "")
+    return ""
+
+
+def _ollama_chat(
+    model: str,
+    messages: List[Dict[str, Any]],
+    options: Optional[Dict[str, Any]] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    keep_alive: Optional[str] = None,
+):
+    errors: List[str] = []
+
+    if _use_ollama_package():
+        try:
+            return _pkg_ollama_chat(
+                model=model,
+                messages=messages,
+                options=options,
+                tools=tools,
+                keep_alive=keep_alive,
+            )
+        except Exception as pkg_err:
+            logger.warning(f"Ollama chat 호출 실패(package) -> MCP/direct fallback: {pkg_err}")
+            errors.append(str(pkg_err))
+
+    if _use_mcp_fetch():
+        try:
+            return _mcp_ollama_chat(
+                model=model,
+                messages=messages,
+                options=options,
+                tools=tools,
+                keep_alive=keep_alive,
+            )
+        except Exception as mcp_err:
+            logger.warning(f"Ollama chat 호출 실패(MCP) -> direct fallback: {mcp_err}")
+            errors.append(str(mcp_err))
+
+    if _is_direct_ollama_enabled():
+        try:
+            return _direct_ollama_chat(
+                model=model,
+                messages=messages,
+                options=options,
+                tools=tools,
+                keep_alive=keep_alive,
+            )
+        except Exception as direct_err:
+            errors.append(str(direct_err))
+            raise
+
+    error_tail = errors[-1] if errors else "all transports unavailable"
+    raise RuntimeError(f"No available Ollama transport: {error_tail}")
+
+
+def _ollama_generate_text(
+    model: str,
+    prompt: str,
+    options: Optional[Dict[str, Any]] = None,
+    keep_alive: Optional[str] = None,
+) -> str:
+    errors: List[str] = []
+
+    if _use_ollama_package():
+        try:
+            return _pkg_ollama_generate_text(
+                model=model,
+                prompt=prompt,
+                options=options,
+                keep_alive=keep_alive,
+            )
+        except Exception as pkg_err:
+            logger.warning(f"Ollama generate 호출 실패(package) -> MCP/direct fallback: {pkg_err}")
+            errors.append(str(pkg_err))
+
+    if _use_mcp_fetch():
+        try:
+            return _mcp_ollama_generate_text(
+                model=model,
+                prompt=prompt,
+                options=options,
+                keep_alive=keep_alive,
+            )
+        except Exception as mcp_err:
+            logger.warning(f"Ollama generate 호출 실패(MCP) -> direct fallback: {mcp_err}")
+            errors.append(str(mcp_err))
+
+    if _is_direct_ollama_enabled():
+        try:
+            return _direct_ollama_generate_text(
+                model=model,
+                prompt=prompt,
+                options=options,
+                keep_alive=keep_alive,
+            )
+        except Exception as direct_err:
+            errors.append(str(direct_err))
+            raise
+
+    error_tail = errors[-1] if errors else "all transports unavailable"
+    raise RuntimeError(f"No available Ollama transport: {error_tail}")
+
+
+def _ollama_generate_stream(
+    model: str,
+    prompt: str,
+    options: Optional[Dict[str, Any]] = None,
+    keep_alive: Optional[str] = None,
+) -> Iterable[Dict[str, Any]]:
+    text = _ollama_generate_text(
+        model=model,
+        prompt=prompt,
+        options=options,
+        keep_alive=keep_alive,
+    )
+    return [{"response": text}]
+
+
+def _extract_message_content(response: Any) -> str:
+    if hasattr(response, "message"):
+        message = getattr(response, "message")
+        if hasattr(message, "content"):
+            content = getattr(message, "content", "")
+            if isinstance(content, str):
+                return content
+        if isinstance(message, dict):
+            content = message.get("content")
+            if isinstance(content, str):
+                return content
+
+    if isinstance(response, dict):
+        message = response.get("message")
+        if isinstance(message, dict):
+            content = message.get("content")
+            if isinstance(content, str):
+                return content
+        response_text = response.get("response")
+        if isinstance(response_text, str):
+            return response_text
+    return ""
+
+
+def _normalize_assistant_message(assistant_message: Any) -> Dict[str, Any]:
+    if isinstance(assistant_message, dict):
+        normalized: Dict[str, Any] = {
+            "role": assistant_message.get("role") or "assistant",
+            "content": assistant_message.get("content") or "",
+        }
+        tool_calls = assistant_message.get("tool_calls")
+        if isinstance(tool_calls, list) and tool_calls:
+            normalized["tool_calls"] = tool_calls
+        return normalized
+
+    normalized = {
+        "role": getattr(assistant_message, "role", "assistant"),
+        "content": getattr(assistant_message, "content", "") or "",
+    }
+    tool_calls = getattr(assistant_message, "tool_calls", None)
+    if tool_calls:
+        try:
+            normalized["tool_calls"] = list(tool_calls)
+        except Exception:
+            normalized["tool_calls"] = tool_calls
+    return normalized
+
+
+def _extract_tool_calls(assistant_message: Dict[str, Any]) -> List[Any]:
+    tool_calls = assistant_message.get("tool_calls")
+    if isinstance(tool_calls, list):
+        return tool_calls
+    return []
+
+
+def _extract_tool_name(tool_call: Any) -> Optional[str]:
+    if isinstance(tool_call, dict):
+        function = tool_call.get("function")
+        if isinstance(function, dict):
+            name = function.get("name")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+        name = tool_call.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+        return None
+
+    function = getattr(tool_call, "function", None)
+    if function is not None:
+        name = getattr(function, "name", None)
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    name = getattr(tool_call, "name", None)
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return None
+
+
+def _extract_tool_arguments(tool_call: Any) -> Dict[str, Any]:
+    raw_args: Any = None
+    if isinstance(tool_call, dict):
+        function = tool_call.get("function")
+        if isinstance(function, dict):
+            raw_args = function.get("arguments")
+        if raw_args is None:
+            raw_args = tool_call.get("arguments")
+    else:
+        function = getattr(tool_call, "function", None)
+        if function is not None:
+            raw_args = getattr(function, "arguments", None)
+        if raw_args is None:
+            raw_args = getattr(tool_call, "arguments", None)
+
+    if isinstance(raw_args, dict):
+        return raw_args
+    if isinstance(raw_args, str):
+        try:
+            parsed = json.loads(raw_args)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return {}
+    return {}
+
+
+def _normalize_tool_arguments(tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
+    args = tool_args or {}
+
+    if tool_name == "search_web":
+        return {"query": args.get("query")}
+    if tool_name == "search_farm_knowledge":
+        return {
+            "query": args.get("query"),
+            "n_results": args.get("n_results", 3),
+        }
+    if tool_name == "get_farm_realtime_data":
+        return {
+            "house_id": args.get("house_id"),
+            "farm_id": args.get("farm_id"),
+            "data_type": args.get("data_type", "all"),
+        }
+    return args
+
+
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # Ollama에서 사용 가능한 모델 목록 가져오기
 # --->
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def _get_available_models():
-    try:
-        result = ollama.list()
-        # ollama 패키지 v0.4+ : ListResponse 객체 (result.models[].model)
-        # ollama 패키지 v0.3- : dict (result['models'][].name)
-        if hasattr(result, 'models'):
-            return [m.model for m in result.models]
-        elif isinstance(result, dict):
-            return [m['name'] for m in result.get('models', [])]
-        return []
-    except Exception as e:
-        logger.warning(f"Ollama 모델 목록 조회 실패: {e}")
-        return []
+    if _use_ollama_package():
+        try:
+            return _pkg_ollama_list_models()
+        except Exception as pkg_err:
+            logger.warning(f"Ollama 모델 목록 조회 실패(package) -> MCP/direct fallback: {pkg_err}")
+
+    if _use_mcp_fetch():
+        try:
+            return _mcp_ollama_list_models()
+        except Exception as mcp_err:
+            logger.warning(f"Ollama 모델 목록 조회 실패(MCP) -> direct fallback: {mcp_err}")
+
+    if _is_direct_ollama_enabled():
+        try:
+            return _direct_ollama_list_models()
+        except Exception as direct_err:
+            logger.warning(f"Ollama 모델 목록 조회 실패(direct): {direct_err}")
+            return []
+
+    return []
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -116,7 +731,7 @@ def _perform_llm_warmup():
 
     try:
         model_name = _get_model_name()
-        ollama.chat(
+        _ollama_chat(
             model=model_name,
             messages=[
                 {"role": "system", "content": "You are a concise assistant. Respond with one word."},
@@ -191,7 +806,7 @@ def get_llm_response(system_prompt=None, user_prompt=None, temperature=0.7,
                     "num_predict": num_predict
                 }
 
-                response = ollama.chat(
+                response = _ollama_chat(
                     model=model_name,
                     messages=message_payload,
                     options=options_payload,
@@ -205,12 +820,7 @@ def get_llm_response(system_prompt=None, user_prompt=None, temperature=0.7,
                 logger.error(f"LLM 응답 생성 중 오류, 재시도 {retry_count}/{max_retries}: {retry_err}")
                 time.sleep(1)
 
-        if hasattr(response, 'message') and hasattr(response.message, 'content'):
-            response_text = response.message.content
-        elif isinstance(response, dict) and "response" in response:
-            response_text = response["response"]
-        else:
-            response_text = "응답을 생성할 수 없습니다."
+        response_text = _extract_message_content(response) or "응답을 생성할 수 없습니다."
 
         if not response_text or len(response_text.strip()) == 0:
             logger.error("빈 응답 텍스트")
@@ -221,12 +831,15 @@ def get_llm_response(system_prompt=None, user_prompt=None, temperature=0.7,
             filtered_response = filter_llm_response(response_text, filter_type="relay_control")
         else:
             filtered_response = filter_llm_response(response_text, filter_type="general")
-
-        return filtered_response
+        cleaned_response = clean_llm_response(filtered_response)
+        return _strip_reasoning_paragraphs(cleaned_response)
 
     except Exception as e:
-        logger.error(f"LLM 응답 생성 중 오류: {e}")
-        logger.error(traceback.format_exc())
+        if _is_connection_related_error(e):
+            logger.warning(f"LLM 응답 생성 실패(연결/환경): {e}")
+        else:
+            logger.error(f"LLM 응답 생성 중 오류: {e}")
+            logger.error(traceback.format_exc())
         return "죄송합니다. 현재 응답을 생성할 수 없습니다."
 
 
@@ -251,17 +864,16 @@ async def get_llm_streaming_response(prompt, temperature=0.7, top_p=0.9,
         inside_think_tag = False
         model_name = _get_model_name()
 
-        for response_chunk in ollama.generate(
+        for response_chunk in _ollama_generate_stream(
             model=model_name,
             prompt=prompt,
-            stream=True,
             keep_alive='1h',  # 모델을 1시간 동안 메모리에 유지
             options={
                 "temperature": temperature,
                 "top_p": top_p,
                 "top_k": top_k,
                 "num_predict": num_predict
-            }
+            },
         ):
             chunk_text = response_chunk.get("response", "")
             if not chunk_text:
@@ -326,8 +938,11 @@ async def get_llm_streaming_response(prompt, temperature=0.7, top_p=0.9,
                 yield filtered_chunk
 
     except Exception as e:
-        logger.error(f"LLM 스트리밍 응답 생성 중 오류: {e}")
-        logger.error(traceback.format_exc())
+        if _is_connection_related_error(e):
+            logger.warning(f"LLM 스트리밍 응답 생성 실패(연결/환경): {e}")
+        else:
+            logger.error(f"LLM 스트리밍 응답 생성 중 오류: {e}")
+            logger.error(traceback.format_exc())
         yield "죄송합니다. 현재 응답을 생성할 수 없습니다."
 
 
@@ -367,7 +982,8 @@ def _is_thinking_text(text):
         'user said', 'user is asking', 'user provided', 'user wants',
         'user mentioned', 'user asked', 'user needs', 'user has',
         'the user', 'need to', 'should', 'looking at', 'based on',
-        'let me think', 'let\'s see', 'figure out', 'understand'
+        'let me think', 'let\'s see', 'figure out', 'understand',
+        'that means', 'decimal', 'json serializable', 'converted to json'
     ]
 
     # 시작 패턴 체크
@@ -384,6 +1000,7 @@ def _is_thinking_text(text):
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 _THINKING_PATTERNS = [
     r'^(Okay|Well|So|Now),?\s+.*?(user said|need to|should|I need|I should)',
+    r'^(Okay|Well|So|Hmm),?\s+that means\b',
     r'^(Okay|Well|So|Now),?\s+(let\'s see|let me)',
     r'^Let (me|\'s)\s+(think|see|check|figure|understand)',
     r'^(First|Hmm|Wait),?\s+(I|let|the)',
@@ -401,6 +1018,418 @@ _THINKING_PATTERNS = [
     r'^So\s+(the|this|it)\s+(system|environment|condition)',
     r'^No\s+(immediate\s+)?action\s+(needed|required)',
 ]
+
+_REASONING_HINT_KEYWORDS = [
+    "first,",
+    "second,",
+    "third,",
+    "hmm,",
+    "wait,",
+    "that means",
+    "so the main points",
+    "putting it all together",
+    "here's the answer",
+    "in a clear, concise",
+    "in korean sentence",
+    "relay statuses",
+    "advise checking",
+    "the system expects",
+    "can't be converted to json",
+    "json serializable",
+    "maybe it's",
+    "might be a problem",
+]
+
+_DEFAULT_REASONING_TERMS = [
+    "first,",
+    "second,",
+    "third,",
+    "hmm,",
+    "wait,",
+    "so,",
+    "so the main points",
+    "putting it all together",
+    "in a clear, concise",
+    "here's the answer",
+    "let me think",
+    "based on",
+    "relay statuses",
+    "sensor data",
+]
+
+_MEASURE_TOKEN_PATTERN = re.compile(
+    r"[-+]?\d+(?:\.\d+)?\s*(?:°c|°f|%|ppm|m|lux|루멘|도|℃|℉)?",
+    re.IGNORECASE,
+)
+
+_SENSOR_CONCEPT_MAP = {
+    "temperature": ("temperature", "temp", "온도", "기온", "실내 온도", "외부 기온"),
+    "humidity": ("humidity", "습도"),
+    "co2": ("co2", "이산화탄소"),
+    "light": ("light", "조도", "루멘"),
+    "water_level": ("water level", "수위"),
+    "water_temp": ("water temp", "수온"),
+    "relay": ("relay", "릴레이"),
+}
+
+
+def _load_reasoning_terms() -> List[str]:
+    """
+    reasoning/독백 탐지용 용어 목록.
+    환경변수 LLM_REASONING_EXTRA_TERMS로 추가 term을 주입할 수 있다.
+    """
+    extra_raw = os.getenv("LLM_REASONING_EXTRA_TERMS", "")
+    extra_terms = [term.strip().lower() for term in extra_raw.split(",") if term and term.strip()]
+
+    merged = []
+    seen = set()
+    for term in [*_DEFAULT_REASONING_TERMS, *extra_terms]:
+        normalized = term.strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        merged.append(normalized)
+    return merged
+
+
+_REASONING_TERMS = _load_reasoning_terms()
+_reasoning_terms_logged = False
+
+
+def _find_reasoning_terms(text: str) -> List[str]:
+    lowered = (text or "").lower()
+    return [term for term in _REASONING_TERMS if term in lowered]
+
+
+def _log_reasoning_terms_once() -> None:
+    # 기존 호출부 호환용 no-op (답변로그는 호출당 1회만 출력).
+    global _reasoning_terms_logged
+    _reasoning_terms_logged = True
+
+
+def _line_has_korean(text: str) -> bool:
+    return any(char in text for char in "가나다라마바사아자차카타파하")
+
+
+def _looks_like_reasoning_line(line: str) -> bool:
+    stripped = (line or "").strip()
+    if not stripped:
+        return False
+
+    lowered = stripped.lower()
+    for pattern in _THINKING_PATTERNS:
+        if re.match(pattern, stripped, re.IGNORECASE):
+            return True
+
+    if any(keyword in lowered for keyword in _REASONING_HINT_KEYWORDS):
+        return True
+
+    return bool(_find_reasoning_terms(stripped))
+
+
+def _extract_measure_tokens(text: str) -> Set[str]:
+    tokens = set()
+    for token in _MEASURE_TOKEN_PATTERN.findall((text or "").lower()):
+        normalized = " ".join(token.split())
+        if not normalized:
+            continue
+        # 숫자만 있는 토큰은 정보량이 낮아 과탐 방지를 위해 제외
+        if re.fullmatch(r"[-+]?\d+(?:\.\d+)?", normalized):
+            continue
+        tokens.add(normalized)
+    return tokens
+
+
+def _extract_sensor_concepts(text: str) -> Set[str]:
+    lowered = (text or "").lower()
+    concepts = set()
+    for concept, aliases in _SENSOR_CONCEPT_MAP.items():
+        if any(alias in lowered for alias in aliases):
+            concepts.add(concept)
+    return concepts
+
+
+def _is_english_korean_overlap(english_paragraph: str, korean_paragraph: str) -> bool:
+    eng_measures = _extract_measure_tokens(english_paragraph)
+    kor_measures = _extract_measure_tokens(korean_paragraph)
+    shared_measures = eng_measures & kor_measures
+
+    eng_concepts = _extract_sensor_concepts(english_paragraph)
+    kor_concepts = _extract_sensor_concepts(korean_paragraph)
+    shared_concepts = eng_concepts & kor_concepts
+
+    # 값(측정치)와 개념(온도/습도/릴레이 등)이 함께 겹치면 중복 번역 블록으로 본다.
+    if len(shared_measures) >= 2 and len(shared_concepts) >= 1:
+        return True
+    if len(shared_concepts) >= 3:
+        return True
+    return False
+
+
+def _snapshot_answer_stage(stage: str, text: str) -> Dict[str, Any]:
+    raw = text or ""
+    try:
+        max_chars = max(0, int(os.getenv("LLM_VERBOSE_ANSWER_LOG_MAX_CHARS", "12000")))
+    except Exception:
+        max_chars = 12000
+
+    if max_chars and len(raw) > max_chars:
+        shown = raw[:max_chars] + "\n...(truncated)..."
+    else:
+        shown = raw
+
+    return {
+        "stage": stage,
+        "length": len(raw),
+        "text": shown,
+    }
+
+
+def _emit_answer_log_once(
+    user_query: str,
+    final_mode: str,
+    stages: List[Dict[str, Any]],
+    dropped_details: List[str],
+    detected_terms: List[str],
+    rewrite_attempts: int,
+) -> None:
+    if not _is_true(os.getenv("LLM_VERBOSE_ANSWER_LOG", "true")):
+        return
+
+    report = {
+        "query": (user_query or "")[:120],
+        "final_mode": final_mode,
+        "rewrite_attempts": rewrite_attempts,
+        "detected_terms": detected_terms,
+        "dropped_count": len(dropped_details),
+        "dropped_details": dropped_details,
+        "stages": stages,
+    }
+    logger.info(f"[답변로그] {json.dumps(report, ensure_ascii=False)}")
+
+
+def _is_reasoning_paragraph(paragraph: str, korean_present_in_response: bool = False) -> bool:
+    text = (paragraph or "").strip()
+    if not text:
+        return False
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return False
+
+    if any(_looks_like_reasoning_line(line) for line in lines):
+        return True
+
+    has_korean = _line_has_korean(text)
+    ascii_alpha_count = sum(1 for c in text if c.isascii() and c.isalpha())
+    non_space_count = sum(1 for c in text if not c.isspace())
+    ascii_ratio = (ascii_alpha_count / non_space_count) if non_space_count else 0.0
+    lowered = text.lower()
+
+    # 한글 답변에 섞인 영문 reasoning block 제거를 우선한다.
+    if korean_present_in_response and not has_korean and ascii_ratio >= 0.60:
+        if any(keyword in lowered for keyword in ("sensor data", "relay statuses", "main points")):
+            return True
+        if len(text) >= 120:
+            return True
+
+    return False
+
+
+def _strip_reasoning_paragraphs(text: str, dropped_details_out: Optional[List[str]] = None) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        return raw
+
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", raw) if p.strip()]
+    if not paragraphs:
+        return raw
+
+    korean_present = _line_has_korean(raw)
+    kept: List[str] = []
+    dropped_details: List[str] = []
+
+    # 한글 단락이 존재하면, 그 이전의 영문 단락은 모두 제거한다.
+    first_korean_idx = None
+    for idx, paragraph in enumerate(paragraphs):
+        if _line_has_korean(paragraph):
+            first_korean_idx = idx
+            break
+
+    korean_paragraphs = [p for p in paragraphs if _line_has_korean(p)]
+
+    for idx, paragraph in enumerate(paragraphs):
+        if first_korean_idx is not None and idx < first_korean_idx and not _line_has_korean(paragraph):
+            dropped_details.append(f"idx={idx} reason=pre_korean_english text={paragraph[:120]}")
+            continue
+
+        if korean_paragraphs and not _line_has_korean(paragraph):
+            if any(_is_english_korean_overlap(paragraph, korean_paragraph) for korean_paragraph in korean_paragraphs):
+                dropped_details.append(f"idx={idx} reason=english_korean_overlap text={paragraph[:120]}")
+                continue
+
+        # 응답 첫머리의 reasoning은 우선 제거한다.
+        is_leading_reasoning = (idx == 0 and _is_reasoning_paragraph(paragraph, korean_present))
+        is_mixed_reasoning = _is_reasoning_paragraph(paragraph, korean_present)
+
+        if is_leading_reasoning or is_mixed_reasoning:
+            matched_terms = ",".join(_find_reasoning_terms(paragraph)[:6]) or "pattern_match"
+            dropped_details.append(
+                f"idx={idx} reason=reasoning_block terms={matched_terms} text={paragraph[:120]}"
+            )
+            continue
+        kept.append(paragraph)
+
+    if dropped_details_out is not None and dropped_details:
+        dropped_details_out.extend(dropped_details)
+
+    if kept:
+        if dropped_details and dropped_details_out is None:
+            logger.info(f"[필터] reasoning/중복 단락 {len(dropped_details)}개 제거")
+            for detail in dropped_details:
+                logger.info(f"[필터] {detail}")
+        return "\n\n".join(kept).strip()
+
+    return raw
+
+
+def _contains_reasoning_trace(text: str) -> bool:
+    candidate = (text or "").strip()
+    if not candidate:
+        return False
+
+    lowered = candidate.lower()
+    if "<think>" in lowered or "</think>" in lowered:
+        return True
+
+    lines = [line.strip() for line in candidate.splitlines() if line.strip()]
+    if any(_looks_like_reasoning_line(line) for line in lines):
+        return True
+
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", candidate) if p.strip()]
+    korean_present = _line_has_korean(candidate)
+    return any(_is_reasoning_paragraph(p, korean_present) for p in paragraphs)
+
+
+def _rewrite_without_reasoning(
+    model_name: str,
+    user_query: str,
+    draft_answer: str,
+    farm_name: Optional[str] = None,
+) -> str:
+    farm_label = farm_name or "농장"
+    rewrite_system = (
+        "너는 답변 정리기다. 내부 추론/분석/독백을 절대 출력하지 마라. "
+        "최종 사용자 응답만 한국어로 작성하라."
+    )
+    rewrite_user = (
+        f"[질문]\n{user_query}\n\n"
+        f"[농장]\n{farm_label}\n\n"
+        "[규칙]\n"
+        "1) 내부 생각(예: First, Hmm, Wait, So the main points...) 금지\n"
+        "2) 오류 원인 분석 독백 금지\n"
+        "3) 핵심 상태와 조치만 간결하게 제시\n\n"
+        f"[후보 답변]\n{draft_answer}"
+    )
+
+    response = _ollama_chat(
+        model=model_name,
+        messages=[
+            {"role": "system", "content": rewrite_system},
+            {"role": "user", "content": rewrite_user},
+        ],
+        options={
+            "temperature": 0.0,
+            "top_p": 0.1,
+            "top_k": 1,
+            "num_predict": NUM_PREDICT,
+        },
+        keep_alive="1h",
+    )
+    return _extract_message_content(response) or ""
+
+
+def _finalize_user_facing_answer(
+    model_name: str,
+    user_query: str,
+    farm_name: Optional[str],
+    raw_answer: str,
+) -> str:
+    _log_reasoning_terms_once()
+    stage_snapshots: List[Dict[str, Any]] = []
+    dropped_details: List[str] = []
+    detected_terms: List[str] = []
+    rewrite_attempts = 0
+
+    stage_snapshots.append(_snapshot_answer_stage("raw", raw_answer))
+
+    filtered = filter_llm_response(raw_answer, filter_type="general")
+    stage_snapshots.append(_snapshot_answer_stage("after_filter", filtered))
+
+    cleaned = clean_llm_response(filtered)
+    stage_snapshots.append(_snapshot_answer_stage("after_clean", cleaned))
+
+    # 방법 1 + 2: 영/한 중복 제거 + term 체크 기반 reasoning 제거
+    candidate = _strip_reasoning_paragraphs(cleaned, dropped_details_out=dropped_details)
+    stage_snapshots.append(_snapshot_answer_stage("after_overlap_term_strip", candidate))
+
+    if not _contains_reasoning_trace(candidate):
+        stage_snapshots.append(_snapshot_answer_stage("final", candidate))
+        _emit_answer_log_once(
+            user_query=user_query,
+            final_mode="direct_strip",
+            stages=stage_snapshots,
+            dropped_details=dropped_details,
+            detected_terms=detected_terms,
+            rewrite_attempts=rewrite_attempts,
+        )
+        return candidate
+
+    detected_terms = _find_reasoning_terms(candidate)
+
+    rewritten = candidate
+    for attempt in range(2):
+        rewrite_attempts = attempt + 1
+        try:
+            rewritten = _rewrite_without_reasoning(
+                model_name=model_name,
+                user_query=user_query,
+                farm_name=farm_name,
+                draft_answer=rewritten,
+            )
+        except Exception as rewrite_err:
+            logger.warning(f"[필터] reasoning 제거 재작성 실패({attempt + 1}/2): {rewrite_err}")
+            break
+
+        stage_snapshots.append(_snapshot_answer_stage(f"rewrite_raw_{attempt + 1}", rewritten))
+
+        rewritten = clean_llm_response(filter_llm_response(rewritten, filter_type="general"))
+        rewritten = _strip_reasoning_paragraphs(rewritten, dropped_details_out=dropped_details)
+        stage_snapshots.append(_snapshot_answer_stage(f"rewrite_clean_{attempt + 1}", rewritten))
+
+        if not _contains_reasoning_trace(rewritten):
+            stage_snapshots.append(_snapshot_answer_stage("final", rewritten))
+            _emit_answer_log_once(
+                user_query=user_query,
+                final_mode=f"rewrite_success_{attempt + 1}",
+                stages=stage_snapshots,
+                dropped_details=dropped_details,
+                detected_terms=detected_terms,
+                rewrite_attempts=rewrite_attempts,
+            )
+            return rewritten
+
+    fallback = rewritten or candidate
+    stage_snapshots.append(_snapshot_answer_stage("final", fallback))
+    _emit_answer_log_once(
+        user_query=user_query,
+        final_mode="fallback_reasoning_possible",
+        stages=stage_snapshots,
+        dropped_details=dropped_details,
+        detected_terms=detected_terms,
+        rewrite_attempts=rewrite_attempts,
+    )
+    return fallback
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -557,11 +1586,12 @@ def clean_llm_response(response_text):
         "i need to", "i should", "let me", "let's", "reasoning", "analysis",
         "the user said", "might be asking", "direct query", "call any tools",
         "tools are for", "statement, not a question", "as the ai",
+        "that means", "decimal", "json serializable", "converted to json",
     ]
     meta_reasoning_starts = [
         "check if", "make sure", "keep it", "need to", "i need to", "i should",
         "let me", "let's", "respond", "answer", "use the", "given", "since",
-        "okay,", "wait,", "well,", "so,", "now,",
+        "okay,", "wait,", "well,", "so,", "now,", "hmm,",
     ]
 
     for line in lines:
@@ -657,6 +1687,531 @@ def clean_llm_response(response_text):
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 최신 정보 자동 검색(선제 MCP 조회) 관련 헬퍼
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+_RECENT_TIME_HINTS = (
+    "최신", "최근", "오늘", "지금", "현재", "실시간", "방금", "속보",
+    "이번 주", "이번주", "이번 달", "이번달", "업데이트", "갱신",
+    "latest", "recent", "today", "now", "current", "real-time", "breaking", "update",
+)
+
+_EXTERNAL_WEB_HINTS = (
+    "뉴스", "날씨", "기온", "강수", "미세먼지", "환율", "주가", "증시", "코스피",
+    "금리", "유가", "비트코인", "코인", "경제지표", "대선", "정부 발표",
+    "news", "weather", "temperature", "forecast", "exchange rate", "stock", "market",
+    "inflation", "interest rate", "oil price", "crypto", "bitcoin",
+)
+
+_LOCAL_TIME_ONLY_HINTS = (
+    "현재 시간", "지금 시간", "몇 시", "오늘 날짜", "오늘 요일",
+    "current time", "what time", "today date", "day of week",
+)
+
+_FARM_INTERNAL_HINTS = (
+    "농장", "재배사", "센서", "릴레이", "수위", "수온", "조도", "co2", "습도", "온도",
+    "farm", "house", "relay", "sensor", "greenhouse",
+)
+
+_WEATHER_HINTS = (
+    "날씨", "기온", "강수", "습도", "미세먼지", "weather", "forecast", "temperature", "rain",
+)
+
+_NEWS_HINTS = (
+    "뉴스", "속보", "headline", "news", "breaking",
+)
+
+_FINANCE_HINTS = (
+    "환율", "주가", "증시", "코스피", "코스닥", "금리", "비트코인", "코인", "나스닥",
+    "exchange rate", "stock", "market", "interest rate", "crypto", "bitcoin",
+)
+
+_URL_PATTERN = re.compile(r"(https?://[^\s<>'\"`]+)", re.IGNORECASE)
+
+
+def _extract_urls_from_query(user_query: str) -> List[str]:
+    raw_query = user_query or ""
+    matches = _URL_PATTERN.findall(raw_query)
+    normalized_urls: List[str] = []
+    seen = set()
+    for url in matches:
+        cleaned = url.strip().rstrip(").,!?;\"'")
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized_urls.append(cleaned)
+    return normalized_urls
+
+
+def _sanitize_url_content_text(raw_text: str) -> str:
+    text = raw_text or ""
+    if not text:
+        return ""
+
+    # HTML 문서인 경우 주요 노이즈 제거 후 텍스트 추출
+    if "<html" in text.lower() or "<body" in text.lower() or "<div" in text.lower():
+        text = re.sub(r"(?is)<script[^>]*>.*?</script>", " ", text)
+        text = re.sub(r"(?is)<style[^>]*>.*?</style>", " ", text)
+        text = re.sub(r"(?is)<noscript[^>]*>.*?</noscript>", " ", text)
+        text = re.sub(r"(?is)<!--.*?-->", " ", text)
+        text = re.sub(r"(?is)<[^>]+>", " ", text)
+
+    text = html.unescape(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _collect_url_context_from_query(user_query: str) -> Optional[Dict[str, Any]]:
+    if not _is_true(os.getenv("LLM_AUTO_URL_CONTEXT", "true")):
+        logger.info("[URL컨텍스트] 자동 URL 본문 수집 비활성화(LLM_AUTO_URL_CONTEXT=false)")
+        return None
+
+    urls = _extract_urls_from_query(user_query)
+    if not urls:
+        return None
+
+    from agri_ai_core.src.ai.mcp_client import mcp_fetch_request
+
+    try:
+        max_urls = max(1, min(int(os.getenv("LLM_AUTO_URL_MAX_LINKS", "2")), 5))
+    except Exception:
+        max_urls = 2
+    try:
+        timeout = max(3, min(int(os.getenv("LLM_AUTO_URL_FETCH_TIMEOUT", "20")), 60))
+    except Exception:
+        timeout = 20
+    try:
+        max_chars = max(300, min(int(os.getenv("LLM_AUTO_URL_MAX_CHARS", "6000")), 30000))
+    except Exception:
+        max_chars = 6000
+
+    selected_urls = urls[:max_urls]
+    logger.info(
+        f"[URL컨텍스트] URL 추출={len(urls)} selected={len(selected_urls)} timeout={timeout}s max_chars={max_chars}"
+    )
+    for idx, selected_url in enumerate(selected_urls, start=1):
+        logger.info(f"[URL컨텍스트] target[{idx}]={selected_url}")
+
+    entries: List[Dict[str, Any]] = []
+    failures: List[str] = []
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/json,text/plain,*/*",
+    }
+
+    for idx, url in enumerate(selected_urls, start=1):
+        started_at = time.time()
+        try:
+            result = mcp_fetch_request(
+                url=url,
+                method="GET",
+                headers=headers,
+                timeout=timeout,
+            )
+        except Exception as fetch_err:
+            elapsed = time.time() - started_at
+            error_text = f"url={url} error={fetch_err}"
+            failures.append(error_text)
+            logger.warning(f"[URL컨텍스트] fetch 예외 {idx}/{len(selected_urls)} ({elapsed:.2f}s): {error_text}")
+            continue
+
+        elapsed = time.time() - started_at
+        if not result.get("success"):
+            error_text = str(result.get("text") or "unknown fetch failure")
+            failures.append(f"url={url} error={error_text}")
+            logger.warning(f"[URL컨텍스트] fetch 실패 {idx}/{len(selected_urls)} ({elapsed:.2f}s): {error_text}")
+            continue
+
+        status_code = int(result.get("status_code", 200) or 200)
+        raw_text = ""
+        json_data = result.get("json")
+        if json_data is not None:
+            try:
+                raw_text = json.dumps(json_data, ensure_ascii=False)
+            except Exception:
+                raw_text = str(json_data)
+        if not raw_text:
+            raw_text = str(result.get("text", "") or "")
+
+        cleaned = _sanitize_url_content_text(raw_text)
+        if len(cleaned) > max_chars:
+            cleaned = cleaned[:max_chars] + " ...(truncated)"
+
+        if not cleaned:
+            failures.append(f"url={url} error=empty_content")
+            logger.warning(f"[URL컨텍스트] fetch 성공 but empty content {idx}/{len(selected_urls)} ({elapsed:.2f}s): {url}")
+            continue
+
+        entry = {
+            "url": url,
+            "domain": _extract_domain(url),
+            "status_code": status_code,
+            "content": cleaned,
+            "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        entries.append(entry)
+
+        logger.info(
+            f"[URL컨텍스트] fetch 성공 {idx}/{len(selected_urls)} ({elapsed:.2f}s): status={status_code} chars={len(cleaned)} domain={entry['domain']}"
+        )
+
+    context = {
+        "query": user_query,
+        "urls": selected_urls,
+        "entries": entries,
+        "failures": failures,
+        "collected_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    logger.info(
+        f"[URL컨텍스트] 요약 success_entries={len(entries)} failure_count={len(failures)}"
+    )
+    for idx, entry in enumerate(entries, start=1):
+        logger.info(
+            f"[URL컨텍스트] 본문[{idx}] domain={entry.get('domain')} status={entry.get('status_code')} url={entry.get('url')} chars={len(entry.get('content', ''))}"
+        )
+    if failures:
+        logger.info(f"[URL컨텍스트] 실패 상세: {failures}")
+
+    return context
+
+
+def _format_url_context_for_prompt(context: Dict[str, Any]) -> str:
+    if not context:
+        return ""
+
+    lines = [
+        "다음은 사용자가 제공한 URL에서 직접 수집한 본문입니다.",
+        "URL 본문 근거를 최우선으로 반영하고, 본문에 없는 사실은 추측하지 마세요.",
+        f"- 사용자 질문: {context.get('query', '')}",
+        f"- 수집 시각: {context.get('collected_at', '')}",
+        f"- 대상 URL: {', '.join(context.get('urls', [])[:5])}",
+        "[URL 본문 근거]",
+    ]
+
+    entries = context.get("entries") or []
+    if not entries:
+        lines.append("- 본문 수집 결과가 없습니다. 필요 시 일반 검색 또는 도구를 사용하세요.")
+    else:
+        for idx, entry in enumerate(entries, start=1):
+            lines.append(
+                f"{idx}. URL: {entry.get('url')} (domain={entry.get('domain')}, status={entry.get('status_code')})"
+            )
+            lines.append(f"   내용: {entry.get('content', '')}")
+
+    return "\n".join(lines).strip()
+
+
+def _normalize_text_for_match(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+def _contains_any(normalized_text: str, keywords: Tuple[str, ...]) -> List[str]:
+    matched: List[str] = []
+    for keyword in keywords:
+        candidate = keyword.strip().lower()
+        if candidate and candidate in normalized_text:
+            matched.append(keyword)
+    return matched
+
+
+def _classify_recent_query_category(normalized_query: str) -> str:
+    if _contains_any(normalized_query, _WEATHER_HINTS):
+        return "weather"
+    if _contains_any(normalized_query, _NEWS_HINTS):
+        return "news"
+    if _contains_any(normalized_query, _FINANCE_HINTS):
+        return "finance"
+    return "general"
+
+
+def _detect_recent_web_requirement(user_query: str) -> Dict[str, Any]:
+    normalized = _normalize_text_for_match(user_query)
+    if not normalized:
+        return {
+            "requires_search": False,
+            "reason": "empty_query",
+            "category": "general",
+            "matched_recency": [],
+            "matched_external": [],
+            "matched_internal": [],
+        }
+
+    matched_recency = _contains_any(normalized, _RECENT_TIME_HINTS)
+    matched_external = _contains_any(normalized, _EXTERNAL_WEB_HINTS)
+    matched_internal = _contains_any(normalized, _FARM_INTERNAL_HINTS)
+    matched_local_time = _contains_any(normalized, _LOCAL_TIME_ONLY_HINTS)
+
+    category = _classify_recent_query_category(normalized)
+    has_recency = bool(matched_recency or re.search(r"\b(today|latest|recent|current|now|breaking|update)\b", normalized))
+    has_external_need = bool(matched_external)
+    likely_farm_internal = bool(matched_internal) and not has_external_need
+    local_time_only = bool(matched_local_time) and not has_external_need
+
+    requires_search = (has_external_need or (has_recency and not likely_farm_internal)) and not local_time_only
+
+    reason = "skip"
+    if local_time_only:
+        reason = "local_time_only"
+    elif requires_search and has_external_need:
+        reason = "external_signal_detected"
+    elif requires_search and has_recency:
+        reason = "recency_without_internal_data_source"
+    elif likely_farm_internal:
+        reason = "farm_internal_query"
+
+    return {
+        "requires_search": requires_search,
+        "reason": reason,
+        "category": category,
+        "matched_recency": matched_recency,
+        "matched_external": matched_external,
+        "matched_internal": matched_internal,
+    }
+
+
+def _build_recent_web_queries(user_query: str, category: str) -> List[str]:
+    base_query = re.sub(r"\s+", " ", (user_query or "").strip())
+    base_query = re.sub(r"[?!.]+$", "", base_query).strip()
+    if not base_query:
+        return []
+
+    if not re.search(r"(최신|최근|오늘|현재|실시간|latest|recent|today|current|now)", base_query, re.IGNORECASE):
+        base_query = f"{base_query} 최신"
+
+    candidates: List[str] = [base_query]
+
+    if category == "weather":
+        candidates.extend(
+            [
+                f"{base_query} 기상청",
+                f"{base_query} site:weather.naver.com",
+            ]
+        )
+    elif category == "news":
+        candidates.extend(
+            [
+                f"{base_query} site:news.naver.com",
+                f"{base_query} site:news.google.com",
+            ]
+        )
+    elif category == "finance":
+        candidates.extend(
+            [
+                f"{base_query} 네이버 금융",
+                f"{base_query} site:finance.naver.com",
+            ]
+        )
+    else:
+        candidates.extend(
+            [
+                f"{base_query} site:naver.com",
+                f"{base_query} site:news.naver.com",
+            ]
+        )
+
+    unique_queries: List[str] = []
+    seen = set()
+    for candidate in candidates:
+        normalized = _normalize_text_for_match(candidate)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_queries.append(candidate)
+    return unique_queries
+
+
+def _extract_domain(url: str) -> str:
+    try:
+        parsed = urlparse((url or "").strip())
+        return parsed.netloc.lower() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _normalize_url_for_dedupe(url: str) -> str:
+    if not url:
+        return ""
+    try:
+        parsed = urlparse(url.strip())
+        scheme = (parsed.scheme or "").lower()
+        netloc = (parsed.netloc or "").lower()
+        path = (parsed.path or "").rstrip("/")
+        query = parsed.query or ""
+        return f"{scheme}://{netloc}{path}?{query}"
+    except Exception:
+        return url.strip().lower()
+
+
+def _collect_recent_web_context(user_query: str) -> Optional[Dict[str, Any]]:
+    if not _is_true(os.getenv("LLM_AUTO_RECENT_WEB_CONTEXT", "true")):
+        logger.info("[최신정보] 자동 웹검색 비활성화(LLM_AUTO_RECENT_WEB_CONTEXT=false)")
+        return None
+
+    detection = _detect_recent_web_requirement(user_query)
+    logger.info(
+        "[최신정보] 감지 requires_search=%s reason=%s category=%s recency=%s external=%s internal=%s",
+        detection.get("requires_search"),
+        detection.get("reason"),
+        detection.get("category"),
+        detection.get("matched_recency"),
+        detection.get("matched_external"),
+        detection.get("matched_internal"),
+    )
+
+    if not detection.get("requires_search"):
+        return None
+
+    from agri_ai_core.src.ai.mcp_client import search_web as mcp_search
+
+    queries = _build_recent_web_queries(user_query=user_query, category=detection.get("category", "general"))
+    if not queries:
+        logger.warning("[최신정보] 검색 쿼리 생성 실패")
+        return None
+
+    try:
+        max_queries = max(1, min(int(os.getenv("LLM_AUTO_RECENT_WEB_MAX_QUERIES", "3")), 5))
+    except Exception:
+        max_queries = 3
+
+    try:
+        per_query_limit = max(1, min(int(os.getenv("LLM_AUTO_RECENT_WEB_PER_QUERY_LIMIT", "3")), 5))
+    except Exception:
+        per_query_limit = 3
+
+    try:
+        max_total_results = max(1, min(int(os.getenv("LLM_AUTO_RECENT_WEB_MAX_RESULTS", "8")), 12))
+    except Exception:
+        max_total_results = 8
+
+    selected_queries = queries[:max_queries]
+    logger.info(
+        f"[최신정보] MCP 웹검색 시작 query_count={len(selected_queries)} per_query_limit={per_query_limit} queries={selected_queries}"
+    )
+
+    merged_results: List[Dict[str, Any]] = []
+    seen_urls = set()
+    failures: List[str] = []
+
+    for idx, query in enumerate(selected_queries, start=1):
+        started_at = time.time()
+        try:
+            result = mcp_search(query, max_results=per_query_limit)
+        except Exception as search_err:
+            elapsed = time.time() - started_at
+            error_text = f"query={query} error={search_err}"
+            failures.append(error_text)
+            logger.warning(f"[최신정보] MCP 검색 예외 {idx}/{len(selected_queries)} ({elapsed:.2f}s): {error_text}")
+            continue
+
+        elapsed = time.time() - started_at
+        if not result.get("success"):
+            error_text = result.get("error", "unknown error")
+            failures.append(f"query={query} error={error_text}")
+            logger.warning(f"[최신정보] MCP 검색 실패 {idx}/{len(selected_queries)} ({elapsed:.2f}s): {error_text}")
+            continue
+
+        raw_items = result.get("results", [])
+        if not isinstance(raw_items, list):
+            raw_items = []
+
+        logger.info(f"[최신정보] MCP 검색 성공 {idx}/{len(selected_queries)} ({elapsed:.2f}s): {len(raw_items)}건")
+
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title", "")).strip() or query
+            snippet = str(item.get("snippet", "")).strip()
+            url = str(item.get("url", "")).strip()
+            normalized_url = _normalize_url_for_dedupe(url)
+            dedupe_key = normalized_url or f"{title}|{snippet[:120]}".lower()
+            if dedupe_key in seen_urls:
+                continue
+            seen_urls.add(dedupe_key)
+
+            merged_results.append(
+                {
+                    "title": title[:220],
+                    "snippet": snippet[:420],
+                    "url": url or "#",
+                    "domain": _extract_domain(url),
+                    "source_query": query,
+                }
+            )
+            if len(merged_results) >= max_total_results:
+                break
+        if len(merged_results) >= max_total_results:
+            break
+
+    context = {
+        "user_query": user_query,
+        "searched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "category": detection.get("category"),
+        "reason": detection.get("reason"),
+        "queries": selected_queries,
+        "results": merged_results,
+        "failures": failures,
+    }
+
+    preview = [
+        {
+            "title": item.get("title"),
+            "domain": item.get("domain"),
+            "url": item.get("url"),
+        }
+        for item in merged_results[:3]
+    ]
+    logger.info(
+        f"[최신정보] MCP 웹검색 요약 success_results={len(merged_results)} failure_count={len(failures)} preview={json.dumps(preview, ensure_ascii=False)}"
+    )
+    for idx, item in enumerate(merged_results, start=1):
+        logger.info(
+            f"[최신정보] 결과[{idx}] source_query={item.get('source_query')} domain={item.get('domain')} title={item.get('title')} url={item.get('url')}"
+        )
+    if failures:
+        logger.info(f"[최신정보] 실패 상세: {failures}")
+
+    return context
+
+
+def _format_recent_web_context_for_prompt(context: Dict[str, Any]) -> str:
+    if not context:
+        return ""
+
+    lines = [
+        "다음은 시스템이 자동 수집한 최신 웹 검색 근거입니다.",
+        "반드시 아래 근거를 우선 반영하고, 근거가 부족하면 추측하지 말고 부족하다고 명시하세요.",
+        f"- 사용자 질문: {context.get('user_query', '')}",
+        f"- 검색 시각: {context.get('searched_at', '')}",
+        f"- 검색 분류: {context.get('category', 'general')}",
+        f"- 사용 쿼리: {', '.join(context.get('queries', [])[:5])}",
+        "[검색 결과]",
+    ]
+
+    results = context.get("results") or []
+    if not results:
+        lines.append("- 수집된 결과가 없습니다. 필요 시 search_web 도구를 다시 호출하세요.")
+    else:
+        for idx, item in enumerate(results, start=1):
+            title = str(item.get("title", "")).strip()
+            snippet = str(item.get("snippet", "")).strip()
+            domain = str(item.get("domain", "")).strip() or "unknown"
+            url = str(item.get("url", "")).strip() or "#"
+            lines.append(f"{idx}. 제목: {title}")
+            lines.append(f"   요약: {snippet}")
+            lines.append(f"   출처: {domain}")
+            lines.append(f"   링크: {url}")
+
+    return "\n".join(lines).strip()
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # Tool Use 지원 LLM 응답 생성
 # Ollama Function Calling을 사용하여 도구를 자동으로 선택하고 실행
 #
@@ -691,12 +2246,26 @@ def get_llm_response_with_tools(user_query: str, farm_name: str = None,
         model_name = _get_model_name()
         tools = get_available_tools()
         system_prompt = get_system_prompt_with_tools(farm_name)
+        url_context = _collect_url_context_from_query(user_query)
+        recent_web_context = _collect_recent_web_context(user_query)
 
         # 메시지 히스토리
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_query}
-        ]
+        messages = [{"role": "system", "content": system_prompt}]
+        if url_context:
+            url_context_prompt = _format_url_context_for_prompt(url_context)
+            if url_context_prompt:
+                messages.append({"role": "system", "content": url_context_prompt})
+                logger.info(
+                    f"[URL컨텍스트] 프롬프트 주입 완료 entries={len(url_context.get('entries', []))} prompt_len={len(url_context_prompt)}"
+                )
+        if recent_web_context:
+            context_prompt = _format_recent_web_context_for_prompt(recent_web_context)
+            if context_prompt:
+                messages.append({"role": "system", "content": context_prompt})
+                logger.info(
+                    f"[최신정보] 웹검색 컨텍스트 주입 완료 results={len(recent_web_context.get('results', []))} prompt_len={len(context_prompt)}"
+                )
+        messages.append({"role": "user", "content": user_query})
 
         logger.info(f"[Tool Use] 질문: {user_query[:100]}...")
 
@@ -705,7 +2274,7 @@ def get_llm_response_with_tools(user_query: str, farm_name: str = None,
             logger.info(f"[Tool Use] Iteration {iteration + 1}/{max_tool_iterations}")
 
             # LLM 호출 (도구 포함)
-            response = ollama.chat(
+            response = _ollama_chat(
                 model=model_name,
                 messages=messages,
                 tools=tools,
@@ -720,32 +2289,41 @@ def get_llm_response_with_tools(user_query: str, farm_name: str = None,
 
             # 응답에서 메시지 추출
             if hasattr(response, 'message'):
-                assistant_message = response.message
+                assistant_message_raw = response.message
             elif isinstance(response, dict) and 'message' in response:
-                assistant_message = response['message']
+                assistant_message_raw = response['message']
             else:
                 logger.error("LLM 응답 형식 오류")
                 return "죄송합니다. 응답을 생성할 수 없습니다."
+
+            assistant_message = _normalize_assistant_message(assistant_message_raw)
 
             # 메시지 히스토리에 추가
             messages.append(assistant_message)
 
             # 도구 호출이 없으면 최종 답변 반환
-            if not hasattr(assistant_message, 'tool_calls') or not assistant_message.tool_calls:
-                final_answer = assistant_message.content if hasattr(assistant_message, 'content') else str(assistant_message)
+            tool_calls = _extract_tool_calls(assistant_message)
+            if not tool_calls:
+                final_answer = assistant_message.get("content", "")
                 logger.info(f"[Tool Use] 최종 답변 생성 완료 ({iteration + 1}회 반복)")
-
-                # 응답 필터링
-                filtered_answer = filter_llm_response(final_answer, filter_type="general")
-                return clean_llm_response(filtered_answer)
+                return _finalize_user_facing_answer(
+                    model_name=model_name,
+                    user_query=user_query,
+                    farm_name=farm_name,
+                    raw_answer=final_answer,
+                )
 
             # 도구 호출 처리
-            logger.info(f"[Tool Use] {len(assistant_message.tool_calls)}개 도구 호출")
+            logger.info(f"[Tool Use] {len(tool_calls)}개 도구 호출")
 
-            for tool_call in assistant_message.tool_calls:
-                tool_name = tool_call.function.name
-                tool_args = tool_call.function.arguments
+            for tool_call in tool_calls:
+                tool_name = _extract_tool_name(tool_call)
+                tool_args = _extract_tool_arguments(tool_call)
+                if not tool_name:
+                    logger.warning(f"[Tool Use] 도구 이름 파싱 실패: {tool_call}")
+                    continue
 
+                tool_args = _normalize_tool_arguments(tool_name, tool_args)
                 logger.info(f"[Tool Use] 실행: {tool_name}({tool_args})")
 
                 # 도구 실행
@@ -765,16 +2343,28 @@ def get_llm_response_with_tools(user_query: str, farm_name: str = None,
         # 마지막 메시지가 assistant 메시지면 그것을 반환
         for msg in reversed(messages):
             if isinstance(msg, dict) and msg.get("role") == "assistant":
-                return clean_llm_response(
-                    msg.get("content", "죄송합니다. 응답을 완료할 수 없습니다.")
+                return _finalize_user_facing_answer(
+                    model_name=model_name,
+                    user_query=user_query,
+                    farm_name=farm_name,
+                    raw_answer=msg.get("content", "죄송합니다. 응답을 완료할 수 없습니다."),
                 )
             elif hasattr(msg, 'content') and hasattr(msg, 'role'):
                 if msg.role == "assistant":
-                    return clean_llm_response(msg.content)
+                    return _finalize_user_facing_answer(
+                        model_name=model_name,
+                        user_query=user_query,
+                        farm_name=farm_name,
+                        raw_answer=msg.content,
+                    )
 
         return "죄송합니다. 응답을 생성할 수 없습니다."
 
     except Exception as e:
-        logger.error(f"Tool Use LLM 응답 생성 중 오류: {e}")
-        logger.error(traceback.format_exc())
+        if _is_connection_related_error(e):
+            logger.warning(f"Tool Use LLM 응답 생성 실패(연결/환경): {e}")
+            return "죄송합니다. 현재 LLM 서버 연결이 불안정합니다. 잠시 후 다시 시도해 주세요."
+        else:
+            logger.error(f"Tool Use LLM 응답 생성 중 오류: {e}")
+            logger.error(traceback.format_exc())
         return f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}"

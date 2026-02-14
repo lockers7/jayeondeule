@@ -39,7 +39,7 @@ def index() -> rx.Component:
                 rx.heading(
                     "🍄 자연들에 상황버섯 AI",
                     size="7",
-                    color="#0B3D91",
+                    color="#1B5E20",
                     margin="0",
                 ),
                 rx.text(

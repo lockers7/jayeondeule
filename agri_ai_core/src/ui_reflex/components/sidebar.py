@@ -36,7 +36,7 @@ def sidebar() -> rx.Component:
         rx.heading(
             "🍄 자연들에",
             size="6",
-            color="#0B3D91",
+            color="#1B5E20",
             margin_bottom="8px",
         ),
         rx.text(
