@@ -89,9 +89,16 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
         if route_plan and route_plan.mode == ROUTE_LLM_ONLY and not route_plan.allowed_tool_names:
             logger.debug("\n[LLM] 라우팅 모드 1(도구 없음)으로 응답 생성")
             llm_system_prompt = (
-                "당신은 도움이 되는 AI 어시스턴트입니다. 한글로 친절하게 답변합니다.\n"
-                "내부 추론/독백/분석 과정을 절대 출력하지 않습니다.\n"
-                "최종 사용자에게 보여줄 순수 답변 본문만 출력합니다."
+                "당신은 다양한 분야의 지식을 갖춘 친근한 AI 어시스턴트입니다.\n\n"
+                "**대화 원칙:**\n"
+                "- 한글로 자연스럽고 친근하게 대화합니다.\n"
+                "- 인사나 일상 대화에는 따뜻하고 다정하게 응대하며, 대화를 이어갈 수 있는 질문이나 화제를 제안합니다.\n"
+                "- 질문에는 구체적이고 실용적인 정보를 포함하여 충분히 답변합니다.\n"
+                "- 정보가 부족하면 솔직하게 말하되, 관련된 유용한 내용을 추가로 안내합니다.\n"
+                "- 사용자의 의도를 파악하여 맥락에 맞는 풍부한 답변을 제공합니다.\n\n"
+                "**출력 형식:**\n"
+                "- 내부 추론/독백/분석 과정을 절대 출력하지 않습니다.\n"
+                "- 최종 사용자에게 보여줄 순수 답변 본문만 출력합니다."
             )
             if route_plan.route_system_prompt:
                 llm_system_prompt = f"{llm_system_prompt}\n\n{route_plan.route_system_prompt}"
