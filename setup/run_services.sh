@@ -41,6 +41,15 @@ OLLAMA_MODEL="${MODEL_NAME:-qwen3:30b-a3b}"
 # 로그 파일 경로
 LOG_DIR="${LOG_PATH:-/workspace/jayeondeule/logs}"
 mkdir -p "$LOG_DIR"
+SERVICE_LOG="$LOG_DIR/service.log"
+
+# 서비스 로그 함수 (콘솔 + 로그 파일 동시 기록)
+log_msg() {
+    local ts
+    ts="$(date '+%Y-%m-%d %H:%M:%S')"
+    echo "[$ts] $*"
+    echo "[$ts] $*" >> "$SERVICE_LOG"
+}
 
 # Reflex 실행 환경 설정
 REFLEX_ENV="${REFLEX_ENV:-prod}"
@@ -126,24 +135,38 @@ wait_reflex_ready() {
 }
 
 start_ollama() {
-    echo "Ollama 시작 중 (모델: $OLLAMA_MODEL)..."
+    log_msg "[Ollama] 시작 중 (모델: $OLLAMA_MODEL)..."
+
+    # systemd ollama 서비스 먼저 중지 (자동 재시작 방지)
+    if systemctl is-active ollama.service >/dev/null 2>&1; then
+        log_msg "[Ollama] systemd ollama.service 중지 중..."
+        sudo systemctl stop ollama.service 2>/dev/null || true
+        sleep 1
+        log_msg "[Ollama] systemd ollama.service 중지 완료"
+    fi
 
     # 기존 ollama 프로세스 종료
     if pgrep -x "ollama" >/dev/null 2>&1; then
-        echo "  기존 Ollama 프로세스 종료 중..."
+        log_msg "[Ollama] 기존 프로세스 종료 중 (PID: $(pgrep -x ollama | tr '\n' ','))..."
         pkill -x "ollama" 2>/dev/null || true
         sleep 2
         # 강제 종료 필요시
         if pgrep -x "ollama" >/dev/null 2>&1; then
+            log_msg "[Ollama] 강제 종료(SIGKILL) 중..."
             pkill -9 -x "ollama" 2>/dev/null || true
             sleep 1
         fi
+        log_msg "[Ollama] 기존 프로세스 종료 완료"
     fi
 
-    # systemd ollama 서비스 비활성화 (충돌 방지)
-    if systemctl is-active ollama.service >/dev/null 2>&1; then
-        echo "  systemd ollama 서비스 중지 중..."
-        sudo systemctl stop ollama.service 2>/dev/null || true
+    # 포트 해제 확인
+    local port_wait=0
+    while is_port_listening 11434 && [ "$port_wait" -lt 10 ]; do
+        sleep 1
+        port_wait=$((port_wait + 1))
+    done
+    if [ "$port_wait" -gt 0 ]; then
+        log_msg "[Ollama] 포트 11434 해제 대기 ${port_wait}s"
     fi
 
     # ollama serve 백그라운드 실행
@@ -157,17 +180,18 @@ start_ollama() {
     local waited=0
     while [ "$waited" -lt 15 ]; do
         if is_port_listening 11434; then
-            echo "Ollama 시작됨 (PID: $OLLAMA_PID_NUM, Port: 11434)"
+            log_msg "[Ollama] 시작됨 (PID: $OLLAMA_PID_NUM, Port: 11434, 대기: ${waited}s)"
             # 모델 사전 로드
-            echo "  모델 로드 중: $OLLAMA_MODEL ..."
+            log_msg "[Ollama] 모델 pull 중: $OLLAMA_MODEL ..."
             $OLLAMA_BIN pull "$OLLAMA_MODEL" >> "$LOG_DIR/ollama.log" 2>&1 || true
+            log_msg "[Ollama] 모델 pull 완료: $OLLAMA_MODEL"
             return 0
         fi
         sleep 1
         waited=$((waited + 1))
     done
 
-    echo "Ollama 시작 실패 (PID: $OLLAMA_PID_NUM)"
+    log_msg "[Ollama] 시작 실패 (PID: $OLLAMA_PID_NUM, 15s 타임아웃)"
     return 1
 }
 
@@ -186,9 +210,11 @@ start_reflex_ui() {
 
     # Reflex 초기화 (최초 1회)
     if [ ! -d "/workspace/jayeondeule/agri_ai_core/.web" ]; then
+        log_msg "[Reflex] 초기화 중 (reflex init)..."
         $REFLEX_BIN init --template blank >> "$LOG_DIR/reflex.log" 2>&1
     fi
 
+    log_msg "[Reflex] 시작 중 (모드: $REFLEX_ENV)..."
     if [ "$REFLEX_ENV" = "prod" ]; then
         $REFLEX_BIN run --env prod --single-port --frontend-port 3000 \
             >> "$LOG_DIR/reflex.log" 2>&1 &
@@ -200,10 +226,10 @@ start_reflex_ui() {
     echo $REFLEX_PID_NUM > "$REFLEX_PID"
 
     if wait_reflex_ready 75; then
-        echo "Reflex UI 시작됨 (PID: $REFLEX_PID_NUM)"
+        log_msg "[Reflex] 시작됨 (PID: $REFLEX_PID_NUM, Port: 3000)"
     else
-        echo "Reflex UI 시작 실패 (PID: $REFLEX_PID_NUM)"
-        echo "최근 로그:"
+        log_msg "[Reflex] 시작 실패 (PID: $REFLEX_PID_NUM)"
+        log_msg "[Reflex] 최근 로그:"
         tail -n 30 "$LOG_DIR/reflex.log" || true
         return 1
     fi
@@ -213,15 +239,18 @@ start_reflex_ui() {
 # 프로세스 종료 핸들러
 # -------------------------------------------------------------------
 cleanup() {
-    echo "서비스 종료 중..."
+    log_msg "========== 서비스 종료 시작 =========="
 
     # Reflex 종료
     if [ -f "$REFLEX_PID" ]; then
         REFLEX_PID_NUM=$(cat "$REFLEX_PID")
         if kill -0 "$REFLEX_PID_NUM" 2>/dev/null; then
-            echo "Reflex 종료 중 (PID: $REFLEX_PID_NUM)..."
+            log_msg "[Reflex] 종료 중 (PID: $REFLEX_PID_NUM)..."
             kill "$REFLEX_PID_NUM"
             wait "$REFLEX_PID_NUM" 2>/dev/null || true
+            log_msg "[Reflex] 종료 완료"
+        else
+            log_msg "[Reflex] 이미 종료됨 (PID: $REFLEX_PID_NUM)"
         fi
         rm -f "$REFLEX_PID"
     fi
@@ -233,9 +262,12 @@ cleanup() {
     if [ -f "$SCHEDULER_PID" ]; then
         SCHEDULER_PID_NUM=$(cat "$SCHEDULER_PID")
         if kill -0 "$SCHEDULER_PID_NUM" 2>/dev/null; then
-            echo "스케줄러 종료 중 (PID: $SCHEDULER_PID_NUM)..."
+            log_msg "[스케줄러] 종료 중 (PID: $SCHEDULER_PID_NUM)..."
             kill "$SCHEDULER_PID_NUM"
             wait "$SCHEDULER_PID_NUM" 2>/dev/null || true
+            log_msg "[스케줄러] 종료 완료"
+        else
+            log_msg "[스케줄러] 이미 종료됨 (PID: $SCHEDULER_PID_NUM)"
         fi
         rm -f "$SCHEDULER_PID"
     fi
@@ -244,9 +276,12 @@ cleanup() {
     if [ -f "$API_PID" ]; then
         API_PID_NUM=$(cat "$API_PID")
         if kill -0 "$API_PID_NUM" 2>/dev/null; then
-            echo "REST API 종료 중 (PID: $API_PID_NUM)..."
+            log_msg "[REST API] 종료 중 (PID: $API_PID_NUM)..."
             kill "$API_PID_NUM"
             wait "$API_PID_NUM" 2>/dev/null || true
+            log_msg "[REST API] 종료 완료"
+        else
+            log_msg "[REST API] 이미 종료됨 (PID: $API_PID_NUM)"
         fi
         rm -f "$API_PID"
     fi
@@ -255,16 +290,19 @@ cleanup() {
     if [ -f "$OLLAMA_PID" ]; then
         OLLAMA_PID_NUM=$(cat "$OLLAMA_PID")
         if kill -0 "$OLLAMA_PID_NUM" 2>/dev/null; then
-            echo "Ollama 종료 중 (PID: $OLLAMA_PID_NUM)..."
+            log_msg "[Ollama] 종료 중 (PID: $OLLAMA_PID_NUM)..."
             kill "$OLLAMA_PID_NUM"
             wait "$OLLAMA_PID_NUM" 2>/dev/null || true
+            log_msg "[Ollama] 종료 완료"
+        else
+            log_msg "[Ollama] 이미 종료됨 (PID: $OLLAMA_PID_NUM)"
         fi
         rm -f "$OLLAMA_PID"
     fi
     # 잔존 ollama 프로세스 정리
     pkill -x "ollama" 2>/dev/null || true
 
-    echo "모든 서비스 종료 완료"
+    log_msg "========== 모든 서비스 종료 완료 =========="
     exit 0
 }
 
@@ -274,52 +312,45 @@ trap cleanup SIGTERM SIGINT
 # -------------------------------------------------------------------
 # 서비스 시작
 # -------------------------------------------------------------------
-echo "=========================================="
-echo "  AgriAI Core 서비스 시작"
-echo "  Reflex UI (모드: $REFLEX_ENV)"
-echo "=========================================="
-echo ""
+log_msg "========== AgriAI Core 서비스 시작 =========="
+log_msg "  Reflex 모드: $REFLEX_ENV"
+log_msg "  Ollama 모델: $OLLAMA_MODEL"
 
 dns_health_check
 
-# Ollama 시작 (LLM 서버 - 가장 먼저 시작)
+# [1/4] Ollama 시작 (LLM 서버 - 가장 먼저 시작)
 start_ollama
 
-# 백그라운드 서비스 시작 (ChromaDB 연결, 스케줄러)
-echo "백그라운드 서비스 시작 중 (스케줄러)..."
+# [2/4] 스케줄러 시작
+log_msg "[스케줄러] 시작 중..."
 $PYTHON_BIN -m agri_ai_core.scheduler >> "$LOG_DIR/scheduler.log" 2>&1 &
 SCHEDULER_PID_NUM=$!
 echo $SCHEDULER_PID_NUM > "$SCHEDULER_PID"
-echo "백그라운드 서비스 시작됨 (PID: $SCHEDULER_PID_NUM)"
+log_msg "[스케줄러] 시작됨 (PID: $SCHEDULER_PID_NUM)"
 
 # 초기화 완료 대기
 sleep 3
 
-# REST API 시작
+# [3/4] REST API 시작
 API_PORT="${API_PORT:-8002}"
-echo "REST API 시작 중..."
+log_msg "[REST API] 시작 중 (Port: $API_PORT)..."
 $PYTHON_BIN -m agri_ai_core.api >> "$LOG_DIR/api.log" 2>&1 &
 API_PID_NUM=$!
 echo $API_PID_NUM > "$API_PID"
-echo "REST API 시작됨 (PID: $API_PID_NUM, Port: $API_PORT)"
+log_msg "[REST API] 시작됨 (PID: $API_PID_NUM, Port: $API_PORT)"
 
-# Reflex UI 시작
-echo "Reflex UI 시작 중..."
+# [4/4] Reflex UI 시작
 start_reflex_ui
-if [ "$REFLEX_ENV" = "prod" ]; then
-    echo "  - Reflex: http://0.0.0.0:3000 (프로덕션 모드)"
-else
-    echo "  - Reflex Frontend: http://0.0.0.0:3000"
-    echo "  - Reflex Backend: http://0.0.0.0:8001"
-fi
-echo "  - REST API: http://0.0.0.0:${API_PORT}"
-echo "  - Ollama: http://0.0.0.0:11434 (모델: $OLLAMA_MODEL)"
 
-echo ""
-echo "=========================================="
-echo "  서비스 시작 완료"
-echo "=========================================="
-echo ""
+log_msg "========== 서비스 시작 완료 =========="
+if [ "$REFLEX_ENV" = "prod" ]; then
+    log_msg "  Reflex:   http://0.0.0.0:3000 (프로덕션)"
+else
+    log_msg "  Reflex FE: http://0.0.0.0:3000"
+    log_msg "  Reflex BE: http://0.0.0.0:8001"
+fi
+log_msg "  REST API: http://0.0.0.0:${API_PORT}"
+log_msg "  Ollama:   http://0.0.0.0:11434 (모델: $OLLAMA_MODEL)"
 
 # 모든 프로세스가 종료될 때까지 대기
 wait

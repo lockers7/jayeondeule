@@ -24,9 +24,12 @@ async def verify_api_key(api_key: str = Security(api_key_header)):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("AgriAI REST API 시작")
+    api_port = os.getenv("API_PORT", "8002")
+    api_host = os.getenv("API_HOST", "0.0.0.0")
+    api_key_set = "설정됨" if API_KEY else "미설정(인증 없음)"
+    logger.info("[REST API] 시작 (Host=%s, Port=%s, API Key=%s)", api_host, api_port, api_key_set)
     yield
-    logger.info("AgriAI REST API 종료")
+    logger.info("[REST API] 종료")
 
 
 app = FastAPI(

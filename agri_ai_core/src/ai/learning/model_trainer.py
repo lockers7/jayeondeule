@@ -6,7 +6,6 @@
 # verify_chroma_connection: ChromaDB 연결 상태 확인
 # create_default_crop_entry: 기본 작물 데이터 생성
 # create_default_units_entry: 기본 장치 데이터 생성
-# supplement_optimal_conditions: 최적 조건 보완 데이터 병합
 # process_farm_hour_data: 농장별 시간대 데이터 처리
 # update_ollama_model: LLM 모델 학습
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -114,47 +113,6 @@ def create_default_units_entry(farm_id, house_id="0"):
         "relay_status": {}
     }
 
-
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 최적 조건 보완
-# --->
-# 최적 조건 보완 데이터 병합
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def supplement_optimal_conditions(original, supplement):
-    if not original:
-        return supplement
-
-    if not supplement:
-        return original
-
-    result = original.copy()
-
-    # 주요 필드가 0이거나 비어있는 경우 보완 데이터로 대체
-    for time_of_day in ["day", "night"]:
-        for field in ["temperature", "humidity"]:
-            if field in result and time_of_day in result[field]:
-                for measure in ["min", "max", "optimal"]:
-                    if (result[field][time_of_day][measure] == 0 and
-                        supplement.get(field, {}).get(time_of_day, {}).get(measure, 0) != 0):
-                        result[field][time_of_day][measure] = supplement[field][time_of_day][measure]
-
-    # 다른 센서 필드 확인
-    for field in ["co2", "water_temperature", "light_level"]:
-        if field in result:
-            for measure in ["min", "max", "optimal"]:
-                if (result[field][measure] == 0 and
-                    supplement.get(field, {}).get(measure, 0) != 0):
-                    result[field][measure] = supplement[field][measure]
-
-    # 릴레이 설정
-    if not result.get("relay_settings") and supplement.get("relay_settings"):
-        result["relay_settings"] = supplement["relay_settings"]
-    elif result.get("relay_settings") and supplement.get("relay_settings"):
-        for relay_key, relay_setting in supplement["relay_settings"].items():
-            if relay_key not in result["relay_settings"]:
-                result["relay_settings"][relay_key] = relay_setting
-
-    return result
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

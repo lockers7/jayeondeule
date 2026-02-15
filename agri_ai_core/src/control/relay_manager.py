@@ -6,7 +6,6 @@
 # set_relay_value: 릴레이 값 설정
 # get_relay_status: 릴레이 상태 조회
 # batch_relay_control: 릴레이 일괄 제어
-# auto_control_by_environment: 환경 기반 릴레이 자동 제어
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import traceback
 from datetime import datetime
@@ -241,85 +240,3 @@ def batch_relay_control(farm_id, house_id, relay_commands):
         }
 
 
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 환경 기반 릴레이 자동 제어
-# 환경 데이터 기반 릴레이 자동 제어
-#
-# Args:
-#     farm_id: 농장 ID
-#     house_id: 재배사 ID
-#     sensor_data: 센서 데이터
-#     optimal_conditions: 최적 환경 조건
-#
-# Returns:
-#     dict: 제어 결과
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def auto_control_by_environment(farm_id, house_id, sensor_data, optimal_conditions):
-    try:
-        relay_commands = []
-        current_hour = datetime.now().hour
-        is_daytime = 6 <= current_hour < 18
-
-        # 온도 기반 제어
-        indoor_temp = sensor_data.get("indoor_temperature", 0)
-        optimal_temp = optimal_conditions.get("temperature", {})
-
-        if is_daytime:
-            temp_min = optimal_temp.get("day", {}).get("min", 18)
-            temp_max = optimal_temp.get("day", {}).get("max", 28)
-        else:
-            temp_min = optimal_temp.get("night", {}).get("min", 15)
-            temp_max = optimal_temp.get("night", {}).get("max", 22)
-
-        # 온도가 낮으면 히터 켜기
-        if indoor_temp < temp_min:
-            relay_commands.append({"relay_key": "indoor_heater_flag", "state": True})
-            relay_commands.append({"relay_key": "water_heater_flag", "state": True})
-        # 온도가 높으면 환풍기 켜기
-        elif indoor_temp > temp_max:
-            relay_commands.append({"relay_key": "exhaust_fan_flag", "state": True})
-            relay_commands.append({"relay_key": "indoor_heater_flag", "state": False})
-
-        # 습도 기반 제어
-        indoor_humidity = sensor_data.get("indoor_humidity", 0)
-        optimal_humidity = optimal_conditions.get("humidity", {})
-
-        if is_daytime:
-            humidity_min = optimal_humidity.get("day", {}).get("min", 60)
-            humidity_max = optimal_humidity.get("day", {}).get("max", 80)
-        else:
-            humidity_min = optimal_humidity.get("night", {}).get("min", 65)
-            humidity_max = optimal_humidity.get("night", {}).get("max", 85)
-
-        # 습도가 낮으면 가습 켜기
-        if indoor_humidity < humidity_min:
-            relay_commands.append({"relay_key": "fog_occurs_flag", "state": True})
-        # 습도가 높으면 환풍기 켜기
-        elif indoor_humidity > humidity_max:
-            relay_commands.append({"relay_key": "exhaust_fan_flag", "state": True})
-            relay_commands.append({"relay_key": "fog_occurs_flag", "state": False})
-
-        # 조명 제어 (주간에만)
-        if is_daytime:
-            relay_commands.append({"relay_key": "lighting_flag", "state": True})
-        else:
-            relay_commands.append({"relay_key": "lighting_flag", "state": False})
-
-        # 릴레이 일괄 제어 실행
-        if relay_commands:
-            result = batch_relay_control(farm_id, house_id, relay_commands)
-            logger.info(f"환경 기반 자동 제어 실행: {result}")
-            return result
-        else:
-            return {
-                "success": True,
-                "message": "현재 환경이 최적 범위 내에 있어 제어가 필요하지 않습니다."
-            }
-
-    except Exception as e:
-        logger.error(f"환경 기반 자동 제어 중 오류: {e}")
-        logger.error(traceback.format_exc())
-        return {
-            "success": False,
-            "message": f"오류 발생: {str(e)}"
-        }

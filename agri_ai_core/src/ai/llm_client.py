@@ -422,42 +422,74 @@ def _ollama_chat(
     keep_alive: Optional[str] = None,
 ):
     errors: List[str] = []
+    msg_count = len(messages or [])
+    tool_count = len(tools or [])
+    t_start = time.time()
+
+    logger.info(
+        f"[Ollama요청] model={model} messages={msg_count} tools={tool_count} "
+        f"options={{{', '.join(f'{k}={v}' for k, v in (options or {}).items())}}}"
+    )
 
     if _use_ollama_package():
         try:
-            return _pkg_ollama_chat(
+            result = _pkg_ollama_chat(
                 model=model,
                 messages=messages,
                 options=options,
                 tools=tools,
                 keep_alive=keep_alive,
             )
+            elapsed = time.time() - t_start
+            resp_content = _extract_message_content(result)
+            resp_tool_calls = _extract_tool_calls(
+                _normalize_assistant_message(
+                    result.message if hasattr(result, 'message') else (result.get('message', {}) if isinstance(result, dict) else {})
+                )
+            )
+            logger.info(
+                f"[Ollama응답] transport=package ({elapsed:.1f}s) "
+                f"답변길이={len(resp_content)}자 tool_calls={len(resp_tool_calls)}개"
+            )
+            return result
         except Exception as pkg_err:
             logger.warning(f"Ollama chat 호출 실패(package) -> MCP/direct fallback: {pkg_err}")
             errors.append(str(pkg_err))
 
     if _use_mcp_fetch():
         try:
-            return _mcp_ollama_chat(
+            result = _mcp_ollama_chat(
                 model=model,
                 messages=messages,
                 options=options,
                 tools=tools,
                 keep_alive=keep_alive,
             )
+            elapsed = time.time() - t_start
+            resp_content = _extract_message_content(result)
+            logger.info(
+                f"[Ollama응답] transport=MCP ({elapsed:.1f}s) 답변길이={len(resp_content)}자"
+            )
+            return result
         except Exception as mcp_err:
             logger.warning(f"Ollama chat 호출 실패(MCP) -> direct fallback: {mcp_err}")
             errors.append(str(mcp_err))
 
     if _is_direct_ollama_enabled():
         try:
-            return _direct_ollama_chat(
+            result = _direct_ollama_chat(
                 model=model,
                 messages=messages,
                 options=options,
                 tools=tools,
                 keep_alive=keep_alive,
             )
+            elapsed = time.time() - t_start
+            resp_content = _extract_message_content(result)
+            logger.info(
+                f"[Ollama응답] transport=direct ({elapsed:.1f}s) 답변길이={len(resp_content)}자"
+            )
+            return result
         except Exception as direct_err:
             errors.append(str(direct_err))
             raise
@@ -805,6 +837,9 @@ def get_llm_response(system_prompt=None, user_prompt=None, temperature=0.7,
         max_retries = 2
         retry_count = 0
         model_name = _get_model_name()
+        t_start = time.time()
+        prompt_preview = (user_prompt or "")[:80]
+        logger.info(f"[LLM응답] 시작 model={model_name} query_type={query_type} prompt=\"{prompt_preview}\"")
 
         while retry_count <= max_retries:
             try:
@@ -824,7 +859,7 @@ def get_llm_response(system_prompt=None, user_prompt=None, temperature=0.7,
                     model=model_name,
                     messages=message_payload,
                     options=options_payload,
-                    keep_alive='1h'  # 모델을 1시간 동안 메모리에 유지
+                    keep_alive='1h'
                 )
                 break
             except Exception as retry_err:
@@ -835,10 +870,14 @@ def get_llm_response(system_prompt=None, user_prompt=None, temperature=0.7,
                 time.sleep(1)
 
         response_text = _extract_message_content(response) or "응답을 생성할 수 없습니다."
+        llm_elapsed = time.time() - t_start
 
         if not response_text or len(response_text.strip()) == 0:
             logger.error("빈 응답 텍스트")
             response_text = "LLM이 빈 응답을 반환했습니다."
+
+        logger.info(f"[LLM응답] 완료 ({llm_elapsed:.1f}s) 원본길이={len(response_text)}자")
+        logger.info(f"[LLM응답-원본내용]\n{response_text}")
 
         # 응답 필터링
         if query_type == "relay_llm_control":
@@ -848,6 +887,9 @@ def get_llm_response(system_prompt=None, user_prompt=None, temperature=0.7,
         cleaned_response = clean_llm_response(filtered_response)
         cleaned_response = _strip_reasoning_paragraphs(cleaned_response)
         cleaned_response = _strip_non_korean_reasoning_for_korean_query(cleaned_response, user_prompt or "")
+        logger.info(f"[LLM응답] 필터링 후 길이={len(cleaned_response)}자")
+        if cleaned_response != response_text:
+            logger.info(f"[LLM응답-필터후내용]\n{cleaned_response}")
         return cleaned_response
 
     except Exception as e:
@@ -1226,27 +1268,11 @@ def _emit_question_log_once(
         return
 
     raw_query = user_query or ""
-    try:
-        max_chars = max(0, int(os.getenv("LLM_VERBOSE_QUESTION_LOG_MAX_CHARS", "12000")))
-    except Exception:
-        max_chars = 12000
-
-    shown_query = raw_query
-    if max_chars and len(shown_query) > max_chars:
-        shown_query = shown_query[:max_chars] + "\n...(truncated)..."
-
-    report = {
-        "schema_version": 2,
-        "query_digest": _short_text_digest(raw_query),
-        "query_len": len(raw_query),
-        "query": shown_query,
-        "farm_name": farm_name or "",
-        "max_tool_iterations": max_tool_iterations,
-        "tools_count": tools_count,
-        "url_context_entries": url_context_entries,
-        "recent_web_results": recent_web_results,
-    }
-    logger.debug(f"[질문로그] {json.dumps(report, ensure_ascii=False)}")
+    logger.debug(
+        f"[질문상세] tools={tools_count} max_iter={max_tool_iterations} "
+        f"url_ctx={url_context_entries} web_ctx={recent_web_results} "
+        f"farm={farm_name or '-'} query_len={len(raw_query)}"
+    )
 
 
 def _emit_answer_log_once(
@@ -1257,22 +1283,33 @@ def _emit_answer_log_once(
     detected_terms: List[str],
     rewrite_attempts: int,
 ) -> None:
+    """답변 필터링 상세 로그 (DEBUG 레벨). INFO 로깅은 _finalize_user_facing_answer에서 직접 수행."""
     if not _is_true(os.getenv("LLM_VERBOSE_ANSWER_LOG", "true")):
         return
 
-    raw_query = user_query or ""
+    raw_len = stages[0].get("length", 0) if stages else 0
+    final_len = stages[-1].get("length", 0) if stages else 0
+
+    changed_stages = []
+    prev_text = None
+    for s in stages:
+        cur_text = s.get("text", "")
+        if prev_text is not None and cur_text != prev_text:
+            changed_stages.append(s["stage"])
+        prev_text = cur_text
+
     report = {
-        "schema_version": 2,
-        "query_digest": _short_text_digest(raw_query),
-        "query_len": len(raw_query),
         "final_mode": final_mode,
         "rewrite_attempts": rewrite_attempts,
         "detected_terms": detected_terms,
         "dropped_count": len(dropped_details),
-        "dropped_details": dropped_details,
-        "stages": stages,
+        "changed_stages": changed_stages,
+        "raw_len": raw_len,
+        "final_len": final_len,
     }
-    logger.debug(f"[답변로그] {json.dumps(report, ensure_ascii=False)}")
+    if dropped_details:
+        report["dropped_details"] = dropped_details
+    logger.debug(f"[답변필터상세] {json.dumps(report, ensure_ascii=False)}")
 
 
 def _is_reasoning_paragraph(paragraph: str, korean_present_in_response: bool = False) -> bool:
@@ -1648,17 +1685,35 @@ def _finalize_user_facing_answer(
     detected_terms: List[str] = []
     rewrite_attempts = 0
 
+    # ── 필터링 전 원본 데이터 전체 로깅 ──
+    logger.info(f"[필터링전-원본] len={len(raw_answer or '')}자")
+    logger.info(f"[필터링전-원본내용]\n{raw_answer}")
+
     stage_snapshots.append(_snapshot_answer_stage("raw", raw_answer))
+    _last_logged_text = raw_answer  # 마지막으로 내용을 로깅한 텍스트 추적
 
     filtered = filter_llm_response(raw_answer, filter_type="general")
     stage_snapshots.append(_snapshot_answer_stage("after_filter", filtered))
+    if filtered != raw_answer:
+        logger.info(f"[필터단계:filter] {len(raw_answer)}자→{len(filtered)}자 (차이={len(raw_answer) - len(filtered)}자)")
+        logger.info(f"[필터단계:filter내용]\n{filtered}")
+        _last_logged_text = filtered
 
     cleaned = clean_llm_response(filtered)
     stage_snapshots.append(_snapshot_answer_stage("after_clean", cleaned))
+    if cleaned != filtered:
+        logger.info(f"[필터단계:clean] {len(filtered)}자→{len(cleaned)}자 (차이={len(filtered) - len(cleaned)}자)")
+        logger.info(f"[필터단계:clean내용]\n{cleaned}")
+        _last_logged_text = cleaned
 
     # 방법 1 + 2: 영/한 중복 제거 + term 체크 기반 reasoning 제거
     candidate = _strip_reasoning_paragraphs(cleaned, dropped_details_out=dropped_details)
     stage_snapshots.append(_snapshot_answer_stage("after_overlap_term_strip", candidate))
+    if candidate != cleaned:
+        logger.info(f"[필터단계:reasoning제거] {len(cleaned)}자→{len(candidate)}자 (차이={len(cleaned) - len(candidate)}자)")
+        logger.info(f"[필터단계:reasoning제거내용]\n{candidate}")
+        _last_logged_text = candidate
+
     candidate = _strip_non_korean_reasoning_for_korean_query(
         candidate,
         user_query=user_query,
@@ -1672,23 +1727,24 @@ def _finalize_user_facing_answer(
     )
     stage_snapshots.append(_snapshot_answer_stage("after_korean_surface_guard", candidate))
 
+    # ── 최종 결과 로깅 (이전 단계와 다를 때만 내용 출력) ──
+    if dropped_details:
+        logger.info(f"[필터링-삭제항목] {len(dropped_details)}건: {dropped_details}")
+
     if not _contains_reasoning_trace(candidate):
+        logger.info(f"[필터링후-최종] len={len(candidate)}자 mode=direct_strip 원본대비={len(raw_answer) - len(candidate)}자 삭제")
+        if candidate != _last_logged_text:
+            logger.info(f"[필터링후-최종내용]\n{candidate}")
         stage_snapshots.append(_snapshot_answer_stage("final", candidate))
-        _emit_answer_log_once(
-            user_query=user_query,
-            final_mode="direct_strip",
-            stages=stage_snapshots,
-            dropped_details=dropped_details,
-            detected_terms=detected_terms,
-            rewrite_attempts=rewrite_attempts,
-        )
         return candidate
 
     detected_terms = _find_reasoning_terms(candidate)
+    logger.info(f"[필터링-reasoning잔존] reasoning흔적 감지 terms={detected_terms} → 재작성 시도")
 
     rewritten = candidate
     for attempt in range(2):
         rewrite_attempts = attempt + 1
+        logger.info(f"[필터링-재작성] 시도 {attempt + 1}/2 입력길이={len(rewritten)}자")
         try:
             rewritten = _rewrite_without_reasoning(
                 model_name=model_name,
@@ -1700,8 +1756,12 @@ def _finalize_user_facing_answer(
             logger.warning(f"[필터] reasoning 제거 재작성 실패({attempt + 1}/2): {rewrite_err}")
             break
 
+        logger.info(f"[필터링-재작성원본] 시도{attempt + 1} len={len(rewritten)}자")
+        logger.info(f"[필터링-재작성원본내용]\n{rewritten}")
+
         stage_snapshots.append(_snapshot_answer_stage(f"rewrite_raw_{attempt + 1}", rewritten))
 
+        before_rewrite_clean = rewritten
         rewritten = clean_llm_response(filter_llm_response(rewritten, filter_type="general"))
         rewritten = _strip_reasoning_paragraphs(rewritten, dropped_details_out=dropped_details)
         rewritten = _strip_non_korean_reasoning_for_korean_query(
@@ -1716,16 +1776,13 @@ def _finalize_user_facing_answer(
         )
         stage_snapshots.append(_snapshot_answer_stage(f"rewrite_clean_{attempt + 1}", rewritten))
 
+        if rewritten != before_rewrite_clean:
+            logger.info(f"[필터링-재작성정리후] 시도{attempt + 1} {len(before_rewrite_clean)}자→{len(rewritten)}자")
+            logger.info(f"[필터링-재작성정리후내용]\n{rewritten}")
+
         if not _contains_reasoning_trace(rewritten):
+            logger.info(f"[필터링후-최종] len={len(rewritten)}자 mode=rewrite_success_{attempt + 1} 원본대비={len(raw_answer) - len(rewritten)}자 삭제")
             stage_snapshots.append(_snapshot_answer_stage("final", rewritten))
-            _emit_answer_log_once(
-                user_query=user_query,
-                final_mode=f"rewrite_success_{attempt + 1}",
-                stages=stage_snapshots,
-                dropped_details=dropped_details,
-                detected_terms=detected_terms,
-                rewrite_attempts=rewrite_attempts,
-            )
             return rewritten
 
     fallback = rewritten or candidate
@@ -1739,15 +1796,10 @@ def _finalize_user_facing_answer(
         user_query=user_query,
         dropped_details_out=dropped_details,
     )
+    logger.info(f"[필터링후-최종] len={len(fallback)}자 mode=fallback_reasoning_possible 원본대비={len(raw_answer) - len(fallback)}자 삭제")
+    if fallback != _last_logged_text:
+        logger.info(f"[필터링후-최종내용]\n{fallback}")
     stage_snapshots.append(_snapshot_answer_stage("final", fallback))
-    _emit_answer_log_once(
-        user_query=user_query,
-        final_mode="fallback_reasoning_possible",
-        stages=stage_snapshots,
-        dropped_details=dropped_details,
-        detected_terms=detected_terms,
-        rewrite_attempts=rewrite_attempts,
-    )
     return fallback
 
 
@@ -2071,11 +2123,11 @@ def _collect_url_context_from_query(user_query: str) -> Optional[Dict[str, Any]]
         max_chars = 6000
 
     selected_urls = urls[:max_urls]
-    logger.debug(
-        f"[URL컨텍스트] URL 추출={len(urls)} selected={len(selected_urls)} timeout={timeout}s max_chars={max_chars}"
+    logger.info(
+        f"[URL컨텍스트] URL 추출={len(urls)}개 선택={len(selected_urls)}개 timeout={timeout}s max_chars={max_chars}"
     )
     for idx, selected_url in enumerate(selected_urls, start=1):
-        logger.debug(f"[URL컨텍스트] target[{idx}]={selected_url}")
+        logger.info(f"[URL컨텍스트] 대상[{idx}]={selected_url}")
 
     entries: List[Dict[str, Any]] = []
     failures: List[str] = []
@@ -2140,8 +2192,8 @@ def _collect_url_context_from_query(user_query: str) -> Optional[Dict[str, Any]]
         }
         entries.append(entry)
 
-        logger.debug(
-            f"[URL컨텍스트] fetch 성공 {idx}/{len(selected_urls)} ({elapsed:.2f}s): status={status_code} chars={len(cleaned)} domain={entry['domain']}"
+        logger.info(
+            f"[URL컨텍스트] fetch 성공 {idx}/{len(selected_urls)} ({elapsed:.1f}s) status={status_code} chars={len(cleaned)} domain={entry['domain']}"
         )
 
     context = {
@@ -2152,15 +2204,15 @@ def _collect_url_context_from_query(user_query: str) -> Optional[Dict[str, Any]]
         "collected_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
-    logger.debug(
-        f"[URL컨텍스트] 요약 success_entries={len(entries)} failure_count={len(failures)}"
+    logger.info(
+        f"[URL컨텍스트] 요약 성공={len(entries)}건 실패={len(failures)}건"
     )
     for idx, entry in enumerate(entries, start=1):
-        logger.debug(
-            f"[URL컨텍스트] 본문[{idx}] domain={entry.get('domain')} status={entry.get('status_code')} url={entry.get('url')} chars={len(entry.get('content', ''))}"
+        logger.info(
+            f"[URL컨텍스트] 본문[{idx}] domain={entry.get('domain')} status={entry.get('status_code')} chars={len(entry.get('content', ''))}"
         )
     if failures:
-        logger.debug(f"[URL컨텍스트] 실패 상세: {failures}")
+        logger.info(f"[URL컨텍스트] 실패 상세: {failures}")
 
     return context
 
@@ -2190,9 +2242,6 @@ def _format_url_context_for_prompt(context: Dict[str, Any]) -> str:
 
     return "\n".join(lines).strip()
 
-
-def _normalize_text_for_match(text: str) -> str:
-    return re.sub(r"\s+", " ", (text or "").strip().lower())
 
 
 def _extract_search_focused_query(user_query: str) -> str:
@@ -2260,7 +2309,7 @@ def _collect_recent_web_context(user_query: str) -> Optional[Dict[str, Any]]:
         logger.debug("[최신정보] 웹검색 대상 질의가 비어 자동 검색을 건너뜁니다.")
         return None
 
-    logger.debug("[최신정보] 라우터 결정에 따라 웹검색 실행 query=%s", focused_query[:160])
+    logger.info("[최신정보] 라우터 결정에 따라 웹검색 실행 query=%s", focused_query[:160])
 
     from agri_ai_core.src.ai.mcp_client import search_web as mcp_search
 
@@ -2282,7 +2331,7 @@ def _collect_recent_web_context(user_query: str) -> Optional[Dict[str, Any]]:
         max_total_results = 8
 
     selected_queries = queries[:max_queries]
-    logger.debug(
+    logger.info(
         f"[최신정보] MCP 웹검색 시작 query_count={len(selected_queries)} per_query_limit={per_query_limit} queries={selected_queries}"
     )
 
@@ -2312,7 +2361,7 @@ def _collect_recent_web_context(user_query: str) -> Optional[Dict[str, Any]]:
         if not isinstance(raw_items, list):
             raw_items = []
 
-        logger.debug(f"[최신정보] MCP 검색 성공 {idx}/{len(selected_queries)} ({elapsed:.2f}s): {len(raw_items)}건")
+        logger.info(f"[최신정보] MCP 검색 성공 {idx}/{len(selected_queries)} ({elapsed:.1f}s) {len(raw_items)}건")
 
         for item in raw_items:
             if not isinstance(item, dict):
@@ -2351,23 +2400,15 @@ def _collect_recent_web_context(user_query: str) -> Optional[Dict[str, Any]]:
         "failures": failures,
     }
 
-    preview = [
-        {
-            "title": item.get("title"),
-            "domain": item.get("domain"),
-            "url": item.get("url"),
-        }
-        for item in merged_results[:3]
-    ]
-    logger.debug(
-        f"[최신정보] MCP 웹검색 요약 success_results={len(merged_results)} failure_count={len(failures)} preview={json.dumps(preview, ensure_ascii=False)}"
+    logger.info(
+        f"[최신정보] MCP 웹검색 요약 성공={len(merged_results)}건 실패={len(failures)}건"
     )
     for idx, item in enumerate(merged_results, start=1):
-        logger.debug(
-            f"[최신정보] 결과[{idx}] source_query={item.get('source_query')} domain={item.get('domain')} title={item.get('title')} url={item.get('url')}"
+        logger.info(
+            f"[최신정보] 결과[{idx}] domain={item.get('domain')} title={item.get('title','')[:60]}"
         )
     if failures:
-        logger.debug(f"[최신정보] 실패 상세: {failures}")
+        logger.info(f"[최신정보] 실패 상세: {failures}")
 
     return context
 
@@ -2487,17 +2528,34 @@ def get_llm_response_with_tools(
                 "- 내부 추론/독백/분석 과정을 절대 출력하지 않습니다.\n"
                 "- 최종 사용자에게 보여줄 순수 답변 본문만 출력합니다."
             )
+        # URL 컨텍스트 수집
+        t_url_ctx = time.time()
         url_context = _collect_url_context_from_query(user_query)
+        url_ctx_elapsed = time.time() - t_url_ctx
+        url_ctx_count = len((url_context or {}).get("entries", []))
+        if url_context:
+            logger.info(f"[URL컨텍스트] 수집완료 entries={url_ctx_count} ({url_ctx_elapsed:.1f}s)")
+        elif url_ctx_elapsed > 0.1:
+            logger.info(f"[URL컨텍스트] 해당없음 ({url_ctx_elapsed:.1f}s)")
+
+        # 최신 웹 검색 컨텍스트 수집
+        t_web_ctx = time.time()
         if enable_recent_web_context is None:
             recent_web_context = _collect_recent_web_context(user_query)
         elif enable_recent_web_context:
             recent_web_context = _collect_recent_web_context(user_query)
         else:
             recent_web_context = None
+        web_ctx_elapsed = time.time() - t_web_ctx
+        web_ctx_count = len((recent_web_context or {}).get("results", []))
+        if recent_web_context:
+            logger.info(f"[웹검색컨텍스트] 수집완료 results={web_ctx_count} ({web_ctx_elapsed:.1f}s)")
+        elif enable_recent_web_context is False:
+            logger.info("[웹검색컨텍스트] 비활성화(라우터 결정)")
 
         if allowed_tool_names is not None:
-            logger.debug(
-                f"[Tool Use] 허용 도구 필터 적용 requested={allowed_tool_names} actual={[((t or {}).get('function') or {}).get('name') for t in tools]}"
+            logger.info(
+                f"[Tool Use] 허용도구={allowed_tool_names} 실제도구={[((t or {}).get('function') or {}).get('name') for t in tools]}"
             )
 
         _emit_question_log_once(
@@ -2530,25 +2588,53 @@ def get_llm_response_with_tools(
                 )
         messages.append({"role": "user", "content": user_query})
 
-        logger.debug(f"[Tool Use] 처리 시작: digest={query_digest}")
+        logger.info(
+            f"[Tool Use] 시작 model={model_name} tools={len(tools)}개 "
+            f"messages={len(messages)}개 max_iterations={max_tool_iterations}"
+        )
 
         # 도구 호출 반복 (최대 max_tool_iterations회)
+        tools_supported = True  # 모델이 tools를 지원하는지 여부
         for iteration in range(max_tool_iterations):
-            logger.debug(f"[Tool Use] Iteration {iteration + 1}/{max_tool_iterations}")
+            logger.info(f"[Tool Use] --- 반복 {iteration + 1}/{max_tool_iterations} ---")
 
             # LLM 호출 (도구 포함)
-            response = _ollama_chat(
-                model=model_name,
-                messages=messages,
-                tools=tools,
-                options={
-                    "temperature": temperature,
-                    "top_p": 0.9,
-                    "top_k": 40,
-                    "num_predict": NUM_PREDICT
-                },
-                keep_alive='1h'
-            )
+            t_iter = time.time()
+            current_tools = tools if tools_supported else None
+            try:
+                response = _ollama_chat(
+                    model=model_name,
+                    messages=messages,
+                    tools=current_tools,
+                    options={
+                        "temperature": temperature,
+                        "top_p": 0.9,
+                        "top_k": 40,
+                        "num_predict": NUM_PREDICT
+                    },
+                    keep_alive='1h'
+                )
+            except Exception as chat_err:
+                err_msg = str(chat_err).lower()
+                if "does not support tools" in err_msg or "not support tools" in err_msg:
+                    logger.warning(
+                        f"[Tool Use] 모델({model_name})이 tools를 지원하지 않음 → tools 없이 재시도"
+                    )
+                    tools_supported = False
+                    response = _ollama_chat(
+                        model=model_name,
+                        messages=messages,
+                        tools=None,
+                        options={
+                            "temperature": temperature,
+                            "top_p": 0.9,
+                            "top_k": 40,
+                            "num_predict": NUM_PREDICT
+                        },
+                        keep_alive='1h'
+                    )
+                else:
+                    raise
 
             # 응답에서 메시지 추출
             if hasattr(response, 'message'):
@@ -2566,9 +2652,13 @@ def get_llm_response_with_tools(
 
             # 도구 호출이 없으면 최종 답변 반환
             tool_calls = _extract_tool_calls(assistant_message)
+            iter_elapsed = time.time() - t_iter
             if not tool_calls:
                 final_answer = assistant_message.get("content", "")
-                logger.debug(f"[Tool Use] 최종 답변 생성 완료 ({iteration + 1}회 반복)")
+                logger.info(
+                    f"[Tool Use] 도구호출 없음 → 최종답변 반환 (반복{iteration + 1}, {iter_elapsed:.1f}s) "
+                    f"답변길이={len(final_answer)}자"
+                )
                 return _finalize_user_facing_answer(
                     model_name=model_name,
                     user_query=user_query,
@@ -2577,9 +2667,8 @@ def get_llm_response_with_tools(
                 )
 
             # 도구 호출 처리
-            logger.debug(f"[Tool Use] {len(tool_calls)}개 도구 호출")
-
-            for tool_call in tool_calls:
+            logger.info(f"[Tool Use] 도구호출 {len(tool_calls)}건 감지 (반복{iteration + 1})")
+            for tc_idx, tool_call in enumerate(tool_calls, start=1):
                 tool_name = _extract_tool_name(tool_call)
                 tool_args = _extract_tool_arguments(tool_call)
                 if not tool_name:
@@ -2591,18 +2680,21 @@ def get_llm_response_with_tools(
                     tool_args,
                     default_tool_args=default_tool_args,
                 )
-                logger.debug(f"[Tool Use] 실행: {tool_name}({tool_args})")
+                logger.info(f"[도구호출] [{tc_idx}/{len(tool_calls)}] {tool_name}({tool_args})")
 
                 # 도구 실행
+                t_tool = time.time()
                 tool_result = execute_tool(tool_name, tool_args)
+                tool_elapsed = time.time() - t_tool
+                result_len = len(tool_result or "")
+                logger.info(f"[도구결과] [{tc_idx}/{len(tool_calls)}] {tool_name} ({tool_elapsed:.1f}s) 결과길이={result_len}자")
+                logger.info(f"[도구결과데이터] {tool_name}:\n{tool_result}")
 
                 # 도구 결과를 메시지에 추가
                 messages.append({
                     "role": "tool",
                     "content": tool_result
                 })
-
-                logger.debug(f"[Tool Use] {tool_name} 실행 완료")
 
         # 최대 반복 횟수 도달
         logger.warning(f"[Tool Use] 최대 반복 횟수({max_tool_iterations}) 도달")

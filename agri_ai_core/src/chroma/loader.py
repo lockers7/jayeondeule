@@ -4,7 +4,6 @@
 # 임베딩 생성 및 인덱싱을 수행합니다.
 # --->
 # update_learned_last_status: 최종 학습 시작 시간 저장
-# get_learned_data: 기존 학습된 데이터 가져오기
 # get_unlearned_data: 신규 데이터 가져오기 (is_learned=False)
 # search_similar_data: Vector DB에서 유사 데이터 검색
 # clean_metadata: 메타데이터 정리
@@ -61,66 +60,6 @@ def update_learned_last_status():
 
     return current_datetime
 
-
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 기존 학습된 데이터 가져오기
-# 기존 학습된 데이터 조회
-#
-# Args:
-#     after_date: 조회 시작 일시
-#     hour: 시간 필터 (미사용)
-#
-# Returns:
-#     list: 학습된 데이터 목록
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def get_learned_data(after_date=None, hour=None):
-    default_dt = datetime.now() - timedelta(days=3*365)
-
-    if after_date is None:
-        after_date_obj = default_dt
-    elif isinstance(after_date, str):
-        try:
-            if len(after_date) == 8 and after_date.isdigit():
-                after_date_obj = datetime.strptime(after_date, "%Y%m%d")
-            else:
-                after_date_obj = datetime.strptime(after_date, "%Y-%m-%d %H:%M:%S")
-        except Exception as e:
-            logger.warning(f"after_date 파싱 실패: {after_date} - {e}")
-            after_date_obj = default_dt
-    elif isinstance(after_date, datetime):
-        after_date_obj = after_date
-    else:
-        logger.warning(f"지원되지 않는 after_date 타입: {type(after_date)}")
-        after_date_obj = default_dt
-
-    result = get_documents(
-        collection_name=learned_collection(),
-        limit=100
-    )
-
-    if "error" in result or not result.get("documents"):
-        logger.info(f"기존 학습 데이터 없음 또는 오류: {result.get('error', '데이터 없음')}")
-        return []
-
-    all_data = result.get("metadatas", [])
-    filtered_data = []
-
-    for item in all_data:
-        dt_str = item.get("record_datetime")
-        if not dt_str:
-            continue
-        try:
-            item_date = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-            if item_date >= after_date_obj:
-                filtered_data.append(item)
-        except Exception as e:
-            logger.warning(f"record_datetime 파싱 오류: {dt_str} - {e}")
-            continue
-
-    sorted_data = sorted(filtered_data, key=lambda x: x.get("record_datetime", ""), reverse=False)
-    logger.info(f"기존 학습 데이터 읽기 종료 - 처리완료: {len(sorted_data)}건")
-
-    return sorted_data
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

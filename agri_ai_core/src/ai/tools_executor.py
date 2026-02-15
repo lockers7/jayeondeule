@@ -3,6 +3,7 @@
 # LLM이 요청한 도구를 실제로 실행하는 모듈
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import json
+import time
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Dict, Any
@@ -62,6 +63,8 @@ def search_farm_knowledge(query: str, n_results: int = 3) -> Dict[str, Any]:
     Returns:
         dict: 검색 결과
     """
+    t_start = time.time()
+    logger.info(f"[VectorDB검색] 시작 query=\"{(query or '')[:80]}\" n_results={n_results}")
     try:
         from agri_ai_core.src.ai.rag.embedder import embed_text
         from agri_ai_core.src.chroma.collections import document_collection
@@ -69,27 +72,36 @@ def search_farm_knowledge(query: str, n_results: int = 3) -> Dict[str, Any]:
 
         collection_name = document_collection()
         if not collection_name:
+            logger.warning("[VectorDB검색] 컬렉션 연결 실패")
             return {
                 "success": False,
                 "error": "지식 데이터베이스에 연결할 수 없습니다.",
                 "results": []
             }
+        logger.info(f"[VectorDB검색] 컬렉션={collection_name}")
 
+        t_embed = time.time()
         query_embedding = embed_text(query)
+        embed_elapsed = time.time() - t_embed
         if not query_embedding:
+            logger.warning(f"[VectorDB검색] 임베딩 생성 실패 ({embed_elapsed:.1f}s)")
             return {
                 "success": False,
                 "error": "검색 임베딩 생성에 실패했습니다.",
                 "results": [],
             }
+        logger.info(f"[VectorDB검색] 임베딩 생성 완료 ({embed_elapsed:.1f}s) dim={len(query_embedding)}")
 
+        t_query = time.time()
         results = query_documents(
             collection_name=collection_name,
             query_embeddings=[query_embedding],
             n_results=max(1, int(n_results or 3)),
         )
+        query_elapsed = time.time() - t_query
 
         if "error" in results:
+            logger.warning(f"[VectorDB검색] 쿼리 실패 ({query_elapsed:.1f}s): {results['error']}")
             return {"success": False, "error": results["error"], "results": []}
 
         documents = results.get('documents', []) or []
@@ -98,13 +110,21 @@ def search_farm_knowledge(query: str, n_results: int = 3) -> Dict[str, Any]:
 
         formatted_results = []
         for idx, (doc, meta) in enumerate(zip(documents, metadatas)):
+            dist = distances[idx] if idx < len(distances) else None
             formatted_results.append({
-                "content": doc[:500],  # 처음 500자만
+                "content": doc[:500],
                 "metadata": meta,
-                "distance": distances[idx] if idx < len(distances) else None,
+                "distance": dist,
             })
 
-        logger.debug(f"[Tool] search_farm_knowledge: {len(formatted_results)}개 결과")
+        total_elapsed = time.time() - t_start
+        logger.info(
+            f"[VectorDB검색] 완료 {len(formatted_results)}건 "
+            f"(쿼리={query_elapsed:.1f}s, 총={total_elapsed:.1f}s)"
+        )
+        for idx, fr in enumerate(formatted_results, start=1):
+            dist_str = f"{fr['distance']:.4f}" if fr['distance'] is not None else "-"
+            logger.info(f"[VectorDB검색] 결과[{idx}] distance={dist_str} content_len={len(fr.get('content',''))}자")
 
         return {
             "success": True,
@@ -114,7 +134,8 @@ def search_farm_knowledge(query: str, n_results: int = 3) -> Dict[str, Any]:
         }
 
     except Exception as e:
-        logger.error(f"농장 지식 검색 중 오류: {e}")
+        elapsed = time.time() - t_start
+        logger.error(f"[VectorDB검색] 오류 ({elapsed:.1f}s): {e}")
         return {
             "success": False,
             "error": str(e),
@@ -137,6 +158,8 @@ def get_farm_realtime_data(house_id: str, farm_id: str = None, data_type: str = 
     Returns:
         dict: 실시간 데이터
     """
+    t_start = time.time()
+    logger.info(f"[PostgreSQL조회] 시작 farm_id={farm_id} house_id={house_id} data_type={data_type}")
     try:
         from agri_ai_core.src.postgresql.connection import db_session
         from agri_ai_core.src.postgresql.queries import GET_ONE_FARM
@@ -154,10 +177,12 @@ def get_farm_realtime_data(house_id: str, farm_id: str = None, data_type: str = 
 
         target_farm_id = farm_id
         if not target_farm_id:
+            t_farm = time.time()
             with db_session() as database:
                 farm = database.fetch_one(GET_ONE_FARM)
                 if farm and farm.get("farm_id") is not None:
                     target_farm_id = str(farm.get("farm_id"))
+            logger.info(f"[PostgreSQL조회] farm_id 자동조회={target_farm_id} ({time.time() - t_farm:.1f}s)")
 
         if not target_farm_id:
             return {
@@ -174,23 +199,35 @@ def get_farm_realtime_data(house_id: str, farm_id: str = None, data_type: str = 
         }
 
         if data_type in ["sensor", "all"]:
+            t_sensor = time.time()
             sensor = read_current_sensor_info(target_farm_id, house_id)
+            sensor_elapsed = time.time() - t_sensor
             result["sensor"] = sensor or {}
+            sensor_keys = list((sensor or {}).keys())[:8]
+            logger.info(f"[PostgreSQL조회] 센서데이터 ({sensor_elapsed:.1f}s) keys={sensor_keys}")
 
         if data_type in ["relay", "all"]:
+            t_relay = time.time()
             relay = read_latest_relay_info(target_farm_id, house_id)
+            relay_elapsed = time.time() - t_relay
             result["relay"] = relay or {}
+            relay_keys = list((relay or {}).keys())[:8]
+            logger.info(f"[PostgreSQL조회] 릴레이데이터 ({relay_elapsed:.1f}s) keys={relay_keys}")
 
         if (
             (data_type in ["sensor", "all"] and not result.get("sensor"))
             and (data_type in ["relay", "all"] and not result.get("relay"))
         ):
             result["note"] = "조회된 실시간 데이터가 없습니다."
+            logger.warning("[PostgreSQL조회] 조회된 실시간 데이터 없음")
 
+        total_elapsed = time.time() - t_start
+        logger.info(f"[PostgreSQL조회] 완료 ({total_elapsed:.1f}s) farm={target_farm_id} house={house_id}")
         return result
 
     except Exception as e:
-        logger.error(f"농장 실시간 데이터 조회 중 오류: {e}")
+        elapsed = time.time() - t_start
+        logger.error(f"[PostgreSQL조회] 오류 ({elapsed:.1f}s): {e}")
         return {
             "success": False,
             "error": str(e),
@@ -211,19 +248,29 @@ def search_web(query: str) -> Dict[str, Any]:
     Returns:
         dict: 검색 결과
     """
+    t_start = time.time()
+    logger.info(f"[웹검색] 시작 query=\"{(query or '')[:100]}\"")
     try:
         from agri_ai_core.src.ai.mcp_client import search_web as mcp_search
 
         result = mcp_search(query, max_results=3)
+        elapsed = time.time() - t_start
         result_count = 0
         if isinstance(result, dict) and isinstance(result.get("results"), list):
             result_count = len(result.get("results", []))
-        logger.debug(f"[Tool] search_web(MCP): query='{query}' success={result.get('success')} results={result_count}")
+        success = result.get('success', False)
+        logger.info(f"[웹검색] 완료 ({elapsed:.1f}s) success={success} results={result_count}건")
+
+        if result_count > 0:
+            for idx, item in enumerate(result.get("results", [])[:3], start=1):
+                if isinstance(item, dict):
+                    logger.info(f"[웹검색] 결과[{idx}] title={item.get('title','')[:50]} url={item.get('url','')[:80]}")
 
         return result
 
     except Exception as e:
-        logger.error(f"웹 검색 중 오류: {e}")
+        elapsed = time.time() - t_start
+        logger.error(f"[웹검색] 오류 ({elapsed:.1f}s): {e}")
         return {
             "success": False,
             "error": str(e),
@@ -245,7 +292,8 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
     Returns:
         str: 실행 결과 (JSON 문자열)
     """
-    logger.debug(f"[Tool] 실행: {tool_name}({tool_args})")
+    t_start = time.time()
+    logger.info(f"[도구실행] 시작 tool={tool_name} args={tool_args}")
 
     try:
         if tool_name == "get_current_datetime":
@@ -275,10 +323,15 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
                 "error": f"알 수 없는 도구: {tool_name}"
             }
 
-        return json.dumps(result, ensure_ascii=False, indent=2, default=_json_default)
+        elapsed = time.time() - t_start
+        success = result.get("success", True) if isinstance(result, dict) else True
+        json_result = json.dumps(result, ensure_ascii=False, indent=2, default=_json_default)
+        logger.info(f"[도구실행] 완료 tool={tool_name} ({elapsed:.1f}s) success={success} 결과길이={len(json_result)}자")
+        return json_result
 
     except Exception as e:
-        logger.error(f"도구 실행 중 오류: {e}")
+        elapsed = time.time() - t_start
+        logger.error(f"[도구실행] 오류 tool={tool_name} ({elapsed:.1f}s): {e}")
         import traceback
         logger.error(traceback.format_exc())
 

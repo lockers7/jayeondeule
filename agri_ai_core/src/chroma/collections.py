@@ -13,7 +13,6 @@
 # job_status_collection: 작업 상태 컬렉션
 # self_learning_collection: 자가학습 패턴 컬렉션
 # learning_pattern_collection: 패턴 분석 결과 컬렉션
-# get_all_collection_names: 모든 컬렉션 이름 목록 반환
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 from agri_ai_core.config import settings
 
@@ -99,21 +98,3 @@ def learning_pattern_collection():
     return settings.collections.pattern_learned or ''
 
 
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 모든 컬렉션 이름 목록
-# --->
-# 모든 컬렉션 이름 목록 반환
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def get_all_collection_names():
-    return [
-        ("farm_collection", farm_collection()),
-        ("source_collection", source_collection()),
-        ("stats_collection", stats_collection()),
-        ("optimal_collection", optimal_collection()),
-        ("learned_collection", learned_collection()),
-        ("last_learned_date", job_status_collection()),
-        ("setting_collection", setting_collection()),
-        ("document_collection", document_collection()),
-        ("self_learning_collection", self_learning_collection()),
-        ("learning_pattern_collection", learning_pattern_collection())
-    ]
