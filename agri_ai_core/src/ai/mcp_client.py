@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
-from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.logs import setup_logger
 
 logger = setup_logger(__name__)
 
@@ -32,6 +32,14 @@ _SERVER_UNAVAILABLE_KEYWORDS = (
     "command not found",
     "no such file",
 )
+_DNS_ERROR_KEYWORDS = (
+    "eai_again",
+    "enotfound",
+    "getaddrinfo",
+    "temporary failure in name resolution",
+    "name or service not known",
+)
+_LAST_DNS_DIAG_AT: float = 0.0
 
 
 def _mark_server_unavailable(server_name: str, reason: str) -> None:
@@ -41,16 +49,28 @@ def _mark_server_unavailable(server_name: str, reason: str) -> None:
         logger.warning(f"[MCP:{server_name}] 런타임 비활성화: {reason}")
 
 
+def _get_runtime_disable_seconds(server_name: str) -> int:
+    specific_env_name = f"MCP_RUNTIME_DISABLE_SECONDS_{(server_name or '').upper().replace('-', '_')}"
+    raw_value = os.getenv(specific_env_name)
+    if raw_value is not None:
+        try:
+            return max(1, int(raw_value))
+        except Exception:
+            logger.warning(f"[MCP:{server_name}] 잘못된 {specific_env_name} 값: {raw_value} (기본값 사용)")
+    return MCP_RUNTIME_DISABLE_SECONDS
+
+
 def _get_runtime_disabled_reason(server_name: str) -> Optional[str]:
     item = _MCP_SERVER_RUNTIME_UNAVAILABLE.get(server_name)
     if not item:
         return None
 
     disabled_at, reason = item
+    disable_seconds = _get_runtime_disable_seconds(server_name)
     elapsed = time.time() - disabled_at
-    if elapsed >= MCP_RUNTIME_DISABLE_SECONDS:
+    if elapsed >= disable_seconds:
         _MCP_SERVER_RUNTIME_UNAVAILABLE.pop(server_name, None)
-        logger.info(f"[MCP:{server_name}] 런타임 비활성 만료({MCP_RUNTIME_DISABLE_SECONDS}s), 재시도")
+        logger.debug(f"[MCP:{server_name}] 런타임 비활성 만료({disable_seconds}s), 재시도")
         return None
     return reason
 
@@ -58,7 +78,7 @@ def _get_runtime_disabled_reason(server_name: str) -> Optional[str]:
 def _mark_server_available(server_name: str) -> None:
     if server_name in _MCP_SERVER_RUNTIME_UNAVAILABLE:
         _MCP_SERVER_RUNTIME_UNAVAILABLE.pop(server_name, None)
-        logger.info(f"[MCP:{server_name}] 런타임 비활성 해제")
+        logger.debug(f"[MCP:{server_name}] 런타임 비활성 해제")
 
 
 def _error_to_text(error: Any) -> str:
@@ -73,6 +93,44 @@ def _error_to_text(error: Any) -> str:
 def _should_mark_unavailable(error_text: str) -> bool:
     lowered = (error_text or "").lower()
     return any(keyword in lowered for keyword in _SERVER_UNAVAILABLE_KEYWORDS)
+
+
+def _is_dns_resolution_error(error_text: str) -> bool:
+    lowered = (error_text or "").lower()
+    return any(keyword in lowered for keyword in _DNS_ERROR_KEYWORDS)
+
+
+def _log_dns_diagnostics_once(min_interval_sec: int = 30) -> None:
+    global _LAST_DNS_DIAG_AT
+    now = time.time()
+    if now - _LAST_DNS_DIAG_AT < max(1, int(min_interval_sec)):
+        return
+    _LAST_DNS_DIAG_AT = now
+
+    checks = [
+        ("resolv.conf", "readlink -f /etc/resolv.conf && sed -n '1,20p' /etc/resolv.conf"),
+        ("dns_google", "getent hosts www.google.com"),
+        ("dns_naver", "getent hosts search.naver.com"),
+        ("dns_bing", "getent hosts www.bing.com"),
+    ]
+
+    for name, command in checks:
+        try:
+            completed = subprocess.run(
+                ["/bin/bash", "-lc", command],
+                cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
+                timeout=6,
+                check=False,
+                env=os.environ.copy(),
+            )
+            output = (completed.stdout or completed.stderr or "").strip().replace("\n", " | ")
+            if len(output) > 420:
+                output = f"{output[:420]}..."
+            logger.warning(f"[DNS진단] {name}: rc={completed.returncode} output={output}")
+        except Exception as diag_err:
+            logger.warning(f"[DNS진단] {name} 실행 실패: {diag_err}")
 
 
 def _load_mcp_servers() -> Dict[str, Dict[str, Any]]:
@@ -676,7 +734,7 @@ def search_web(query: str, max_results: int = 5) -> Dict[str, Any]:
         if not query or not query.strip():
             return {"success": False, "error": "Empty search query", "results": []}
 
-        logger.info(f"웹 검색 시작: {query}")
+        logger.debug(f"웹 검색 시작: {query}")
         result = call_mcp_server_tool(
             server_name="web-search",
             tool_name="search",
@@ -685,10 +743,16 @@ def search_web(query: str, max_results: int = 5) -> Dict[str, Any]:
         )
 
         if "error" in result:
+            logger.warning(f"웹 검색 실패(call_mcp_server_tool): {result['error']}")
+            if _is_dns_resolution_error(str(result.get("error", ""))):
+                _log_dns_diagnostics_once()
             return {"success": False, "error": result["error"], "results": []}
 
         if result.get("isError"):
             error_text = "\n".join(_extract_text_blocks(result)) or "web-search failed"
+            logger.warning(f"웹 검색 실패(web-search isError): {error_text}")
+            if _is_dns_resolution_error(error_text):
+                _log_dns_diagnostics_once()
             return {"success": False, "error": error_text, "results": []}
 
         text_blocks = _extract_text_blocks(result)
@@ -740,7 +804,7 @@ def search_web(query: str, max_results: int = 5) -> Dict[str, Any]:
                     }
                 )
 
-        logger.info(f"웹 검색 완료: {len(formatted)}개 결과")
+        logger.debug(f"웹 검색 완료: {len(formatted)}개 결과")
         return {
             "success": True,
             "results": formatted,
@@ -756,7 +820,7 @@ def search_web(query: str, max_results: int = 5) -> Dict[str, Any]:
 def get_current_weather(location: str) -> Dict[str, Any]:
     """MCP web-search 기반 현재 날씨 조회."""
     try:
-        logger.info(f"날씨 조회: {location}")
+        logger.debug(f"날씨 조회: {location}")
         query = f"{location} 현재 날씨 기온 습도"
         result = search_web(query, max_results=3)
         if result.get("success"):

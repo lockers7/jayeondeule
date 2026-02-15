@@ -7,7 +7,7 @@
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import traceback
 
-from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.chroma import heartbeat, ensure_required_collections_exist
 from agri_ai_core.src.control import setup_scheduler, start_scheduler, stop_scheduler, setup_default_jobs, control_all_schedules
 
@@ -28,6 +28,8 @@ def initialize_app():
         return
 
     try:
+        for n in range(30):
+            logger.info("///")
         logger.info("=" * 60)
         logger.info("AgriAI Core 시작 초기화")
         logger.info("=" * 60)

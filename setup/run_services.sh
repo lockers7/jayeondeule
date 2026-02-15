@@ -29,8 +29,14 @@ PYTHON_BIN="/workspace/jayeondeule/venv/bin/python"
 REFLEX_BIN="/workspace/jayeondeule/venv/bin/reflex"
 
 # PID 파일 경로
+OLLAMA_PID="/tmp/ollama.pid"
 SCHEDULER_PID="/tmp/scheduler.pid"
 REFLEX_PID="/tmp/reflex.pid"
+API_PID="/tmp/api.pid"
+
+# Ollama 설정
+OLLAMA_BIN="/usr/local/bin/ollama"
+OLLAMA_MODEL="${MODEL_NAME:-qwen3:30b-a3b}"
 
 # 로그 파일 경로
 LOG_DIR="${LOG_PATH:-/workspace/jayeondeule/logs}"
@@ -39,6 +45,38 @@ mkdir -p "$LOG_DIR"
 # Reflex 실행 환경 설정
 REFLEX_ENV="${REFLEX_ENV:-prod}"
 REFLEX_USE_GRANIAN="${REFLEX_USE_GRANIAN:-false}"
+WEB_SEARCH_DNS_SERVERS="${WEB_SEARCH_DNS_SERVERS:-1.1.1.1,8.8.8.8,8.8.4.4}"
+
+dns_health_check() {
+    echo "DNS/NS 상태 점검 중..."
+
+    local resolver_target
+    resolver_target="$(readlink -f /etc/resolv.conf 2>/dev/null || echo unknown)"
+    echo "  - /etc/resolv.conf -> ${resolver_target}"
+
+    local success_count=0
+    local host
+    for host in www.google.com search.naver.com www.bing.com; do
+        if getent hosts "$host" >/dev/null 2>&1; then
+            success_count=$((success_count + 1))
+        else
+            echo "  - DNS 조회 실패: ${host}"
+        fi
+    done
+
+    if [ "$success_count" -lt 1 ]; then
+        echo "  - DNS 조회 실패 감지, 웹검색 fallback DNS 활성화: ${WEB_SEARCH_DNS_SERVERS}"
+        export WEB_SEARCH_DNS_SERVERS
+        export WEB_SEARCH_ENABLE_DNS_FALLBACK=1
+        if command -v resolvectl >/dev/null 2>&1; then
+            echo "  - resolvectl 상태(요약):"
+            resolvectl status 2>/dev/null | sed -n '1,40p' || true
+        fi
+    else
+        echo "  - DNS 조회 정상 (${success_count}/3)"
+        export WEB_SEARCH_DNS_SERVERS
+    fi
+}
 
 is_port_listening() {
     local port_hex
@@ -84,6 +122,52 @@ wait_reflex_ready() {
         sleep 1
         waited=$((waited + 1))
     done
+    return 1
+}
+
+start_ollama() {
+    echo "Ollama 시작 중 (모델: $OLLAMA_MODEL)..."
+
+    # 기존 ollama 프로세스 종료
+    if pgrep -x "ollama" >/dev/null 2>&1; then
+        echo "  기존 Ollama 프로세스 종료 중..."
+        pkill -x "ollama" 2>/dev/null || true
+        sleep 2
+        # 강제 종료 필요시
+        if pgrep -x "ollama" >/dev/null 2>&1; then
+            pkill -9 -x "ollama" 2>/dev/null || true
+            sleep 1
+        fi
+    fi
+
+    # systemd ollama 서비스 비활성화 (충돌 방지)
+    if systemctl is-active ollama.service >/dev/null 2>&1; then
+        echo "  systemd ollama 서비스 중지 중..."
+        sudo systemctl stop ollama.service 2>/dev/null || true
+    fi
+
+    # ollama serve 백그라운드 실행
+    export OLLAMA_NUM_GPU="${OLLAMA_NUM_GPU:-999}"
+    export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+    $OLLAMA_BIN serve >> "$LOG_DIR/ollama.log" 2>&1 &
+    OLLAMA_PID_NUM=$!
+    echo $OLLAMA_PID_NUM > "$OLLAMA_PID"
+
+    # ollama 서버 준비 대기
+    local waited=0
+    while [ "$waited" -lt 15 ]; do
+        if is_port_listening 11434; then
+            echo "Ollama 시작됨 (PID: $OLLAMA_PID_NUM, Port: 11434)"
+            # 모델 사전 로드
+            echo "  모델 로드 중: $OLLAMA_MODEL ..."
+            $OLLAMA_BIN pull "$OLLAMA_MODEL" >> "$LOG_DIR/ollama.log" 2>&1 || true
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    echo "Ollama 시작 실패 (PID: $OLLAMA_PID_NUM)"
     return 1
 }
 
@@ -156,6 +240,30 @@ cleanup() {
         rm -f "$SCHEDULER_PID"
     fi
 
+    # REST API 종료
+    if [ -f "$API_PID" ]; then
+        API_PID_NUM=$(cat "$API_PID")
+        if kill -0 "$API_PID_NUM" 2>/dev/null; then
+            echo "REST API 종료 중 (PID: $API_PID_NUM)..."
+            kill "$API_PID_NUM"
+            wait "$API_PID_NUM" 2>/dev/null || true
+        fi
+        rm -f "$API_PID"
+    fi
+
+    # Ollama 종료
+    if [ -f "$OLLAMA_PID" ]; then
+        OLLAMA_PID_NUM=$(cat "$OLLAMA_PID")
+        if kill -0 "$OLLAMA_PID_NUM" 2>/dev/null; then
+            echo "Ollama 종료 중 (PID: $OLLAMA_PID_NUM)..."
+            kill "$OLLAMA_PID_NUM"
+            wait "$OLLAMA_PID_NUM" 2>/dev/null || true
+        fi
+        rm -f "$OLLAMA_PID"
+    fi
+    # 잔존 ollama 프로세스 정리
+    pkill -x "ollama" 2>/dev/null || true
+
     echo "모든 서비스 종료 완료"
     exit 0
 }
@@ -172,15 +280,28 @@ echo "  Reflex UI (모드: $REFLEX_ENV)"
 echo "=========================================="
 echo ""
 
+dns_health_check
+
+# Ollama 시작 (LLM 서버 - 가장 먼저 시작)
+start_ollama
+
 # 백그라운드 서비스 시작 (ChromaDB 연결, 스케줄러)
 echo "백그라운드 서비스 시작 중 (스케줄러)..."
-$PYTHON_BIN -m agri_ai_core.run_scheduler >> "$LOG_DIR/scheduler.log" 2>&1 &
+$PYTHON_BIN -m agri_ai_core.scheduler >> "$LOG_DIR/scheduler.log" 2>&1 &
 SCHEDULER_PID_NUM=$!
 echo $SCHEDULER_PID_NUM > "$SCHEDULER_PID"
 echo "백그라운드 서비스 시작됨 (PID: $SCHEDULER_PID_NUM)"
 
 # 초기화 완료 대기
 sleep 3
+
+# REST API 시작
+API_PORT="${API_PORT:-8002}"
+echo "REST API 시작 중..."
+$PYTHON_BIN -m agri_ai_core.api >> "$LOG_DIR/api.log" 2>&1 &
+API_PID_NUM=$!
+echo $API_PID_NUM > "$API_PID"
+echo "REST API 시작됨 (PID: $API_PID_NUM, Port: $API_PORT)"
 
 # Reflex UI 시작
 echo "Reflex UI 시작 중..."
@@ -191,6 +312,8 @@ else
     echo "  - Reflex Frontend: http://0.0.0.0:3000"
     echo "  - Reflex Backend: http://0.0.0.0:8001"
 fi
+echo "  - REST API: http://0.0.0.0:${API_PORT}"
+echo "  - Ollama: http://0.0.0.0:11434 (모델: $OLLAMA_MODEL)"
 
 echo ""
 echo "=========================================="

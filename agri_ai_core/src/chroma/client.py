@@ -14,7 +14,7 @@
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 from datetime import datetime
 
-from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.logs import setup_logger
 from agri_ai_core.config import settings
 from agri_ai_core.src.ai.mcp_client import mcp_http_request
 from agri_ai_core.src.chroma.config import (

@@ -80,7 +80,9 @@ a[href*="reflex"] {
     color: #000000 !important;
     font-size: 14px !important;
     font-weight: 700 !important;
-    line-height: 1.5 !important;
+    line-height: 20px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
     white-space: pre-wrap !important;
 }
 
@@ -103,13 +105,38 @@ a[href*="reflex"] {
     margin-bottom: 0 !important;
 }
 
-/* LLM 처리중 상태 표시(우측 상단 자전거) */
-.llm-running-indicator {
-    position: fixed !important;
-    top: 14px !important;
-    right: 18px !important;
-    z-index: 9999 !important;
+/* 전송 버튼 컬럼: 자전거 아이콘을 버튼 바로 위에 고정 배치 */
+.send-button-column {
+    min-width: 96px !important;
+    align-self: flex-start !important;
+}
+
+.send-running-fixed-slot {
+    width: 100% !important;
+    height: 32px !important;
+    display: flex !important;
+    align-items: flex-end !important;
+    justify-content: center !important;
     pointer-events: none !important;
+}
+
+.send-button-raised {
+    position: relative !important;
+    top: -6px !important;
+}
+
+.rag-action-button {
+    min-width: 88px !important;
+    display: inline-flex !important;
+    justify-content: center !important;
+}
+
+.current-selection-box {
+    border: 1px solid #90caf9 !important;
+    border-left: 3px solid #2196f3 !important;
+    border-radius: 6px !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
 }
 
 .running-bicycle {

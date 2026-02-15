@@ -17,7 +17,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.logs import setup_logger
 from agri_ai_core.config import (
     STATS_INTERVAL_MINUTES,
     SCHEDULE_LEARNING_HOUR,

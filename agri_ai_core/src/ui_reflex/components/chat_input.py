@@ -11,17 +11,11 @@ from ..styles import INPUT_STYLE, BUTTON_PRIMARY, INPUT_AREA_STYLE
 # 채팅 입력 영역 컴포넌트
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def chat_input_area() -> rx.Component:
-    """
-    채팅 입력 영역 렌더링
-
-    Returns:
-        rx.Component: 입력 영역 컴포넌트
-    """
     # 농장 정보 표시
     farm_prompt = rx.cond(
         ChatState.farm_name != "",
         rx.text(
-            f"[{ChatState.farm_name}] 농장입니다. 💬 무엇을 도와 드릴까요?",
+            f" [{ChatState.farm_name}] 농장입니다. 💬 무엇을 도와 드릴까요?",
             font_size="13px",
             color="#000000",
             font_weight="700",
@@ -51,23 +45,41 @@ def chat_input_area() -> rx.Component:
                     disabled=ChatState.input_locked,
                     class_name="chat-textarea",
                     rows="3",
-                    resize="vertical",
-                    min_height="48px",
-                    max_height="180px",
-                    line_height="1.5",
+                    resize="none",
+                    height="64px",
+                    min_height="64px",
+                    max_height="64px",
+                    overflow_y="hidden",
+                    custom_attrs={"wrap": "off"},
+                    line_height="20px",
                     **INPUT_STYLE,
                 ),
-                rx.button(
-                    rx.cond(
-                        ChatState.is_loading,
-                        rx.spinner(size="2"),
-                        rx.text("전송"),
+                rx.vstack(
+                    rx.box(
+                        rx.cond(
+                            ChatState.is_loading,
+                            rx.text("🚴", class_name="running-bicycle"),
+                            rx.box(),
+                        ),
+                        class_name="send-running-fixed-slot",
                     ),
-                    type="button",
-                    on_click=ChatState.handle_send_button_click,
-                    **BUTTON_PRIMARY,
+                    rx.button(
+                        rx.cond(
+                            ChatState.is_loading,
+                            rx.spinner(size="2"),
+                            rx.text("전송"),
+                        ),
+                        type="button",
+                        on_click=ChatState.handle_send_button_click,
+                        class_name="send-button-raised",
+                        **BUTTON_PRIMARY,
+                    ),
+                    class_name="send-button-column",
+                    spacing="1",
+                    align="center",
+                    justify="start",
                 ),
-                align="end",
+                align="start",
                 spacing="3",
                 width="100%",
             ),

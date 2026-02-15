@@ -9,7 +9,7 @@
 import traceback
 from datetime import datetime
 
-from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.chroma.collections import document_collection
 from agri_ai_core.src.chroma.operations import upsert_collection_data
 
@@ -74,7 +74,7 @@ def chunk_document(document_content, chunk_size=1000, chunk_overlap=200):
 
     # 청크가 너무 적으면 단순 크기 기반 분할로 전환
     if len(chunks) < 3:
-        logger.info("문단 기반 분할 결과가 불충분하여 크기 기반 분할로 전환")
+        logger.debug("문단 기반 분할 결과가 불충분하여 크기 기반 분할로 전환")
         chunks = []
         for i in range(0, len(document_content), chunk_size - chunk_overlap):
             chunk = document_content[i:i + chunk_size]
@@ -143,7 +143,7 @@ def store_document_with_chunks(document_content, document_metadata, chunk_size=1
 
         result["success"] = success_count > 0
         result["chunks_count"] = success_count
-        logger.info(f"문서 '{document_metadata.get('file_name', 'doc')}' {success_count}개 청크로 저장 완료")
+        logger.debug(f"문서 '{document_metadata.get('file_name', 'doc')}' {success_count}개 청크로 저장 완료")
 
         return result
 

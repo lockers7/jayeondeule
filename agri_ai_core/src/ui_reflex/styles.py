@@ -50,7 +50,7 @@ CHAT_BUBBLE_ASSISTANT = {
 INPUT_STYLE = {
     "border": f"2px solid {COLORS['primary']}",
     "border_radius": "8px",
-    "padding": "12px 16px",
+    "padding": "0 0px",
     "font_size": "14px",
     "width": "100%",
     "background_color": "#E5E7EB",
@@ -102,6 +102,8 @@ FILE_ATTACHMENT_STYLE = {
 # 사이드바 스타일
 SIDEBAR_STYLE = {
     "width": "280px",
+    "min_width": "280px",
+    "flex_shrink": "0",
     "height": "100vh",
     "background_color": "#F8F9FA",
     "border_right": f"1px solid {COLORS['border']}",
@@ -139,7 +141,7 @@ INPUT_AREA_STYLE = {
 # 헤더 스타일
 HEADER_STYLE = {
     "text_align": "center",
-    "padding": "16px 0",
+    "padding": "16px 20px",
     "background_color": COLORS["primary_light"],
     "border_radius": "8px",
     "margin_bottom": "20px",

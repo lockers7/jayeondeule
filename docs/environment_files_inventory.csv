@@ -1,0 +1,22 @@
+﻿구분,파일위치,파일명,상세기능설명
+환경파일,/workspace/jayeondeule,.env,서비스 실행에 필요한 비밀키/접속정보/운영 파라미터를 환경변수 형태로 정의한다.
+환경파일,/workspace/jayeondeule/.mcp/web-search,package-lock.json,npm 의존성 트리를 고정해 동일 버전으로 재현 가능한 설치 환경을 보장한다.
+환경파일,/workspace/jayeondeule/.mcp/web-search,package.json,Node.js 패키지 메타데이터 및 스크립트/의존성 목록을 정의해 MCP 웹검색 모듈의 빌드 환경을 구성한다.
+환경파일,/workspace/jayeondeule/agri_ai_core,rxconfig.py,"Reflex 애플리케이션 빌드/실행 경로, 앱 이름, 런타임 옵션을 정의하는 프레임워크 설정 파일이다."
+환경파일,/workspace/jayeondeule/pgvector,Dockerfile,컨테이너 이미지 빌드 단계를 정의해 일관된 실행환경을 구성한다.
+환경파일,/workspace/jayeondeule/pgvector,Makefile,플랫폼별 빌드/테스트/설치 명령을 표준화해 개발 환경 준비와 배포를 자동화한다.
+환경파일,/workspace/jayeondeule/pgvector,Makefile.win,플랫폼별 빌드/테스트/설치 명령을 표준화해 개발 환경 준비와 배포를 자동화한다.
+환경파일,/workspace/jayeondeule/raspi/v1,.env,서비스 실행에 필요한 비밀키/접속정보/운영 파라미터를 환경변수 형태로 정의한다.
+환경파일,/workspace/jayeondeule/raspi/v3,.env,서비스 실행에 필요한 비밀키/접속정보/운영 파라미터를 환경변수 형태로 정의한다.
+환경파일,/workspace/jayeondeule/setup,agriAiCore.service,"systemd 유닛 파일로 프로세스 시작 순서, 재시작 정책, 실행 계정을 정의해 서비스 상시 운영을 보장한다."
+환경파일,/workspace/jayeondeule/setup,chromadb.service,"systemd 유닛 파일로 프로세스 시작 순서, 재시작 정책, 실행 계정을 정의해 서비스 상시 운영을 보장한다."
+환경파일,/workspace/jayeondeule/setup,chromadb_upgrade.sh,구성요소 업그레이드 절차를 자동화해 버전 갱신 시 작업 누락을 방지한다.
+환경파일,/workspace/jayeondeule/setup,mcp_upgrade.sh,구성요소 업그레이드 절차를 자동화해 버전 갱신 시 작업 누락을 방지한다.
+환경파일,/workspace/jayeondeule/setup,quick_check.sh,서비스/포트/프로세스 상태를 점검해 설치 결과를 검증한다.
+환경파일,/workspace/jayeondeule/setup,reflex.service,"systemd 유닛 파일로 프로세스 시작 순서, 재시작 정책, 실행 계정을 정의해 서비스 상시 운영을 보장한다."
+환경파일,/workspace/jayeondeule/setup,requirement.sh,운영에 필요한 시스템 패키지/파이썬 의존성 설치 절차를 자동화한다.
+환경파일,/workspace/jayeondeule/setup,run_reflex.sh,Reflex UI 프로세스를 운영 환경 기준으로 실행/관리한다.
+환경파일,/workspace/jayeondeule/setup,run_services.sh,관련 서비스를 일괄 등록/실행/점검하는 운영 자동화 스크립트다.
+환경파일,/workspace/jayeondeule/setup,setup_service.sh,관련 서비스를 일괄 등록/실행/점검하는 운영 자동화 스크립트다.
+환경파일,/workspace/jayeondeule/setup,test_services.sh,관련 서비스를 일괄 등록/실행/점검하는 운영 자동화 스크립트다.
+환경파일,/workspace/jayeondeule/setup,verify_reflex.sh,서비스/포트/프로세스 상태를 점검해 설치 결과를 검증한다.

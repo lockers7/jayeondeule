@@ -13,7 +13,7 @@
 import traceback
 from datetime import datetime
 
-from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.postgresql.connection import db_session
 from agri_ai_core.src.postgresql import queries as dbQry
 from agri_ai_core.src.postgresql.reader import read_light_irrigation_settings
@@ -186,7 +186,7 @@ def control_lighting_schedule(farm_id, house_id):
         if result.get("success"):
             status = "ON" if should_turn_on else "OFF"
             schedule_info = f" (스케줄: {', '.join(active_schedules)})" if active_schedules else ""
-            logger.info(f"농장 {farm_id}, 재배사 {house_id}: 조명 {status}{schedule_info}")
+            logger.debug(f"농장 {farm_id}, 재배사 {house_id}: 조명 {status}{schedule_info}")
 
             return {
                 "success": True,
@@ -303,7 +303,7 @@ def control_irrigation_schedule(farm_id, house_id):
         if result.get("success"):
             status = "ON" if should_turn_on else "OFF"
             schedule_info = f" (스케줄: {', '.join(active_schedules)})" if active_schedules else ""
-            logger.info(f"농장 {farm_id}, 재배사 {house_id}: 관수밸브 {status}{schedule_info}")
+            logger.debug(f"농장 {farm_id}, 재배사 {house_id}: 관수밸브 {status}{schedule_info}")
 
             return {
                 "success": True,
@@ -369,6 +369,24 @@ def control_all_schedules():
 
                 # 관수밸브 제어
                 irrigation_result = control_irrigation_schedule(farm_id, house_id)
+
+                # 결합 로그 출력
+                parts = []
+                all_schedules = []
+
+                light_status = light_result.get("status")
+                if light_status:
+                    parts.append(f"조명 {light_status}")
+                    all_schedules.extend(light_result.get("schedules", []))
+
+                irr_status = irrigation_result.get("status")
+                if irr_status:
+                    parts.append(f"관수 {irr_status}")
+                    all_schedules.extend(irrigation_result.get("schedules", []))
+
+                if parts:
+                    schedule_info = f" (스케줄: {', '.join(all_schedules)})" if all_schedules else ""
+                    logger.info(f"농장 {farm_id}, 재배사 {house_id}: {' / '.join(parts)}{schedule_info}")
 
                 # 결과 집계
                 house_result = {

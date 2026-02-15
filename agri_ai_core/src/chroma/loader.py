@@ -17,7 +17,7 @@ import json
 import traceback
 from datetime import datetime, timedelta
 
-from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.chroma.collections import (
     source_collection,
     learned_collection,

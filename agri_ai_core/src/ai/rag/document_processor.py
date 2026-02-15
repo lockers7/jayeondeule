@@ -10,7 +10,7 @@
 import os
 from datetime import datetime
 
-from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.chroma.collections import optimal_collection, document_collection
 from agri_ai_core.src.chroma.operations import (
     generate_doc_id,
@@ -80,7 +80,7 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None):
             document_content = text_content
             filename = os.path.basename(file_path) if file_path else "direct_text"
             file_size = len(text_content)
-            logger.info(f"직접 제공된 텍스트 처리 시작: {filename}, 크기: {file_size} 바이트")
+            logger.debug(f"직접 제공된 텍스트 처리 시작: {filename}, 크기: {file_size} 바이트")
         else:
             # 파일 존재 여부 확인
             if not os.path.exists(file_path):
@@ -96,7 +96,7 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None):
             with open(file_path, 'r', encoding='utf-8') as f:
                 document_content = f.read()
 
-            logger.info(f"문서 로드 완료: {filename}, 크기: {file_size/1024:.2f}KB")
+            logger.debug(f"문서 로드 완료: {filename}, 크기: {file_size/1024:.2f}KB")
 
         # 문서 유형 감지
         document_type, crop_name = detect_document_type(document_content)
@@ -106,7 +106,7 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None):
         if crop_name:
             result["crop_name"] = crop_name
 
-        logger.info(f"문서 유형 감지: {document_type}" + (f", 작물: {crop_name}" if crop_name else ""))
+        logger.debug(f"문서 유형 감지: {document_type}" + (f", 작물: {crop_name}" if crop_name else ""))
 
         # 메타데이터 구성
         metadata = {
@@ -144,7 +144,7 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None):
                 "record_datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             })
 
-            logger.info(f"생육 최적 집계 데이터 생성 -> {doc_id}")
+            logger.debug(f"생육 최적 집계 데이터 생성 -> {doc_id}")
             upsert_collection_data(
                 "update_optimal_collection",
                 optimal_collection(),
@@ -153,7 +153,7 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None):
                 optimal_metadata
             )
 
-            logger.info(f"문서 학습 데이터 생성 -> {doc_id}")
+            logger.debug(f"문서 학습 데이터 생성 -> {doc_id}")
             upsert_collection_data(
                 "llm_document_process",
                 document_collection(),
@@ -163,7 +163,7 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None):
             )
 
             result["structured_data_stored"] = True
-            logger.info(f"구조화된 정보 저장 완료: {doc_id}")
+            logger.debug(f"구조화된 정보 저장 완료: {doc_id}")
         except Exception as e:
             logger.warning(f"구조화된 정보 저장 중 오류: {e}")
 
@@ -171,7 +171,7 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None):
         result["success"] = True
         result["message"] = f"문서 처리 및 저장 완료: {filename}"
 
-        logger.info(f"문서 처리 완료: {filename}")
+        logger.debug(f"문서 처리 완료: {filename}")
         return result
 
     except Exception as e:
@@ -201,14 +201,14 @@ def process_attached_files(file_paths, farm_id):
     failed_files = []
     results_summary = []
 
-    logger.info(f"첨부 파일 {total_files}개 처리 시작")
+    logger.debug(f"첨부 파일 {total_files}개 처리 시작")
 
     for file_info in file_paths:
         file_path = file_info["path"]
         filename = file_info["filename"]
 
         try:
-            logger.info(f"파일 처리 시작: {filename}")
+            logger.debug(f"파일 처리 시작: {filename}")
 
             # 지원하는 파일 형식 확인
             file_ext = os.path.splitext(filename)[1].lower()
@@ -225,16 +225,28 @@ def process_attached_files(file_paths, farm_id):
                 success_count += 1
                 chunks_count = result.get("chunks_stored", 0)
                 qa_count = result.get("qa_pairs_generated", 0)
-
                 crop_name = result.get("crop_name", "")
+                doc_type = result.get("document_type", "general")
+                structured = result.get("structured_data_stored", False)
 
-                msg = f"파일 '{filename}' 처리 완료: {chunks_count}개 청크 저장"
-                if qa_count > 0:
-                    msg += f", {qa_count}개 QA 쌍 생성"
+                # 문서 유형 한글 변환
+                doc_type_labels = {
+                    "crop_info": "작물 정보",
+                    "disease_info": "병해충 정보",
+                    "general": "일반 문서",
+                }
+                doc_type_label = doc_type_labels.get(doc_type, doc_type)
+
+                msg = f"✓ '{filename}' → {chunks_count}개 청크 저장"
+                msg += f" | 문서유형: {doc_type_label}"
                 if crop_name:
-                    msg += f", 작물: {crop_name}"
+                    msg += f" | 작물: {crop_name}"
+                if structured:
+                    msg += f" | 구조화 데이터 저장 완료"
+                if qa_count > 0:
+                    msg += f" | {qa_count}개 QA 쌍 생성"
 
-                logger.info(msg)
+                logger.debug(msg)
                 results_summary.append(msg)
             else:
                 error = result.get("error", "알 수 없는 오류")
@@ -254,16 +266,16 @@ def process_attached_files(file_paths, farm_id):
     # 결과 메시지 생성
     learning_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if success_count == total_files:
-        result_message = f"첨부된 파일 {total_files}개를 모두 성공적으로 처리했습니다. (학습 일시: {learning_datetime})\n\n"
+        result_message = f"📋 RAG 수행 완료 — 파일 {total_files}개 모두 VectorDB에 저장되었습니다.\n"
     else:
-        result_message = f"첨부된 파일 {total_files}개 중 {success_count}개 처리 성공, {len(failed_files)}개 실패했습니다. (학습 일시: {learning_datetime})\n\n"
+        result_message = f"📋 RAG 수행 완료 — 파일 {total_files}개 중 {success_count}개 성공, {len(failed_files)}개 실패\n"
+    result_message += f"⏱ 학습 일시: {learning_datetime}\n\n"
 
     # 상세 결과 추가
-    result_message += "처리 결과:\n"
     for i, summary in enumerate(results_summary):
-        result_message += f"{i+1}. {summary}\n"
+        result_message += f"  {i+1}. {summary}\n"
 
     result_message += "\n처리된 파일의 내용으로 질문해보세요!"
 
-    logger.info(f"첨부 파일 처리 완료: {success_count}/{total_files} 성공")
+    logger.debug(f"첨부 파일 처리 완료: {success_count}/{total_files} 성공")
     return result_message

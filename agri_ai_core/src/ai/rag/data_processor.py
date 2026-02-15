@@ -14,7 +14,7 @@ import pandas as pd
 from datetime import timedelta
 from collections import defaultdict, Counter
 
-from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.chroma.collections import source_collection
 from agri_ai_core.config import (
     SENSOR_MAPPING, RELAY_MAPPING, RELAY_FIELD_MAPPING
@@ -54,13 +54,13 @@ def process_unit_data(item):
     failure_count = 0
 
     if "units" not in item or not item["units"]:
-        logger.info("처리할 장치 데이터가 없습니다.")
+        logger.debug("처리할 장치 데이터가 없습니다.")
         return 0, 0
 
     try:
         df = pd.DataFrame(item["units"])
         if df.empty or "기록일시" not in df.columns:
-            logger.info("유효한 기록일시가 없어 집계 불가.")
+            logger.debug("유효한 기록일시가 없어 집계 불가.")
             return 0, 0
 
         df["기록일시"] = pd.to_datetime(df["기록일시"])
@@ -82,7 +82,7 @@ def process_unit_data(item):
             unit_cnt = len(group)
             cumulative_cnt += unit_cnt
 
-            logger.info(f"장치 데이터 집계 처리: {cumulative_cnt} / {total_count}건 -> {agg_time}")
+            logger.debug(f"장치 데이터 집계 처리: {cumulative_cnt} / {total_count}건 -> {agg_time}")
 
             try:
                 sensor_sums = defaultdict(float)
@@ -193,7 +193,7 @@ def process_crop_data(item):
 
     for crop in item["crops"]:
         cumulative_cnt += 1
-        logger.info(f"생육 데이터 처리: {cumulative_cnt}/{total_crops}건 -> {crop.get('기록일시')}")
+        logger.debug(f"생육 데이터 처리: {cumulative_cnt}/{total_crops}건 -> {crop.get('기록일시')}")
 
         try:
             crops_meta_data = {
@@ -288,8 +288,8 @@ def process_crop_data(item):
 
         except Exception as e:
             import traceback
-            logger.info(f"생육 데이터 처리 중 오류 발생: {e}")
-            logger.info(traceback.format_exc())
+            logger.debug(f"생육 데이터 처리 중 오류 발생: {e}")
+            logger.debug(traceback.format_exc())
             failure_count += 1
 
     return success_count, failure_count

@@ -7,7 +7,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Dict, Any
 
-from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.logs import setup_logger
 
 logger = setup_logger(__name__)
 
@@ -104,7 +104,7 @@ def search_farm_knowledge(query: str, n_results: int = 3) -> Dict[str, Any]:
                 "distance": distances[idx] if idx < len(distances) else None,
             })
 
-        logger.info(f"[Tool] search_farm_knowledge: {len(formatted_results)}개 결과")
+        logger.debug(f"[Tool] search_farm_knowledge: {len(formatted_results)}개 결과")
 
         return {
             "success": True,
@@ -218,7 +218,7 @@ def search_web(query: str) -> Dict[str, Any]:
         result_count = 0
         if isinstance(result, dict) and isinstance(result.get("results"), list):
             result_count = len(result.get("results", []))
-        logger.info(f"[Tool] search_web(MCP): query='{query}' success={result.get('success')} results={result_count}")
+        logger.debug(f"[Tool] search_web(MCP): query='{query}' success={result.get('success')} results={result_count}")
 
         return result
 
@@ -245,7 +245,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
     Returns:
         str: 실행 결과 (JSON 문자열)
     """
-    logger.info(f"[Tool] 실행: {tool_name}({tool_args})")
+    logger.debug(f"[Tool] 실행: {tool_name}({tool_args})")
 
     try:
         if tool_name == "get_current_datetime":

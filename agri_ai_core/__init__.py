@@ -3,7 +3,7 @@ __author__ = "AgriAI Team"
 
 # 공통 모듈 exports (기본 유틸리티만)
 from agri_ai_core.config import settings, get_settings
-from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.logs import setup_logger
 
 __all__ = [
     # 설정 및 유틸리티
