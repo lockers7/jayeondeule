@@ -11,7 +11,7 @@ import os
 import pandas as pd
 from typing import List, Dict, Any
 
-from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.logs import setup_logger
 
 logger = setup_logger(__name__)
 
@@ -152,7 +152,7 @@ def process_uploaded_files(file_paths: List[Dict[str, str]]) -> str:
     if not file_paths:
         return ""
 
-    logger.info(f"파일 처리 시작: {len(file_paths)}개 파일")
+    logger.debug(f"파일 처리 시작: {len(file_paths)}개 파일")
 
     file_contents = []
 
@@ -169,7 +169,7 @@ def process_uploaded_files(file_paths: List[Dict[str, str]]) -> str:
         _, ext = os.path.splitext(filename)
         ext = ext.lower()
 
-        logger.info(f"파일 읽기: {filename} ({ext})")
+        logger.debug(f"파일 읽기: {filename} ({ext})")
 
         # 파일 타입별 처리
         if ext == '.csv':

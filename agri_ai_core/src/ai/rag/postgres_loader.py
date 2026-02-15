@@ -6,7 +6,7 @@
 import traceback
 from typing import Any, Dict, List
 
-from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.chroma.client import heartbeat
 from agri_ai_core.src.ai.rag.data_processor import process_unit_data, process_crop_data
 from agri_ai_core.src.postgresql.reader import (
@@ -109,7 +109,7 @@ def fetch_data_from_postgresql(limit: int = 100000) -> List[Dict[str, Any]]:
             if max_rows is not None and (total_units + total_crops) >= max_rows:
                 break
 
-        logger.info(
+        logger.debug(
             "PostgreSQL 데이터 조회 완료 -> 농장/재배사: %d건, 장치: %d건, 생육: %d건",
             len(datas),
             total_units,
@@ -135,7 +135,7 @@ def sync_postgresql_to_vcdb(data_limit: int = 100000) -> bool:
 
         datas = fetch_data_from_postgresql(limit=data_limit)
         if not datas:
-            logger.info("적재할 PostgreSQL 데이터가 없습니다.")
+            logger.debug("적재할 PostgreSQL 데이터가 없습니다.")
             return False
 
         total_unit_success = 0
@@ -157,7 +157,7 @@ def sync_postgresql_to_vcdb(data_limit: int = 100000) -> bool:
         total_success = total_unit_success + total_crop_success
         total_failure = total_unit_failure + total_crop_failure
 
-        logger.info(
+        logger.debug(
             "PostgreSQL -> Chroma 적재 완료: 성공 %d건 (units=%d, crops=%d), 실패 %d건",
             total_success,
             total_unit_success,

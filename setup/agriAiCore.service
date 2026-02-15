@@ -1,7 +1,7 @@
 [Unit]
 Description=AgriAI Core Services (Scheduler + Reflex UI)
-After=network.target chromadb.service postgresql.service
-Wants=chromadb.service
+After=network-online.target chromadb.service postgresql.service
+Wants=network-online.target chromadb.service
 Conflicts=reflex.service
 
 [Service]

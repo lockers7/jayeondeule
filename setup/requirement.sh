@@ -99,7 +99,8 @@ pip install --upgrade pip -q
 # --- 핵심 프레임워크 ---
 pip install \
     pydantic \
-    reflex
+    reflex \
+    fastapi
 
 # --- 데이터베이스 / 데이터 ---
 pip install \
@@ -127,7 +128,7 @@ log_info "Python 패키지 설치 완료"
 log_info "[5/5] 설치 검증..."
 
 FAILED=0
-for pkg in pydantic reflex psycopg2 numpy pandas ollama chromadb uvicorn dotenv requests apscheduler; do
+for pkg in pydantic reflex fastapi psycopg2 numpy pandas ollama chromadb uvicorn dotenv requests apscheduler; do
     if python3 -c "import $pkg" 2>/dev/null; then
         echo "  [OK] $pkg"
     else

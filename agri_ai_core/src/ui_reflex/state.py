@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import List, Dict, Optional, Any
 from pydantic import BaseModel
 
-from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.postgresql.connection import db_session
 from agri_ai_core.src.postgresql.queries import (
     GET_ONE_FARM,
@@ -21,16 +21,19 @@ from agri_ai_core.src.postgresql.queries import (
 )
 from agri_ai_core.src.ai.query_handler_simple import query_llm_simple
 from agri_ai_core.src.ai.llm_client import clean_llm_response
+from agri_ai_core.src.ai.rag.document_processor import process_attached_files, llm_document_process
 
 logger = setup_logger(__name__)
 
 # 프로젝트 루트 경로
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
-UPLOAD_DIR = os.path.join(PROJECT_ROOT, "upload")
-DOWNLOAD_DIR = os.path.join(PROJECT_ROOT, "download")
+UPLOAD_DIR = os.getenv("UPLOAD_PATH", os.path.join(PROJECT_ROOT, "upload"))
+DOWNLOAD_DIR = os.getenv("DOWNLOAD_PATH", os.path.join(PROJECT_ROOT, "download"))
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+MAX_INPUT_LINES = 3
 
 
 
@@ -71,6 +74,11 @@ class ChatState(rx.State):
 
     # 파일 관리
     uploaded_files: List[FileInfo] = []
+
+    # RAG 상태
+    rag_processing: bool = False
+    rag_active_action: str = ""
+    rag_status_message: str = ""
 
     # 농장 정보
     farm_id: str = "1"
@@ -270,7 +278,11 @@ class ChatState(rx.State):
     # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     def set_current_input(self, value: str):
         """입력창 텍스트 설정."""
-        self.current_input = value
+        normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+        lines = normalized.split("\n")
+        if len(lines) > MAX_INPUT_LINES:
+            lines = lines[:MAX_INPUT_LINES]
+        self.current_input = "\n".join(lines)
 
     def add_user_message(self, content: str, files: List[FileInfo] = None):
         """사용자 메시지 추가"""
@@ -491,3 +503,135 @@ class ChatState(rx.State):
     def set_weather_city(self, city: str):
         """날씨 도시 설정"""
         self.weather_city = city
+
+    # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    # RAG 처리
+    # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    def trigger_perform_rag(self):
+        """RAG수행 버튼 클릭 진입점."""
+        if self.rag_processing:
+            return
+        self.rag_active_action = "perform"
+        return ChatState.perform_rag
+
+    def trigger_save_rag(self):
+        """RAG실행 버튼 클릭 진입점."""
+        if self.rag_processing:
+            return
+        self.rag_active_action = "save"
+        return ChatState.save_rag
+
+    @rx.event(background=True)
+    async def perform_rag(self):
+        """RAG수행: 첨부파일 → chunk → embed → ChromaDB 저장"""
+        async with self:
+            if self.rag_processing:
+                return
+            if not self.uploaded_files:
+                self.add_assistant_message("RAG 수행할 첨부파일이 없습니다. 파일을 먼저 업로드하세요.")
+                self.rag_active_action = ""
+                return
+            self.rag_processing = True
+            self.rag_active_action = "perform"
+            self.rag_status_message = "RAG 수행 중..."
+            files_snapshot = self.uploaded_files.copy()
+            farm_id = self.farm_id
+
+        try:
+            file_paths = [
+                {"filename": f.name, "path": f.path}
+                for f in files_snapshot
+            ]
+            result_message = process_attached_files(file_paths, farm_id)
+
+            async with self:
+                self.add_assistant_message(result_message)
+                self.rag_status_message = ""
+        except Exception as e:
+            logger.error(f"RAG 수행 중 오류: {e}")
+            async with self:
+                self.add_assistant_message(f"RAG 수행 중 오류가 발생했습니다: {str(e)}")
+                self.rag_status_message = ""
+        finally:
+            async with self:
+                self.rag_processing = False
+                self.rag_active_action = ""
+
+    @rx.event(background=True)
+    async def save_rag(self):
+        """RAG저장: LLM 대화결과 → chunk → embed → ChromaDB 저장"""
+        async with self:
+            if self.rag_processing:
+                return
+            if not self.messages:
+                self.add_assistant_message("저장할 대화 내용이 없습니다.")
+                self.rag_active_action = ""
+                return
+            self.rag_processing = True
+            self.rag_active_action = "save"
+            self.rag_status_message = "RAG 저장 중..."
+            messages_snapshot = self.messages.copy()
+            farm_id = self.farm_id
+            farm_name = self.farm_name
+            house_name = self.house_name
+
+        try:
+            # 대화 내용을 텍스트로 변환
+            conversation_lines = []
+            conversation_lines.append(f"[농장: {farm_name}, 재배사: {house_name}]")
+            conversation_lines.append(f"[대화 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]")
+            conversation_lines.append("")
+
+            for msg in messages_snapshot:
+                role_label = "사용자" if msg.role == "user" else "AI"
+                conversation_lines.append(f"[{role_label}] {msg.content}")
+                conversation_lines.append("")
+
+            conversation_text = "\n".join(conversation_lines)
+
+            result = llm_document_process(
+                text_content=conversation_text,
+                farm_id=farm_id,
+            )
+
+            async with self:
+                if result.get("success"):
+                    chunks = result.get("chunks_stored", 0)
+                    doc_type = result.get("document_type", "general")
+                    crop_name = result.get("crop_name", "")
+                    structured = result.get("structured_data_stored", False)
+                    timestamp = result.get("timestamp", "")
+
+                    # 문서 유형 한글 변환
+                    doc_type_labels = {
+                        "crop_info": "작물 정보",
+                        "disease_info": "병해충 정보",
+                        "general": "일반 문서",
+                    }
+                    doc_type_label = doc_type_labels.get(doc_type, doc_type)
+
+                    summary = f"📋 RAG 저장 완료 — 대화 내용이 VectorDB에 저장되었습니다.\n"
+                    summary += f"⏱ 저장 일시: {timestamp}\n\n"
+                    summary += f"  ✓ 대화 메시지: {len(messages_snapshot)}개\n"
+                    summary += f"  ✓ 저장된 청크: {chunks}개\n"
+                    summary += f"  ✓ 문서 유형: {doc_type_label}\n"
+                    if crop_name:
+                        summary += f"  ✓ 감지된 작물: {crop_name}\n"
+                    if structured:
+                        summary += f"  ✓ 구조화 데이터: 저장 완료\n"
+                    summary += "\n저장된 대화 내용으로 질문해보세요!"
+
+                    self.add_assistant_message(summary)
+                else:
+                    error = result.get("error", "알 수 없는 오류")
+                    self.add_assistant_message(f"RAG 저장 실패: {error}")
+                self.rag_status_message = ""
+        except Exception as e:
+            logger.error(f"RAG 저장 중 오류: {e}")
+            async with self:
+                self.add_assistant_message(f"RAG 저장 중 오류가 발생했습니다: {str(e)}")
+                self.rag_status_message = ""
+        finally:
+            async with self:
+                self.rag_processing = False
+                self.rag_active_action = ""

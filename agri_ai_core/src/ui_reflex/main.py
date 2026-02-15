@@ -8,6 +8,31 @@ from .components import chat_history, chat_input_area, file_upload_area, sidebar
 from .styles import MAIN_CONTENT_STYLE, HEADER_STYLE
 
 
+def rag_action_button(label: str, action: str, on_click_event) -> rx.Component:
+    """RAG 액션 버튼: 텍스트는 항상 유지, 실행 중일 때만 spinner 표시."""
+    is_active = ChatState.rag_processing & (ChatState.rag_active_action == action)
+    return rx.button(
+        rx.hstack(
+            rx.cond(
+                is_active,
+                rx.spinner(size="1"),
+                rx.box(width="12px", height="12px"),
+            ),
+            rx.text(label, font_size="12px"),
+            spacing="1",
+            align="center",
+            justify="center",
+        ),
+        on_click=on_click_event,
+        size="1",
+        variant="surface",
+        color_scheme="gray",
+        cursor="pointer",
+        min_width="88px",
+        class_name="rag-action-button",
+    )
+
+
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 메인 페이지
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -24,30 +49,46 @@ def index() -> rx.Component:
 
         # 오른쪽 메인 컨텐츠
         rx.box(
-            # LLM 처리 중 표시 아이콘 (우측 상단)
-            rx.cond(
-                ChatState.is_loading,
-                rx.box(
-                    rx.text("🚴", class_name="running-bicycle"),
-                    class_name="llm-running-indicator",
-                ),
-                rx.box(),
-            ),
-
-            # 헤더
+            # 상단 1라인: 제목 + RAG 버튼
             rx.box(
-                rx.heading(
-                    "🍄 자연들에 상황버섯 AI",
-                    size="7",
-                    color="#1B5E20",
-                    margin="0",
+                rx.box(
+                    rx.heading(
+                        "🍄 자연들에 상황버섯 AI",
+                        size="7",
+                        color="#1B5E20",
+                        margin="0",
+                        position="absolute",
+                        left="50%",
+                        top="50%",
+                        transform="translate(-50%, -50%)",
+                        white_space="nowrap",
+                        pointer_events="none",
+                        z_index="1",
+                    ),
+                    rx.hstack(
+                        rag_action_button("RAG수행", "perform", ChatState.trigger_perform_rag),
+                        rag_action_button("RAG저장", "save", ChatState.trigger_save_rag),
+                        spacing="2",
+                        align="center",
+                        justify="end",
+                        position="relative",
+                        z_index="2",
+                    ),
+                    width="100%",
+                    min_height="44px",
+                    position="relative",
+                    display="flex",
+                    align_items="center",
+                    justify_content="flex-end",
                 ),
+                # 두 번째 줄: 부제목
                 rx.text(
                     "스마트팜 관리 및 재배 상담 서비스",
                     font_size="13px",
                     color="#616161",
                     font_weight="700",
                     margin_top="4px",
+                    margin_left="2px",
                 ),
                 **HEADER_STYLE,
             ),
@@ -65,6 +106,7 @@ def index() -> rx.Component:
         ),
 
         spacing="0",
+        padding="0",
         width="100%",
         height="100vh",
     )

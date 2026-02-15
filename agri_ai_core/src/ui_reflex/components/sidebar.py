@@ -25,12 +25,6 @@ AVAILABLE_CITIES = [
 # 사이드바 컴포넌트
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def sidebar() -> rx.Component:
-    """
-    사이드바 렌더링
-
-    Returns:
-        rx.Component: 사이드바 컴포넌트
-    """
     return rx.box(
         # 헤더
         rx.heading(
@@ -102,16 +96,23 @@ def sidebar() -> rx.Component:
                     f"농장: {ChatState.farm_name}",
                     font_size="13px",
                     color="#212529",
+                    word_break="break-word",
                 ),
                 rx.text(
                     f"재배사: {ChatState.house_name}",
                     font_size="13px",
                     color="#212529",
+                    word_break="break-word",
                 ),
                 background_color="#E3F2FD",
                 padding="12px",
                 border_radius="6px",
+                border="1px solid #90CAF9",
                 border_left="3px solid #2196F3",
+                box_sizing="border-box",
+                overflow="hidden",
+                width="100%",
+                class_name="current-selection-box",
             ),
             margin_bottom="20px",
         ),

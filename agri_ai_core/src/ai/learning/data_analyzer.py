@@ -25,7 +25,7 @@
 import numpy as np
 from datetime import datetime
 
-from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.logs import setup_logger
 from agri_ai_core.config import STATS_INTERVAL_MINUTES, RELAY_KEYS
 from agri_ai_core.src.chroma.collections import job_status_collection
 from agri_ai_core.src.utils import clean_sensor_value
@@ -195,7 +195,7 @@ def collect_optimal_data(units_data, top_crops, current_hour):
             else:
                 crop_end = datetime.now()
         except Exception as e:
-            logger.info(f"날짜 변환 오류: {e}")
+            logger.debug(f"날짜 변환 오류: {e}")
             continue
 
         for unit in units_data:
@@ -210,7 +210,7 @@ def collect_optimal_data(units_data, top_crops, current_hour):
                 try:
                     unit_datetime = datetime.strptime(unit_datetime, "%Y-%m-%d %H:%M:%S")
                 except Exception as e2:
-                    logger.info(f"장치 데이터 날짜 변환 오류: {e2}")
+                    logger.debug(f"장치 데이터 날짜 변환 오류: {e2}")
                     continue
 
             unit_hour = unit_datetime.hour
@@ -497,7 +497,7 @@ def analyze_farm_time_patterns(data, hour):
     try:
         hour_units = [unit for unit in units_data if unit.get("hour_of_day") == hour]
         if not hour_units:
-            logger.info(f"시간대 {hour}시 데이터가 없습니다. (조건 미일치)")
+            logger.debug(f"시간대 {hour}시 데이터가 없습니다. (조건 미일치)")
             return time_patterns
 
         sensor_data = collect_sensor_data(hour_units)
@@ -520,8 +520,8 @@ def analyze_farm_time_patterns(data, hour):
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def process_stats_and_optimal_data():
     try:
-        logger.info("-" * 100)
-        logger.info("통계 및 최적 환경 데이터 처리 시작")
+        logger.debug("-" * 100)
+        logger.debug("통계 및 최적 환경 데이터 처리 시작")
         start_time = datetime.now()
 
         now = datetime.now()
@@ -546,7 +546,7 @@ def process_stats_and_optimal_data():
                 f"마지막실행일시: {current_datetime}",
                 {"last_run": current_datetime}
             )
-            logger.info(f"마지막 실행 시간 기록 {result}: {current_datetime}")
+            logger.debug(f"마지막 실행 시간 기록 {result}: {current_datetime}")
         except Exception as e:
             logger.error(f"마지막 실행 시간 기록 중 오류: {e}")
 

@@ -7,7 +7,7 @@ import pandas as pd
 from decimal import Decimal
 from datetime import datetime
 
-from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.logs import setup_logger
 from agri_ai_core.config import settings
 
 logger = setup_logger(__name__)

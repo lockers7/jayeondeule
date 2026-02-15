@@ -18,7 +18,7 @@ import numpy as np
 from collections import OrderedDict
 from typing import Any, Optional
 
-from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.ai.mcp_client import mcp_http_request
 from agri_ai_core.config import settings
 from agri_ai_core.config import EMBEDDING_MODEL_NAME
@@ -176,7 +176,7 @@ def embed_text(text, timeout=60, max_retries=5):
         return cached
 
     if not check_ollama_health():
-        logger.info("[embed_text] Ollama 서버 상태 불량 - 더미 임베딩 생성")
+        logger.debug("[embed_text] Ollama 서버 상태 불량 - 더미 임베딩 생성")
         _EMBEDDING_SERVICE_DISABLED = True
         _EMBEDDING_FAILURE_REASON = "ollama_health_check_failed"
         return generate_dummy_embedding(text)
@@ -216,7 +216,7 @@ def embed_text(text, timeout=60, max_retries=5):
 
             if status_code in (400, 404, 422):
                 if not _EMBEDDING_SERVICE_DISABLED:
-                    logger.info(f"[embed_text] 임베딩 엔드포인트 {status_code} 응답 → 더미 임베딩 전환")
+                    logger.debug(f"[embed_text] 임베딩 엔드포인트 {status_code} 응답 → 더미 임베딩 전환")
                 _EMBEDDING_SERVICE_DISABLED = True
                 _EMBEDDING_FAILURE_REASON = f"http_status_{status_code}"
                 return generate_dummy_embedding(text)
@@ -225,7 +225,7 @@ def embed_text(text, timeout=60, max_retries=5):
                 last_error = f"HTTP 오류: {status_code} {error_text}"
                 if attempt < max_retries - 1:
                     wait_time = min(30, 5 + (attempt * 3))
-                    logger.info(f"[embed_text] {wait_time}초 대기 후 재시도... (서버 오류)")
+                    logger.debug(f"[embed_text] {wait_time}초 대기 후 재시도... (서버 오류)")
                     time.sleep(wait_time)
                     continue
                 break
@@ -255,14 +255,14 @@ def embed_text(text, timeout=60, max_retries=5):
 
             if attempt < max_retries - 1:
                 wait_time = min(15, 2 + attempt)
-                logger.info(f"[embed_text] {wait_time}초 대기 후 재시도... (일반 예외)")
+                logger.debug(f"[embed_text] {wait_time}초 대기 후 재시도... (일반 예외)")
                 time.sleep(wait_time)
                 continue
 
     _EMBEDDING_SERVICE_DISABLED = True
     _EMBEDDING_FAILURE_REASON = last_error
-    logger.info(f"[embed_text] 모든 재시도 실패 ({max_retries}회) → 더미 임베딩 반환")
-    logger.info(f"[embed_text] 마지막 오류: {last_error}")
+    logger.debug(f"[embed_text] 모든 재시도 실패 ({max_retries}회) → 더미 임베딩 반환")
+    logger.debug(f"[embed_text] 마지막 오류: {last_error}")
 
     return generate_dummy_embedding(text)
 
@@ -276,7 +276,7 @@ def reset_embedding_service():
     global _EMBEDDING_SERVICE_DISABLED, _EMBEDDING_FAILURE_REASON
     _EMBEDDING_SERVICE_DISABLED = False
     _EMBEDDING_FAILURE_REASON = None
-    logger.info("[embed_text] 임베딩 서비스 상태 초기화됨")
+    logger.debug("[embed_text] 임베딩 서비스 상태 초기화됨")
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -287,4 +287,4 @@ def reset_embedding_service():
 def clear_embedding_cache():
     global _embedding_cache
     _embedding_cache.clear()
-    logger.info("[embed_text] 임베딩 캐시 클리어됨")
+    logger.debug("[embed_text] 임베딩 캐시 클리어됨")

@@ -14,7 +14,7 @@ import json
 import pandas as pd
 from datetime import datetime
 
-from agri_ai_core.src.logs import setup_logger
+from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.chroma.collections import source_collection, learned_collection
 from agri_ai_core.src.utils.date_utils import parse_datetime
 from agri_ai_core.src.utils.conversion import convert_sensor_relay_data
@@ -177,7 +177,7 @@ def process_farm_hour_data(farm_id, hour, data, hour_timestamp=None):
     start_time = datetime.now()
 
     if not data["units_data"] and not data["crops_data"]:
-        logger.info(f"농장 {farm_id}의 시간대 {hour}시 처리할 데이터가 없습니다.")
+        logger.debug(f"농장 {farm_id}의 시간대 {hour}시 처리할 데이터가 없습니다.")
         return None
 
     units_count = len(data["units_data"])
@@ -283,8 +283,8 @@ def update_ollama_model(after_date=None, top_cnt=0):
     start_time = datetime.now()
     current_hour = start_time.hour
 
-    logger.info("=" * 100)
-    logger.info(f"LLM 학습 시작 - 시간대: {current_hour}시, 시작일자: {after_date}, 건수: {top_cnt})")
+    logger.debug("=" * 100)
+    logger.debug(f"LLM 학습 시작 - 시간대: {current_hour}시, 시작일자: {after_date}, 건수: {top_cnt})")
 
     learned_results = []
 
@@ -312,29 +312,29 @@ def update_ollama_model(after_date=None, top_cnt=0):
                     d for d in unlearned_datas
                     if pd.to_datetime(d.get("record_datetime", "1970-01-01"), errors="coerce") > parsed_after
                 ]
-                logger.info(f"after_date 1 필터링 완료: {before}건 → {len(unlearned_datas)}건")
+                logger.debug(f"after_date 1 필터링 완료: {before}건 → {len(unlearned_datas)}건")
             except Exception as e:
                 logger.warning(f"after_date 1 필터링 중 오류: {e}")
 
         source_results = get_documents(collection_name=source_collection())
         if "error" in source_results and "not found" in str(source_results.get("error", "")).lower():
-            logger.info("source_collection이 없거나 데이터가 없습니다. 데이터 초기화를 시도합니다.")
+            logger.debug("source_collection이 없거나 데이터가 없습니다. 데이터 초기화를 시도합니다.")
 
             sync_postgresql_to_vcdb()
-            logger.info("PostgreSQL에서 ChromaDB(source_collection) 직접 적재 완료")
+            logger.debug("PostgreSQL에서 ChromaDB(source_collection) 직접 적재 완료")
 
             unlearned_datas = get_unlearned_data(after_date, top_cnt)
 
         if not unlearned_datas:
-            logger.info("학습할 신규 데이터가 없습니다.")
+            logger.debug("학습할 신규 데이터가 없습니다.")
             end_time = datetime.now()
             processing_time = (end_time - start_time).total_seconds()
-            logger.info(f"LLM 학습 종료: 처리할 데이터 없음 (처리시간: {processing_time:.3f}초)")
-            logger.info("=" * 100)
+            logger.debug(f"LLM 학습 종료: 처리할 데이터 없음 (처리시간: {processing_time:.3f}초)")
+            logger.debug("=" * 100)
             return []
 
         data_count = len(unlearned_datas)
-        logger.info(f"신규 데이터 {data_count}건 학습 시작 !!! 기타건수: {len(source_results)}")
+        logger.debug(f"신규 데이터 {data_count}건 학습 시작 !!! 기타건수: {len(source_results)}")
 
         # 통계 및 최적 환경 데이터 처리
         stats_start = datetime.now()
@@ -441,7 +441,7 @@ def update_ollama_model(after_date=None, top_cnt=0):
         crops_count = sum(len(data.get("crops_data", [])) for data in farm_hour_data.values())
 
         logger.debug(f"데이터 변환 완료: {transform_processed_count}건 처리, {skipped_count}건 건너뜀")
-        logger.info(f"농장-시간대 조합: {farm_hours_count}개, 장치 데이터: {units_count}건, 작물 데이터: {crops_count}건")
+        logger.debug(f"농장-시간대 조합: {farm_hours_count}개, 장치 데이터: {units_count}건, 작물 데이터: {crops_count}건")
 
         learned_results = []
         process_success_count = 0
@@ -460,7 +460,7 @@ def update_ollama_model(after_date=None, top_cnt=0):
 
                 # units_data 보완
                 if not data.get("units_data"):
-                    logger.info(f"농장 {farm_id}, 시간대 {hour} units_data가 없어 더미 추가")
+                    logger.debug(f"농장 {farm_id}, 시간대 {hour} units_data가 없어 더미 추가")
                     data["units_data"] = [create_default_units_entry(farm_id, house_id)]
 
                 # 학습 실행
@@ -478,7 +478,7 @@ def update_ollama_model(after_date=None, top_cnt=0):
                 logger.error(traceback.format_exc())
                 process_error_count += 1
 
-        logger.info(f"농장-시간대 조합 처리 완료: {process_success_count}개 성공, {process_error_count}개 실패")
+        logger.debug(f"농장-시간대 조합 처리 완료: {process_success_count}개 성공, {process_error_count}개 실패")
 
         # 학습 결과 저장
         if learned_results:
@@ -527,9 +527,9 @@ def update_ollama_model(after_date=None, top_cnt=0):
                     try:
                         learned_items = get_documents(collection_name=learned_collection())
                         learned_count = len(learned_items.get("ids", [])) if "error" not in learned_items else 0
-                        logger.info(f"학습 완료: 총 {len(unlearned_datas)}건 처리, learned_collection에 {success_count}건 저장됨 (총 {learned_count}건)")
+                        logger.debug(f"학습 완료: 총 {len(unlearned_datas)}건 처리, learned_collection에 {success_count}건 저장됨 (총 {learned_count}건)")
                     except Exception as e:
-                        logger.info(f"학습 완료: 저장 건수 {success_count}건 (컬렉션 조회 실패: {e})")
+                        logger.debug(f"학습 완료: 저장 건수 {success_count}건 (컬렉션 조회 실패: {e})")
                 else:
                     logger.error(f"저장 실패 - 총 {len(learned_results)}건 중 {success_count}건 성공")
 
@@ -538,7 +538,7 @@ def update_ollama_model(after_date=None, top_cnt=0):
                 import traceback
                 logger.error(traceback.format_exc())
         else:
-            logger.info("학습 결과가 없습니다.")
+            logger.debug("학습 결과가 없습니다.")
 
     except Exception as e:
         logger.error(f"LLM 학습 중 최상위 오류: {e}")
@@ -549,7 +549,7 @@ def update_ollama_model(after_date=None, top_cnt=0):
     processing_time = (end_time - start_time).total_seconds()
     results_count = len(learned_results)
     data_count = len(unlearned_datas) if 'unlearned_datas' in locals() and unlearned_datas else 0
-    logger.info(f"LLM 학습 종료: 원본 데이터 {data_count}건, 학습 결과 {results_count}건 (처리시간: {processing_time:.3f}초)")
-    logger.info("=" * 100)
+    logger.debug(f"LLM 학습 종료: 원본 데이터 {data_count}건, 학습 결과 {results_count}건 (처리시간: {processing_time:.3f}초)")
+    logger.debug("=" * 100)
 
     return learned_results

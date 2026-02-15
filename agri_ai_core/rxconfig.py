@@ -9,8 +9,6 @@ REFLEX_PUBLIC_HOST = os.getenv("REFLEX_PUBLIC_HOST", "lockers7.iptime.org")
 REFLEX_PUBLIC_PORT = int(os.getenv("REFLEX_PUBLIC_PORT", "3000"))
 
 config = rx.Config(
-    # Reflex는 app_name을 "<package>"로 받고, 실제 엔트리는 "<package>.<package>"를 찾음.
-    # 현재 구조는 agri_ai_core/main/main.py 이므로 app_name은 "main"이어야 함.
     app_name="main",
     port=3000,
     backend_port=8001,
