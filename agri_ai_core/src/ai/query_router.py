@@ -54,18 +54,6 @@ class QueryRoutePlan:
     def mode_label(self) -> str:
         return ROUTE_LABELS.get(self.mode, self.mode)
 
-    def to_log_dict(self) -> Dict[str, Any]:
-        return {
-            "mode": self.mode,
-            "mode_label": self.mode_label,
-            "strategy": self.strategy,
-            "reason": self.reason,
-            "confidence": self.confidence,
-            "allowed_tool_names": list(self.allowed_tool_names),
-            "enable_recent_web_context": self.enable_recent_web_context,
-            "capabilities": dict(self.capabilities or {}),
-            "signals": dict(self.signals or {}),
-        }
 
 
 @dataclass(frozen=True)
@@ -535,7 +523,10 @@ def build_query_route_plan(
     force_refresh_capabilities: bool = False,
 ) -> QueryRoutePlan:
     capabilities = detect_runtime_capabilities(force_refresh=force_refresh_capabilities)
+
+    t0 = time.time()
     intent = _infer_intent_with_llm(user_query=user_query, farm_id=farm_id, house_id=house_id)
+    intent_elapsed = time.time() - t0
 
     strong_confidence = _to_float(os.getenv("AUTO_ROUTE_STRONG_INTENT_CONFIDENCE", "0.8"), 0.8)
     high_score_threshold = _to_float(os.getenv("AUTO_ROUTE_HIGH_SCORE_THRESHOLD", "0.75"), 0.75)
@@ -548,8 +539,15 @@ def build_query_route_plan(
     run_web_probe = capabilities.get("web_search", False) and (wants_web or intent.confidence < strong_confidence)
     run_vector_probe = capabilities.get("vector_db", False) and (wants_vector or intent.confidence < strong_confidence)
 
+    t1 = time.time()
     web_probe = _probe_web_relevance(user_query=user_query, enabled=run_web_probe)
     vector_probe = _probe_vector_relevance(user_query=user_query, enabled=run_vector_probe)
+    probe_elapsed = time.time() - t1
+
+    logger.info(
+        f"[라우팅소요] 의도분류={intent_elapsed:.1f}s 프로빙={probe_elapsed:.1f}s "
+        f"(web_probe={run_web_probe}, vector_probe={run_vector_probe})"
+    )
 
     use_web = False
     if capabilities.get("web_search", False):

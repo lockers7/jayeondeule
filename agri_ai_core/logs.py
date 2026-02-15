@@ -92,11 +92,18 @@ def setup_logger(name=None):
     Returns:
         logging.Logger: 설정된 로거 인스턴스
     """
-    if name in _loggers_initialized:
-        return logging.getLogger(name)
+    # .env 또는 환경변수의 최신 LOG_LEVEL을 직접 읽음 (캐시된 settings 우회)
+    log_level_str = (os.getenv("LOG_LEVEL") or settings.logging.level or "INFO").strip().upper()
+    log_level = getattr(logging, log_level_str, logging.INFO)
 
-    log_level_str = settings.logging.level or "INFO"
-    log_level = getattr(logging, log_level_str.upper(), logging.INFO)
+    if name in _loggers_initialized:
+        logger = logging.getLogger(name)
+        # 환경변수 변경 시 기존 로거의 레벨도 동기화
+        if logger.level != log_level:
+            logger.setLevel(log_level)
+            for h in logger.handlers:
+                h.setLevel(log_level)
+        return logger
 
     log_path = settings.logging.path or "logs"
     log_dir = log_path

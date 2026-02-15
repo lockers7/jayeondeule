@@ -38,21 +38,20 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
     start_time = datetime.now()
 
     try:
-        logger.debug("=" * 50)
-        logger.debug("    Tool Use 질의 처리 시작")
-        logger.debug("=" * 50)
         query_digest = hashlib.sha1((user_query or "").encode("utf-8", errors="replace")).hexdigest()[:12]
-        logger.debug(f"요청 수신: len={len(user_query or '')} digest={query_digest}")
-        logger.debug(f"농장 정보: {farm_name} (ID: {farm_id})")
+
+        # [1/5] 사용자 질문
+        logger.info(f"[사용자질문] \"{(user_query or '')[:120]}\" (len={len(user_query or '')}, farm={farm_name or '-'})")
 
         # 첨부 파일 처리
         full_query = user_query
         if file_paths:
-            logger.debug(f"첨부 파일 처리 중: {len(file_paths)}개 파일")
+            logger.info(f"[첨부파일] {len(file_paths)}개 파일 처리")
             file_content = process_uploaded_files(file_paths)
             full_query = f"{user_query}\n\n{file_content}"
 
-        # 자동 라우팅으로 1/2/3/4 경로 선택
+        # [2/5] 질문 유형 분류 (자동 라우팅)
+        route_start = datetime.now()
         auto_route_enabled = str(os.getenv("AUTO_QUERY_ROUTING", "true")).strip().lower() in {
             "1", "true", "yes", "y", "on"
         }
@@ -63,17 +62,14 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
                 farm_id=farm_id,
                 house_id=house_id,
             )
+            route_elapsed = (datetime.now() - route_start).total_seconds()
             logger.info(
-                "[AutoRoute] mode=%s strategy=%s reason=%s tools=%s confidence=%.2f capabilities=%s",
-                route_plan.mode_label,
-                route_plan.strategy,
-                route_plan.reason,
-                route_plan.allowed_tool_names,
-                route_plan.confidence,
-                route_plan.capabilities,
+                f"[질문유형] {route_plan.mode_label} | strategy={route_plan.strategy} "
+                f"confidence={route_plan.confidence:.2f} tools={route_plan.allowed_tool_names} "
+                f"({route_elapsed:.1f}s)"
             )
         else:
-            logger.info("[AutoRoute] 비활성화(AUTO_QUERY_ROUTING=false) -> 기존 Tool Use 전체 허용")
+            logger.info("[질문유형] 자동라우팅 비활성화 -> Tool Use 전체 허용")
 
         default_tool_args = {
             "search_web": {"query": full_query},
@@ -85,9 +81,10 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
             },
         }
 
-        # 경로 1(LLM 자체) + 도구 없음이면 일반 LLM 호출, 그 외에는 Tool Use 호출
+        # [3/5] LLM 답변 생성
+        llm_start = datetime.now()
         if route_plan and route_plan.mode == ROUTE_LLM_ONLY and not route_plan.allowed_tool_names:
-            logger.debug("\n[LLM] 라우팅 모드 1(도구 없음)으로 응답 생성")
+            logger.info("[LLM시작] 모드=LLM자체답변 (도구 없음)")
             llm_system_prompt = (
                 "당신은 다양한 분야의 지식을 갖춘 친근한 AI 어시스턴트입니다.\n\n"
                 "**대화 원칙:**\n"
@@ -110,7 +107,8 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
                 query_type="general",
             )
         else:
-            logger.debug("\n[LLM Tool Use] 라우팅 기반 응답 생성 시작")
+            tools_info = route_plan.allowed_tool_names if route_plan else "전체"
+            logger.info(f"[LLM시작] 모드=Tool Use (도구={tools_info})")
             response = await asyncio.to_thread(
                 get_llm_response_with_tools,
                 user_query=full_query,
@@ -121,10 +119,18 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
                 default_tool_args=default_tool_args,
             )
 
-        processing_time = (datetime.now() - start_time).total_seconds()
-        logger.debug(f"\n질의 처리 완료 - 총 처리시간: {processing_time:.3f}초")
-        logger.debug(f"응답 길이: {len(response)}자")
-        logger.debug("=" * 50)
+        llm_elapsed = (datetime.now() - llm_start).total_seconds()
+        total_elapsed = (datetime.now() - start_time).total_seconds()
+
+        # [4/5] LLM 답변 완료
+        logger.info(f"[LLM완료] 답변생성={llm_elapsed:.1f}s")
+
+        # [5/5] 최종 답변
+        answer_preview = (response or "")[:200]
+        if len(response or "") > 200:
+            answer_preview += "..."
+        logger.info(f"[최종답변] len={len(response or '')} 총소요={total_elapsed:.1f}s")
+        logger.info(f"[답변내용] {answer_preview}")
 
         yield response
 

@@ -193,14 +193,24 @@ def call_mcp_server_tool(
     timeout: int = 30,
 ) -> Dict[str, Any]:
     """지정 MCP 서버의 도구를 1회 호출."""
+    t_start = time.time()
+    # 인자 요약 (긴 값 잘라서 로깅)
+    args_summary = {}
+    for k, v in (arguments or {}).items():
+        sv = str(v)
+        args_summary[k] = sv[:80] + "..." if len(sv) > 80 else sv
+    logger.info(f"[MCP호출] 시작 server={server_name} tool={tool_name} args={args_summary} timeout={timeout}s")
+
     disabled_reason = _get_runtime_disabled_reason(server_name)
     if disabled_reason:
         reason = disabled_reason
+        logger.warning(f"[MCP호출] 비활성화 server={server_name}: {reason}")
         return {"error": f"MCP server disabled at runtime: {server_name} ({reason})"}
 
     servers = _load_mcp_servers()
     server = servers.get(server_name)
     if not server:
+        logger.warning(f"[MCP호출] 서버 미등록: {server_name}")
         return {"error": f"MCP server not found: {server_name}"}
 
     command = server.get("command")
@@ -265,6 +275,8 @@ def call_mcp_server_tool(
             return {"error": response["error"]}
 
         _mark_server_available(server_name)
+        elapsed = time.time() - t_start
+        logger.info(f"[MCP호출] 성공 server={server_name} tool={tool_name} ({elapsed:.1f}s)")
         return response.get("result", {})
 
     except subprocess.TimeoutExpired:
@@ -273,11 +285,14 @@ def call_mcp_server_tool(
                 process.kill()
             except Exception:
                 pass
+        elapsed = time.time() - t_start
         error_msg = f"MCP timeout: {server_name}.{tool_name} ({timeout}s)"
+        logger.warning(f"[MCP호출] 타임아웃 ({elapsed:.1f}s): {error_msg}")
         _mark_server_unavailable(server_name, error_msg)
         return {"error": error_msg}
     except Exception as e:
-        logger.error(f"MCP 호출 오류 ({server_name}.{tool_name}): {e}")
+        elapsed = time.time() - t_start
+        logger.error(f"[MCP호출] 오류 server={server_name} tool={tool_name} ({elapsed:.1f}s): {e}")
         error_msg = str(e)
         if _should_mark_unavailable(error_msg):
             _mark_server_unavailable(server_name, error_msg)
@@ -449,6 +464,9 @@ def mcp_fetch_request(
     if not url or not isinstance(url, str):
         return {"success": False, "status_code": 400, "json": None, "text": "URL is required"}
 
+    t_start = time.time()
+    logger.info(f"[MCP Fetch] 시작 method={method} url={url[:120]} timeout={timeout}s")
+
     normalized_method = (method or "GET").upper()
     normalized_headers: Dict[str, str] = dict(headers or {})
     if json_body is not None and not any(key.lower() == "content-type" for key in normalized_headers):
@@ -521,6 +539,9 @@ def mcp_fetch_request(
             parsed = _parse_mcp_fetch_result(result)
             if parsed.get("success"):
                 parsed["tool_name"] = tool_name
+                elapsed = time.time() - t_start
+                content_len = len(str(parsed.get("text", "") or ""))
+                logger.info(f"[MCP Fetch] 성공 ({elapsed:.1f}s) status={parsed.get('status_code')} content_len={content_len}자")
                 return parsed
 
             last_error = parsed.get("text") or last_error
@@ -528,6 +549,8 @@ def mcp_fetch_request(
         if tool_unknown:
             logger.debug(f"[MCP:fetch] 지원하지 않는 도구 스킵: {tool_name}")
 
+    elapsed = time.time() - t_start
+    logger.warning(f"[MCP Fetch] 실패 ({elapsed:.1f}s) url={url[:120]} error={last_error[:100]}")
     return {"success": False, "status_code": 500, "json": None, "text": last_error}
 
 
@@ -734,7 +757,8 @@ def search_web(query: str, max_results: int = 5) -> Dict[str, Any]:
         if not query or not query.strip():
             return {"success": False, "error": "Empty search query", "results": []}
 
-        logger.debug(f"웹 검색 시작: {query}")
+        t_start = time.time()
+        logger.info(f"[MCP웹검색] 시작 query=\"{query[:100]}\" max_results={max_results}")
         result = call_mcp_server_tool(
             server_name="web-search",
             tool_name="search",
@@ -804,7 +828,8 @@ def search_web(query: str, max_results: int = 5) -> Dict[str, Any]:
                     }
                 )
 
-        logger.debug(f"웹 검색 완료: {len(formatted)}개 결과")
+        elapsed = time.time() - t_start
+        logger.info(f"[MCP웹검색] 완료 ({elapsed:.1f}s) {len(formatted)}건")
         return {
             "success": True,
             "results": formatted,
