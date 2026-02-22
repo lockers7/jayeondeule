@@ -14,7 +14,7 @@ GET_FARM_NAME = """SELECT DISTINCT farm_id, farm_name
                    WHERE farm_id != 0 AND (farm_id = %s OR %s IS NULL)
                    ORDER BY farm_name ASC;"""
 
-GET_HOUSE_NAME = """SELECT DISTINCT farm_id, hous_id, hous_name
+GET_HOUSE_NAME = """SELECT DISTINCT farm_id, hous_id, hous_name, mnul_ctrl_flag, ctrl_type, crop_lvel
                     FROM FARMHOUSE_M_INFO
                     WHERE (farm_id = %s OR %s IS NULL)
                       AND (hous_id = %s OR %s IS NULL)
@@ -24,12 +24,12 @@ GET_HOUSE_ID = """SELECT DISTINCT farm_id, hous_id
                   FROM FARMHOUSE_M_INFO
                   WHERE (farm_id = %d OR %s IS NULL) AND hous_name LIKE %s;"""
 
-GET_FARM_HOUSE_INFO = """SELECT DISTINCT FMI.farm_name, HMI.hous_name, HMI.mnul_ctrl_flag
+GET_FARM_HOUSE_INFO = """SELECT DISTINCT FMI.farm_name, HMI.hous_name, HMI.mnul_ctrl_flag, HMI.ctrl_type, HMI.crop_lvel
                          FROM FARM_M_INFO FMI
                          JOIN FARMHOUSE_M_INFO HMI ON HMI.farm_id = FMI.farm_id
                          WHERE FMI.farm_id != 0 AND FMI.farm_id = %s AND HMI.hous_id = %s;"""
 
-GET_FARM_HOUSE_LIST = """SELECT DISTINCT FMI.farm_id, FMI.farm_name, HMI.hous_id, HMI.hous_name, HMI.mnul_ctrl_flag
+GET_FARM_HOUSE_LIST = """SELECT DISTINCT FMI.farm_id, FMI.farm_name, HMI.hous_id, HMI.hous_name, HMI.mnul_ctrl_flag, HMI.ctrl_type, HMI.crop_lvel
                          FROM FARM_M_INFO FMI
                          JOIN FARMHOUSE_M_INFO HMI ON HMI.farm_id = FMI.farm_id
                          WHERE 1 = 1 AND FMI.farm_id != 0 AND HMI.hous_id != 99
@@ -174,6 +174,9 @@ GET_CROPS_VALUE = """SELECT FMI.farm_id                      AS 농장코드
                           , crop_strt_date                    AS 재배시작일
                           , crop_end_date                     AS 재배종료일
                           , code_name                         AS 생육상태
+                          , HLC.crop_kind                     AS 작물종류
+                          , HLC.ctrl_type                     AS 제어모드
+                          , HLC.crop_lvel                     AS 생육단계
                           , crop_qtty                         AS 총수확량
                           , crop_grde_qtty_1                  AS 등급1
                           , crop_grde_qtty_2                  AS 등급2
@@ -194,6 +197,16 @@ GET_CROPS_VALUE = """SELECT FMI.farm_id                      AS 농장코드
                         AND HMI.hous_id = %s
                         AND HLC.recd_dttm >= HMI.last_get_dttm
                       ORDER BY FMI.farm_id ASC, HMI.hous_id ASC, HLC.recd_dttm ASC;"""
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 최신 생육단계 조회 (FARMHOUSE_M_INFO.crop_lvel 기반)
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+GET_CURRENT_CROP_LVEL = """SELECT HMI.crop_lvel   AS crop_lvel
+                                , CMI.code_name    AS 생육단계
+                             FROM FARMHOUSE_M_INFO HMI
+                             JOIN CODE_M_INFO      CMI ON CMI.code_id = 'crop_lvel' AND CMI.code_item = HMI.crop_lvel
+                            WHERE HMI.farm_id = %s
+                              AND HMI.hous_id = %s;"""
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 최적 조건 조회
@@ -288,4 +301,4 @@ SET_RELAY_VALUE_E = """INSERT INTO farm_relay_status (farm_id,  recd_date
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 SET_FARMHOUSE_INFO = "UPDATE FARMHOUSE_M_INFO SET last_get_dttm=%s WHERE farm_id=%s AND hous_id=%s;"
 
-SET_MANAGE_METHOD = "UPDATE FARMHOUSE_M_INFO SET mnul_ctrl_flag=%s WHERE farm_id=%s AND hous_id=%s;"
+SET_MANAGE_METHOD = "UPDATE FARMHOUSE_M_INFO SET mnul_ctrl_flag=%s, ctrl_type=%s WHERE farm_id=%s AND hous_id=%s;"

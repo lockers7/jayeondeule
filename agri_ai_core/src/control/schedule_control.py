@@ -16,10 +16,59 @@ from datetime import datetime
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.postgresql.connection import db_session
 from agri_ai_core.src.postgresql import queries as dbQry
-from agri_ai_core.src.postgresql.reader import read_light_irrigation_settings
-from agri_ai_core.src.control.relay_manager import set_relay_value
+from agri_ai_core.src.postgresql.reader import read_light_irrigation_settings, read_current_sensor_info
+from agri_ai_core.src.control.relay_manager import set_relay_value, log_relay_detail
 
 logger = setup_logger(__name__)
+
+
+def _to_sortable_int(value):
+    try:
+        return int(value)
+    except Exception:
+        digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+        if digits:
+            try:
+                return int(digits)
+            except Exception:
+                pass
+    return 10**9
+
+
+def _sort_houses(houses):
+    return sorted(
+        houses or [],
+        key=lambda house: (
+            _to_sortable_int(house.get("farm_id")),
+            _to_sortable_int(house.get("hous_id")),
+            str(house.get("hous_id") or ""),
+        ),
+    )
+
+
+# 센서 상태 포맷 (임계값 비교 포함)
+_SENSOR_THRESHOLDS = {
+    'indoor_temperature': ('내부온도', '℃', 27, 30),
+    'indoor_humidity':    ('내부습도', '%', 75, 85),
+    'co2':                ('CO2', 'ppm', 300, 1200),
+    'water_temperature':  ('수온', '℃', 35, 60),
+}
+
+
+def _format_sensor_status(sensor):
+    parts = []
+    for key, (name, unit, low, high) in _SENSOR_THRESHOLDS.items():
+        value = sensor.get(key)
+        if value is None:
+            parts.append(f"{name}: -")
+            continue
+        text = f"{name}: {value}{unit}"
+        if value < low:
+            text += f" < {low}{unit}(최저값)"
+        elif value > high:
+            text += f" > {high}{unit}(최고값)"
+        parts.append(text)
+    return ", ".join(parts)
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -353,11 +402,20 @@ def control_all_schedules():
                     "results": []
                 }
 
+            ordered_houses = _sort_houses(houses)
+            house_order = ", ".join(
+                str(house.get("hous_id"))
+                for house in ordered_houses
+                if house.get("hous_id") is not None
+            )
+            if house_order:
+                logger.info(f"스케줄 제어 대상 순서: {house_order}")
+
             results = []
             success_count = 0
             fail_count = 0
 
-            for house in houses:
+            for index, house in enumerate(ordered_houses, start=1):
                 farm_id = house.get("farm_id")
                 house_id = house.get("hous_id")
 
@@ -374,19 +432,28 @@ def control_all_schedules():
                 parts = []
                 all_schedules = []
 
-                light_status = light_result.get("status")
-                if light_status:
-                    parts.append(f"조명 {light_status}")
-                    all_schedules.extend(light_result.get("schedules", []))
+                light_status = light_result.get("status", "-")
+                parts.append(f"조명 {light_status}")
+                all_schedules.extend(light_result.get("schedules", []))
 
-                irr_status = irrigation_result.get("status")
-                if irr_status:
-                    parts.append(f"관수 {irr_status}")
-                    all_schedules.extend(irrigation_result.get("schedules", []))
+                irr_status = irrigation_result.get("status", "-")
+                parts.append(f"관수 {irr_status}")
+                all_schedules.extend(irrigation_result.get("schedules", []))
 
-                if parts:
-                    schedule_info = f" (스케줄: {', '.join(all_schedules)})" if all_schedules else ""
-                    logger.info(f"농장 {farm_id}, 재배사 {house_id}: {' / '.join(parts)}{schedule_info}")
+                schedule_info = f" (스케줄: {', '.join(all_schedules)})" if all_schedules else ""
+                logger.info("-")
+                logger.info(
+                    f"[{index}/{len(ordered_houses)}] 농장 {farm_id}, 재배사 {house_id}: "
+                    f"{' / '.join(parts)}{schedule_info}"
+                )
+
+                # 센서 상태 + 릴레이 상세 로그 (실제 제어가 발생한 경우만)
+                has_control = (light_result.get("action") != "none" or irrigation_result.get("action") != "none")
+                if has_control:
+                    sensor = read_current_sensor_info(farm_id, house_id)
+                    if sensor:
+                        logger.debug(f"센서 상태: {_format_sensor_status(sensor)}")
+                    log_relay_detail(farm_id, house_id)
 
                 # 결과 집계
                 house_result = {
@@ -404,7 +471,8 @@ def control_all_schedules():
                 results.append(house_result)
 
             logger.info(f"스케줄 제어 완료: 총 {len(results)}개 재배사 (성공: {success_count}, 실패: {fail_count})")
-
+            logger.info("-")
+            
             return {
                 "success": fail_count == 0,
                 "total": len(results),

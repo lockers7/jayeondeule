@@ -216,7 +216,18 @@ def remove_job(job_id):
 # Returns:
 #     bool: 성공 여부
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def setup_default_jobs(data_export_func=None, learning_func=None, stats_func=None, schedule_control_func=None):
+def _daily_log_cleanup():
+    """매일 00:00에 실행되는 로그 정리 작업"""
+    try:
+        from agri_ai_core.logs import cleanup_all_logs
+        cleanup_all_logs()
+        logger.info("[스케줄] 일일 로그 정리 완료")
+    except Exception as e:
+        logger.error(f"[스케줄] 일일 로그 정리 실패: {e}")
+
+
+def setup_default_jobs(data_export_func=None, learning_func=None, stats_func=None,
+                       schedule_control_func=None, manual_control_func=None):
     try:
         # 데이터 내보내기 작업 (매 3분)
         if data_export_func:
@@ -246,14 +257,39 @@ def setup_default_jobs(data_export_func=None, learning_func=None, stats_func=Non
                 minutes=STATS_INTERVAL_MINUTES
             )
 
-        # 조명/관수밸브 스케줄 제어 작업 (매 1분)
-        if schedule_control_func:
+        # 릴레이 제어 통합 작업 (매 1분)
+        # schedule_control → manual_control 순차 실행 (로그 인터리빙 방지)
+        # 센서값은 3초 단위로 갱신되며, 2-phase 릴레이 제어는 재배사당 ~15초 소요
+        # max_instances=1 설정으로 이전 실행 미완료 시 다음 실행 스킵
+        if schedule_control_func or manual_control_func:
+            def _combined_control_job():
+                if schedule_control_func:
+                    try:
+                        schedule_control_func()
+                    except Exception as e:
+                        logger.error(f"스케줄 제어 실행 오류: {e}")
+                if manual_control_func:
+                    try:
+                        manual_control_func()
+                    except Exception as e:
+                        logger.error(f"수동 환경제어 실행 오류: {e}")
+
             add_job(
-                job_id="schedule_control_job",
-                func=schedule_control_func,
+                job_id="relay_control_job",
+                func=_combined_control_job,
                 trigger_type="interval",
                 minutes=1
             )
+
+        # 로그 정리 작업 (매일 00:00:00)
+        # 100일 이전 로그 파일 삭제, 단일 파일 트리밍
+        add_job(
+            job_id="daily_log_cleanup",
+            func=_daily_log_cleanup,
+            trigger_type="cron",
+            hour=0,
+            minute=0
+        )
 
         logger.info("기본 스케줄 작업 설정 완료")
         return True

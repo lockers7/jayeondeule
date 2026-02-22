@@ -8,6 +8,7 @@ from agri_ai_core.src.control.task_scheduler import (
 )
 from agri_ai_core.src.control.relay_manager import set_relay_value, get_relay_status
 from agri_ai_core.src.control.schedule_control import control_all_schedules, control_lighting_schedule, control_irrigation_schedule
+from agri_ai_core.src.control.manual_control import control_manual_environment, control_all_manual
 
 __all__ = [
     "setup_scheduler",
@@ -20,4 +21,6 @@ __all__ = [
     "control_all_schedules",
     "control_lighting_schedule",
     "control_irrigation_schedule",
+    "control_manual_environment",
+    "control_all_manual",
 ]

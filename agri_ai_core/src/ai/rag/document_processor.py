@@ -12,13 +12,77 @@ from datetime import datetime
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.chroma.collections import optimal_collection, document_collection
-from agri_ai_core.src.chroma.operations import (
-    generate_doc_id,
-    upsert_collection_data
-)
+from agri_ai_core.src.chroma.operations import upsert_collection_data
 from agri_ai_core.src.ai.rag.chunker import store_document_with_chunks
 
 logger = setup_logger(__name__)
+
+# 문서 유형 한글 라벨
+DOC_TYPE_LABELS = {
+    "crop_info": "작물 정보",
+    "disease_info": "병해충 정보",
+    "general": "일반 문서",
+}
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 대화 메시지 목록 → RAG 저장용 텍스트 변환 (공통)
+# React(app.py)와 Reflex(state.py) 모두에서 동일하게 호출
+# Args:
+#   messages: [{"role": "user"|"assistant", "content": str}, ...]  (dict 또는 객체)
+#   farm_name: 농장명
+#   house_name: 재배사명
+# Returns:
+#   str: 변환된 텍스트
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def messages_to_text(messages, farm_name=None, house_name=None):
+    lines = []
+    lines.append(f"[농장: {farm_name or '-'}, 재배사: {house_name or '-'}]")
+    lines.append(f"[대화 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]")
+    lines.append("")
+
+    for msg in messages:
+        role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "")
+        content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
+        role_label = "사용자" if role == "user" else "AI"
+        lines.append(f"[{role_label}] {content}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# RAG 저장 결과 → 사용자 안내 메시지 포맷팅 (공통)
+# Args:
+#   result: llm_document_process() 반환값
+#   message_count: 저장된 메시지 수
+# Returns:
+#   tuple: (success: bool, message: str)
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def format_rag_save_result(result, message_count=0):
+    if result.get("success"):
+        chunks = result.get("chunks_stored", 0)
+        doc_type = result.get("document_type", "general")
+        crop_name = result.get("crop_name", "")
+        structured = result.get("structured_data_stored", False)
+        timestamp = result.get("timestamp", "")
+
+        doc_type_label = DOC_TYPE_LABELS.get(doc_type, doc_type)
+
+        summary = f"RAG 저장 완료 — 대화 내용이 VectorDB에 저장되었습니다.\n"
+        summary += f"저장 일시: {timestamp}\n\n"
+        summary += f"  대화 메시지: {message_count}개\n"
+        summary += f"  저장된 청크: {chunks}개\n"
+        summary += f"  문서 유형: {doc_type_label}\n"
+        if crop_name:
+            summary += f"  감지된 작물: {crop_name}\n"
+        if structured:
+            summary += f"  구조화 데이터: 저장 완료\n"
+        summary += "\n저장된 대화 내용으로 질문해보세요!"
+        return True, summary
+    else:
+        error = result.get("error", "알 수 없는 오류")
+        return False, f"RAG 저장 실패: {error}"
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -135,7 +199,8 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None):
         # 2. 구조화된 정보 추출 및 저장 (extract_structured_information이 필요하면 별도 import)
         # 여기서는 기본 메타데이터만 저장
         try:
-            doc_id = generate_doc_id("document", farm_id)
+            # 안정적 ID: 파일명 기반 (동일 파일 재학습시 upsert)
+            doc_id = f"doc_{filename.replace('.', '_')}"
             optimal_metadata = metadata.copy()
             optimal_metadata.update({
                 "data_type": "structured_document",

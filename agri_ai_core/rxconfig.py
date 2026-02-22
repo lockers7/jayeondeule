@@ -16,5 +16,5 @@ config = rx.Config(
     deploy_url=f"http://{REFLEX_PUBLIC_HOST}:{REFLEX_PUBLIC_PORT}",
     db_url="sqlite:///reflex.db",
     telemetry_enabled=False,
-    disable_plugins=["reflex.plugins.sitemap.SitemapPlugin"],  # sitemap 경고 제거
+    disable_plugins=["reflex.plugins.sitemap.SitemapPlugin"],  
 )

@@ -13,7 +13,7 @@ import traceback
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.chroma import heartbeat, ensure_required_collections_exist
-from agri_ai_core.src.control import setup_scheduler, start_scheduler, stop_scheduler, setup_default_jobs, control_all_schedules
+from agri_ai_core.src.control import setup_scheduler, start_scheduler, stop_scheduler, setup_default_jobs, control_all_schedules, control_all_manual
 
 logger = setup_logger(__name__)
 
@@ -36,7 +36,7 @@ def initialize_app():
     try:
         for n in range(50):
             logger.info("-")
-        
+
         logger.info("=" * 60)
         logger.info("AgriAI Core 시작 초기화")
         logger.info("=" * 60)
@@ -149,9 +149,12 @@ def initialize_app():
         t0 = time.time()
         try:
             setup_scheduler()
-            setup_default_jobs(schedule_control_func=control_all_schedules)
+            setup_default_jobs(
+                schedule_control_func=control_all_schedules,
+                manual_control_func=control_all_manual,
+            )
             start_scheduler()
-            logger.info("[4/4] 스케줄러 시작됨 (%.1fs) - 조명/관수밸브 스케줄 제어 (1분 주기)", time.time() - t0)
+            logger.info("[4/4] 스케줄러 시작됨 (%.1fs) - 조명/관수 (1분) + 수동환경제어 (5분)", time.time() - t0)
         except Exception as e:
             logger.warning("[4/4] 스케줄러 설정 실패 (%.1fs): %s", time.time() - t0, e)
 
