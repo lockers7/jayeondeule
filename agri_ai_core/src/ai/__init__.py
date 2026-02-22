@@ -1,8 +1,7 @@
 """AI Module - LLM, RAG, Learning, MCP"""
 
 __all__ = [
-    "get_llm_response",
-    "get_llm_streaming_response",
+    "get_llm_response_with_tools",
     "initialize_background_warmup",
     "query_llm_simple",
     "embed_text",
@@ -16,10 +15,9 @@ __all__ = [
 
 def __getattr__(name):
     # LLM
-    if name in {"get_llm_response", "get_llm_streaming_response", "initialize_background_warmup"}:
+    if name in {"get_llm_response_with_tools", "initialize_background_warmup"}:
         from agri_ai_core.src.ai.llm_client import (
-            get_llm_response,
-            get_llm_streaming_response,
+            get_llm_response_with_tools,
             initialize_background_warmup,
         )
         return locals()[name]

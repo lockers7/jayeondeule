@@ -14,8 +14,86 @@ from agri_ai_core.logs import setup_logger
 from agri_ai_core.config import get_relay_mapping
 from agri_ai_core.src.postgresql.connection import db_session
 from agri_ai_core.src.postgresql import queries as dbQry
+from agri_ai_core.src.postgresql.reader import read_latest_relay_info
 
 logger = setup_logger(__name__)
+
+
+def _get_alias_mapping(house_id):
+    if int(house_id) == 2:
+        return {
+            "lighting_flag": "relay_5st_flag",
+            "irrigation_flag": "relay_6st_flag",
+        }
+    return {
+        "lighting_flag": "relay_7st_flag",
+        "irrigation_flag": "relay_8st_flag",
+    }
+
+
+# 릴레이 번호 → (영문 기능명, 한글명) 매핑
+_RELAY_DESC_STANDARD = {
+    'relay_1st_flag': ('water_heater_flag', '물가열기'),
+    'relay_2st_flag': ('fog_occurs_flag', '분사펌프'),
+    'relay_3st_flag': ('drainage_motor_flag', '배수밸브'),
+    'relay_4st_flag': ('unused', '미사용'),
+    'relay_5st_flag': ('intake_fan_flag', '흡기팬'),
+    'relay_6st_flag': ('exhaust_fan_flag', '배기팬'),
+    'relay_7st_flag': ('lighting_flag', '조명토글'),
+    'relay_8st_flag': ('irrigation_flag', '관수밸브'),
+    'relay_9st_flag': ('indoor_heater_flag', '열풍기'),
+    'relay_10st_flag': ('air_circulation_valve_flag', '순환댐퍼'),
+    'relay_11st_flag': ('air_intake_valve_flag', '흡기댐퍼'),
+    'relay_12st_flag': ('unused', '미사용'),
+    'relay_13st_flag': ('unused', '미사용'),
+    'relay_14st_flag': ('air_exhaust_valve_flag', '배기댐퍼'),
+    'relay_15st_flag': ('indoor_heater2_flag', '열풍댐퍼'),
+    'relay_16st_flag': ('unused', '미사용'),
+}
+
+_RELAY_DESC_E = {
+    'relay_1st_flag': ('water_heater_flag', '물가열기'),
+    'relay_2st_flag': ('fog_occurs_flag', '분사펌프'),
+    'relay_3st_flag': ('radiator_flag', '라디에터'),
+    'relay_4st_flag': ('unused', '미사용'),
+    'relay_5st_flag': ('lighting_flag', '조명토글'),
+    'relay_6st_flag': ('irrigation_flag', '관수밸브'),
+    'relay_7st_flag': ('intake_fan_flag', '흡기팬'),
+    'relay_8st_flag': ('exhaust_fan_flag', '배기팬'),
+    'relay_9st_flag': ('air_circulation_valve_flag', '순환댐퍼'),
+    'relay_10st_flag': ('air_intake_valve_flag', '흡기댐퍼'),
+    'relay_11st_flag': ('air_exhaust_valve_flag', '배기댐퍼'),
+    'relay_12st_flag': ('drainage_motor_flag', '배수밸브'),
+    'relay_13st_flag': ('indoor_heater_flag', '열풍기'),
+    'relay_14st_flag': ('indoor_heater2_flag', '열풍댐퍼'),
+    'relay_15st_flag': ('unused', '미사용'),
+    'relay_16st_flag': ('unused', '미사용'),
+}
+
+
+def format_relay_detail(house_id, relay_values):
+    desc_map = _RELAY_DESC_E if int(house_id) == 2 else _RELAY_DESC_STANDARD
+    parts = []
+    for i in range(1, 17):
+        key = f"relay_{i}st_flag"
+        value = relay_values.get(key, False)
+        eng, kor = desc_map.get(key, (key, ''))
+        status = "ON" if value else "OFF"
+        parts.append(f"{key}({eng}-{kor}): {status}")
+    return ", ".join(parts)
+
+
+def log_relay_detail(farm_id, house_id):
+    current = read_latest_relay_info(farm_id, house_id)
+    if not current:
+        return
+    desc_map = _RELAY_DESC_E if int(house_id) == 2 else _RELAY_DESC_STANDARD
+    for i in range(1, 17):
+        key = f"relay_{i}st_flag"
+        value = bool(current.get(key, False))
+        eng, kor = desc_map.get(key, (key, ''))
+        status = "ON" if value else "OFF"
+        logger.debug(f"{key}({eng}-{kor}): {status}")
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -30,50 +108,33 @@ logger = setup_logger(__name__)
 # Returns:
 #     dict: 실행 결과
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def set_relay_value(farm_id, house_id, relay_settings):
+def set_relay_value(farm_id, house_id, relay_settings, raw_mode=False):
     try:
-        # house_id에 따라 적절한 릴레이 매핑 선택
-        relay_mapping = get_relay_mapping(house_id)
+        # raw_mode: 수동환경제어에서 16개 relay_*st_flag를 직접 전달할 때 사용
+        # raw_mode=True이면 기본값 초기화/별칭 변환/강제 ON 없이 그대로 사용
+        if raw_mode:
+            relay_values = dict(relay_settings)
+        else:
+            # 현재 릴레이 상태를 읽어 기존 상태 보존 (부분 갱신)
+            current = read_latest_relay_info(farm_id, house_id)
 
-        # 릴레이 설정 초기화 (relay_*_flag만 사용)
-        # 1호 재배사 열풍댐퍼(relay_15st_flag)는 항상 ON 유지
-        heater_valve_on = (str(house_id) == "1")
+            if current:
+                relay_values = {
+                    f"relay_{i}st_flag": bool(current.get(f"relay_{i}st_flag", False))
+                    for i in range(1, 17)
+                }
+            else:
+                # DB에 상태가 없으면 기본값 사용
+                relay_values = {f"relay_{i}st_flag": False for i in range(1, 17)}
 
-        relay_values = {
-            "relay_1st_flag": False,
-            "relay_2st_flag": False,
-            "relay_3st_flag": True,   # 배수밸브 기본 ON
-            "relay_4st_flag": False,
-            "relay_5st_flag": True,   # 흡기팬 기본 ON
-            "relay_6st_flag": True,   # 배기팬 기본 ON
-            "relay_7st_flag": False,
-            "relay_8st_flag": False,
-            "relay_9st_flag": False,
-            "relay_10st_flag": False,
-            "relay_11st_flag": False,
-            "relay_12st_flag": False,
-            "relay_13st_flag": False,
-            "relay_14st_flag": False,
-            "relay_15st_flag": heater_valve_on,  # 1호 재배사 열풍댐퍼 항상 ON
-            "relay_16st_flag": False,
-        }
+            # house_id별 alias 매핑 적용
+            alias_mapping = _get_alias_mapping(house_id)
 
-        # 제공된 릴레이 설정 적용
-        # lighting_flag, irrigation_flag 같은 별칭을 relay_*_flag로 변환
-        alias_mapping = {
-            "lighting_flag": "relay_7st_flag",     # 조명토글
-            "irrigation_flag": "relay_8st_flag",   # 관수밸브
-        }
-
-        for key, value in relay_settings.items():
-            # 별칭을 실제 relay flag로 변환
-            actual_key = alias_mapping.get(key, key)
-            if actual_key in relay_values:
-                relay_values[actual_key] = value
-
-        # 1호 재배사 열풍댐퍼 강제 ON (덮어쓰기 방지)
-        if str(house_id) == "1":
-            relay_values["relay_15st_flag"] = True
+            for key, value in relay_settings.items():
+                # 별칭을 실제 relay flag로 변환
+                actual_key = alias_mapping.get(key, key)
+                if actual_key in relay_values:
+                    relay_values[actual_key] = value
 
         # SQL 파라미터 준비 (farm_id, hous_id, recd_dttm, relay flags...)
         from datetime import datetime
@@ -87,7 +148,7 @@ def set_relay_value(farm_id, house_id, relay_settings):
             result = database.execute_query(query, params)
 
             if result:
-                logger.info(f"릴레이 값 설정 완료: farm_id={farm_id}, house_id={house_id}")
+                logger.debug(f"릴레이 값 설정 완료: farm_id={farm_id}, house_id={house_id}")
                 return {
                     "success": True,
                     "message": "릴레이 값이 성공적으로 설정되었습니다.",

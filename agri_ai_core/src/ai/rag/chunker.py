@@ -11,7 +11,7 @@ from datetime import datetime
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.chroma.collections import document_collection
-from agri_ai_core.src.chroma.operations import upsert_collection_data
+from agri_ai_core.src.chroma.operations import upsert_collection_data, get_documents, delete_document
 
 logger = setup_logger(__name__)
 
@@ -108,13 +108,30 @@ def store_document_with_chunks(document_content, document_metadata, chunk_size=1
         # 문서를 청크로 분할
         chunks = chunk_document(document_content, chunk_size, chunk_overlap)
 
+        # 동일 파일의 기존 청크 삭제 (중복 방지)
+        file_name = document_metadata.get("file_name", "")
+        if file_name:
+            try:
+                existing = get_documents(
+                    document_collection(),
+                    where={"file_name": {"$eq": file_name}},
+                    include=["metadatas"]
+                )
+                existing_ids = existing.get("ids", []) if isinstance(existing, dict) else []
+                if existing_ids:
+                    delete_document(document_collection(), existing_ids)
+                    logger.info(f"[청크저장] 기존 '{file_name}' 청크 {len(existing_ids)}건 삭제 (재학습)")
+            except Exception as e:
+                logger.warning(f"[청크저장] 기존 청크 삭제 중 오류 (무시): {e}")
+
         # 각 청크에 메타데이터와 함께 저장
+        doc_id_base = file_name.replace(".", "_") if file_name else "unknown"
         success_count = 0
 
         for i, chunk in enumerate(chunks):
             try:
-                doc_id_base = document_metadata.get("file_name", "").replace(".", "_")
-                chunk_id = f"{doc_id_base}_{datetime.now().strftime('%Y%m%d%H%M%S')}_{i}"
+                # 안정적 ID: 파일명 + 청크번호 (타임스탬프 제거 → 동일 파일 재학습시 upsert)
+                chunk_id = f"{doc_id_base}_{i}"
 
                 chunk_metadata = document_metadata.copy()
                 chunk_metadata.update({
