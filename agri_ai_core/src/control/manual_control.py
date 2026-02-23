@@ -886,6 +886,7 @@ def control_all_manual():
                 })
 
             logger.info(f"수동 환경제어 완료: 총 {len(results)}개 재배사 (성공: {success_count}, 실패: {fail_count})")
+            logger.info("-")
 
             return {
                 "success": fail_count == 0,

@@ -48,7 +48,7 @@ log_msg() {
 print_header() {
     echo ""
     echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC}  ${BOLD}AgriAI Core 서비스 관리${NC}                                ${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}  ${BOLD}AgriAI Core 서비스 관리${NC}                                 ${CYAN}║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }

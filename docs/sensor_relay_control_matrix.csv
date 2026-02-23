@@ -1,0 +1,174 @@
+﻿========================================
+[1] 임계값 정의 (manual_control.py / schedule_control.py)
+========================================
+센서,구분,상수명,값,단위,용도
+내부온도,정상범위_하한,TEMP_LOW,27,℃,64케이스 분류 기준
+내부온도,정상범위_상한,TEMP_HIGH,30,℃,64케이스 분류 기준
+내부온도,비상_하한,TEMP_CRITICAL_LOW,25,℃,비상제어 발동
+내부온도,비상_상한,TEMP_CRITICAL_HIGH,33,℃,비상제어 발동
+내부온도,발이기_하한,BUDDING_TEMP_LOW,29,℃,발이기 가열 기준
+내부온도,발이기_상한,BUDDING_TEMP_HIGH,33,℃,발이기 냉각 기준
+내부습도,정상범위_하한,HUMIDITY_LOW,75,%,64케이스 분류 기준
+내부습도,정상범위_상한,HUMIDITY_HIGH,85,%,64케이스 분류 기준
+내부습도,비상_하한,HUMIDITY_CRITICAL_LOW,70,%,비상제어 발동
+내부습도,비상_상한,HUMIDITY_CRITICAL_HIGH,95,%,비상제어 발동
+CO2,정상범위_하한,CO2_LOW,300,ppm,64케이스 분류 기준
+CO2,정상범위_상한,CO2_HIGH,1200,ppm,64케이스 분류 기준
+CO2,비상_상한,CO2_CRITICAL_HIGH,1500,ppm,비상제어 발동
+수온,비상_하한,WATER_TEMP_CRITICAL_LOW,35,℃,수온 비상제어 발동
+수온,비상_상한,WATER_TEMP_CRITICAL_HIGH,60,℃,수온 비상제어 발동
+열풍기,최대연속운전,HEATER_MAX_CONTINUOUS_MIN,30,분,쿨다운 진입 기준
+열풍기,쿨다운시간,HEATER_COOLDOWN_MIN,5,분,쿨다운 대기시간
+2단계제어,댐퍼→팬_지연,DAMPER_FAN_DELAY_SEC,15,초,Phase1→Phase2 대기
+
+========================================
+[2] 순환모드별 릴레이 설정 (CIRCULATION_MODES)
+========================================
+순환모드,순환댐퍼,흡기댐퍼,배기댐퍼,흡기팬,배기팬,설명
+순환정지,ON,ON,ON,OFF,OFF,모든 댐퍼 닫고 팬 정지
+내부순환,ON,OFF,OFF,ON,ON,순환댐퍼만 열고 팬 가동 (내부 공기 순환)
+외부순환,OFF,ON,ON,ON,ON,흡기/배기댐퍼 열고 팬 가동 (외부 공기 교환)
+흡입순환,OFF,ON,OFF,ON,OFF,흡기만 열고 흡기팬 가동
+배기순환,OFF,OFF,ON,OFF,ON,배기만 열고 배기팬 가동
+
+========================================
+[3] 센서값별 릴레이 제어 매트릭스 (우선순위순)
+========================================
+번호,제어구분,우선순위,생육단계,내부온도,내부습도,CO2,수온,외부온도,외부습도,순환모드,물가열기,분사펌프,열풍기,열풍댐퍼,순환댐퍼,흡기댐퍼,배기댐퍼,흡기팬,배기팬,배수밸브,조명,관수,코드위치,비고
+
+=== 비상제어 (최우선 - 모든 생육단계 공통) ===,,,,,,,,,,,,,,,,,,,,,,,,
+E-1,비상제어,1,모두,<25℃,*,*,*,*,*,내부순환,ON,OFF,ON,ON,ON,OFF,OFF,ON,ON,ON,유지,유지,_check_emergency:371,극저온 비상 - 열풍기 쿨다운 초기화
+E-2,비상제어,1,모두,>33℃,*,*,*,*,*,배기순환,OFF,OFF,OFF,OFF,OFF,OFF,ON,OFF,ON,ON,유지,유지,_check_emergency:379,극고온 비상 - 배기로 냉각
+E-3,비상제어,1,모두,*,<70%,*,*,*,*,내부순환,ON,ON,OFF,OFF,ON,OFF,OFF,ON,ON,ON,유지,유지,_check_emergency:388,극저습 비상 - 물가열기+분사펌프
+E-4,비상제어,1,모두,*,>95%,*,*,*,*,배기순환,OFF,OFF,OFF,OFF,OFF,OFF,ON,OFF,ON,ON,유지,유지,_check_emergency:397,극고습 비상 - 배기로 제습
+E-5,비상제어,1,모두,*,*,>1500ppm,*,*,*,배기순환,OFF,OFF,OFF,OFF,OFF,OFF,ON,OFF,ON,ON,유지,유지,_check_emergency:405,극고CO2 비상 - 배기로 환기
+E-6,비상제어,1,모두,*,*,*,<35℃,*,*,변경없음,ON,유지,유지,유지,유지,유지,유지,유지,유지,유지,유지,유지,_check_emergency:414,수온 저온 비상 - 물가열기만 ON (나머지 현재상태 유지)
+E-7,비상제어,1,모두,*,*,*,>60℃,*,*,변경없음,OFF,유지,유지,유지,유지,유지,유지,유지,유지,유지,유지,유지,_check_emergency:417,수온 고온 비상 - 물가열기만 OFF (나머지 현재상태 유지)
+
+=== 발이기 제어 (생육단계=발이기일 때 - 온도만 판단) ===,,,,,,,,,,,,,,,,,,,,,,,,
+B-1,발이기,2,발이기,<29℃,*,*,*,*,*,내부순환,ON,OFF,ON,ON,ON,OFF,OFF,ON,ON,ON,유지,유지,_control_budding:626,발이기 가열 (내부순환으로 보온)
+B-2,발이기,2,발이기,29~33℃,*,*,*,*,*,순환정지,OFF,OFF,OFF,OFF,ON,ON,ON,OFF,OFF,ON,유지,유지,_control_budding:652,발이기 정상 (순환정지로 온도 유지)
+B-3,발이기,2,발이기,>33℃,*,*,*,*,*,배기순환,OFF,OFF,OFF,OFF,OFF,OFF,ON,OFF,ON,ON,유지,유지,_control_budding:639,발이기 냉각 (비상E-2가 먼저 처리하므로 실제 도달 불가)
+
+=== 외부순환 제어 (외부환경 정상 + 내부환경 비정상) ===,,,,,,,,,,,,,,,,,,,,,,,,
+X-1,외부순환,3,생육기/수확기,25~27 또는 30~33℃,70~75 또는 85~95%,<300 또는 >1200ppm,*,27~30℃,75~85%,외부순환,OFF,OFF,OFF,OFF,OFF,ON,ON,ON,ON,ON,유지,유지,control_manual:738,외부환경이 이상적이면 외부공기 직접 도입
+
+=== 64케이스 알고리즘 제어 (생육기/수확기 - 내부온도 저온) ===,,,,,,,,,,,,,,,,,,,,,,,,
+C-1,64케이스,4,생육기/수확기,25~27℃(저온),70~75%(저습),≤1200ppm,*,*,*,내부순환,ON,ON,OFF,OFF,ON,OFF,OFF,ON,ON,ON,유지,유지,_determine_devices:283 + _determine_circulation:315,저온+저습: 물가열기+분사펌프로 가온가습
+C-2,64케이스,4,생육기/수확기,25~27℃(저온),70~75%(저습),>1200ppm,*,*,*,배기순환,ON,ON,OFF,OFF,OFF,OFF,ON,OFF,ON,ON,유지,유지,_determine_devices:283 + _determine_circulation:314,저온+저습+고CO2: 가온가습하면서 배기
+C-3,64케이스,4,생육기/수확기,25~27℃(저온),75~85%(정상),≤1200ppm,*,*,*,내부순환,ON,OFF,OFF,OFF,ON,OFF,OFF,ON,ON,ON,유지,유지,_determine_devices:288 + _determine_circulation:315,저온+정상습도: 물가열기로 가온
+C-4,64케이스,4,생육기/수확기,25~27℃(저온),75~85%(정상),>1200ppm,*,*,*,배기순환,ON,OFF,OFF,OFF,OFF,OFF,ON,OFF,ON,ON,유지,유지,_determine_devices:288 + _determine_circulation:314,저온+정상습도+고CO2: 가온하면서 배기
+C-5,64케이스,4,생육기/수확기,25~27℃(저온),85~95%(고습),≤1200ppm,*,*,*,내부순환,OFF,OFF,ON,ON,ON,OFF,OFF,ON,ON,ON,유지,유지,_determine_devices:285 + _determine_circulation:315,저온+고습: 열풍기로 가온제습 (내부순환)
+C-6,64케이스,4,생육기/수확기,25~27℃(저온),85~95%(고습),>1200ppm,*,*,*,배기순환,OFF,OFF,ON,ON,OFF,OFF,ON,OFF,ON,ON,유지,유지,_determine_devices:285 + _determine_circulation:314,저온+고습+고CO2: 열풍기 가온+배기
+
+=== 64케이스 알고리즘 제어 (생육기/수확기 - 내부온도 고온) ===,,,,,,,,,,,,,,,,,,,,,,,,
+C-7,64케이스,4,생육기/수확기,30~33℃(고온),70~75%(저습),*,*,*,*,배기순환,OFF,ON,OFF,OFF,OFF,OFF,ON,OFF,ON,ON,유지,유지,_determine_devices:292 + _determine_circulation:326,고온+저습: 분사펌프 가습+배기 냉각
+C-8,64케이스,4,생육기/수확기,30~33℃(고온),75~85%(정상),*,*,*,27~30℃ 또는 범위외,배기순환,OFF,OFF,OFF,OFF,OFF,OFF,ON,OFF,ON,ON,유지,유지,_determine_devices:294 + _determine_circulation:326,고온+정상습도+외부습도정상: 배기 냉각
+C-9,64케이스,4,생육기/수확기,30~33℃(고온),75~85%(정상),≤1200ppm,*,*,75~85% 범위외,내부순환,OFF,OFF,OFF,OFF,ON,OFF,OFF,ON,ON,ON,유지,유지,_determine_devices:294 + _determine_circulation:321,고온+정상습도+외부습도비정상+정상CO2: 내부순환
+C-10,64케이스,4,생육기/수확기,30~33℃(고온),75~85%(정상),>1200ppm,*,*,75~85% 범위외,배기순환,OFF,OFF,OFF,OFF,OFF,OFF,ON,OFF,ON,ON,유지,유지,_determine_devices:294 + _determine_circulation:320,고온+정상습도+외부습도비정상+고CO2: 배기
+C-11,64케이스,4,생육기/수확기,30~33℃(고온),85~95%(고습),*,*,*,*,배기순환,OFF,OFF,OFF,OFF,OFF,OFF,ON,OFF,ON,ON,유지,유지,_determine_devices:294 + _determine_circulation:326,고온+고습: 배기로 냉각+제습
+
+=== 64케이스 알고리즘 제어 (생육기/수확기 - 내부온도 정상 + 외부온도 정상) ===,,,,,,,,,,,,,,,,,,,,,,,,
+C-12,64케이스,4,생육기/수확기,27~30℃(정상),70~75%(저습),≤1200ppm,*,27~30℃,*,내부순환,OFF,ON,OFF,OFF,ON,OFF,OFF,ON,ON,ON,유지,유지,_determine_devices:298 + _determine_circulation:334,정상온도+외부정상+저습: 분사펌프 가습
+C-13,64케이스,4,생육기/수확기,27~30℃(정상),70~75%(저습),>1200ppm,*,27~30℃,*,배기순환,OFF,ON,OFF,OFF,OFF,OFF,ON,OFF,ON,ON,유지,유지,_determine_devices:298 + _determine_circulation:333,정상온도+외부정상+저습+고CO2: 가습+배기
+C-14,64케이스,4,생육기/수확기,27~30℃(정상),85~95%(고습),*,*,27~30℃,*,배기순환,OFF,OFF,OFF,OFF,OFF,OFF,ON,OFF,ON,ON,유지,유지,_determine_devices:300 + _determine_circulation:338,정상온도+외부정상+고습: 배기로 제습
+C-15,64케이스,4,생육기/수확기,27~30℃(정상),75~85%(정상),≤1200ppm,*,27~30℃,75~85%,내부순환,OFF,OFF,OFF,OFF,ON,OFF,OFF,ON,ON,ON,유지,유지,_determine_devices:300 + _determine_circulation:343,모든 조건 정상: 내부순환 유지
+C-16,64케이스,4,생육기/수확기,27~30℃(정상),75~85%(정상),>1200ppm,*,27~30℃,75~85%,외부순환,OFF,OFF,OFF,OFF,OFF,ON,ON,ON,ON,ON,유지,유지,_determine_devices:300 + _determine_circulation:342,정상+외부정상+고CO2: 외부순환 (실제로는 X-1이 선행 처리)
+C-17,64케이스,4,생육기/수확기,27~30℃(정상),75~85%(정상),≤1200ppm,*,27~30℃,75~85% 범위외,내부순환,OFF,OFF,OFF,OFF,ON,OFF,OFF,ON,ON,ON,유지,유지,_determine_devices:300 + _determine_circulation:348,정상온도+외부습도비정상+정상CO2
+C-18,64케이스,4,생육기/수확기,27~30℃(정상),75~85%(정상),>1200ppm,*,27~30℃,75~85% 범위외,배기순환,OFF,OFF,OFF,OFF,OFF,OFF,ON,OFF,ON,ON,유지,유지,_determine_devices:300 + _determine_circulation:347,정상온도+외부습도비정상+고CO2: 배기
+
+=== 64케이스 알고리즘 제어 (생육기/수확기 - 내부온도 정상 + 외부온도 비정상) ===,,,,,,,,,,,,,,,,,,,,,,,,
+C-19,64케이스,4,생육기/수확기,27~30℃(정상),70~75%(저습),≤1200ppm,*,27℃미만 또는 30℃초과,*,내부순환,OFF,ON,OFF,OFF,ON,OFF,OFF,ON,ON,ON,유지,유지,_determine_devices:298 + _determine_circulation:353,외부온도비정상+저습: 내부순환+가습
+C-20,64케이스,4,생육기/수확기,27~30℃(정상),70~75%(저습),>1200ppm,*,27℃미만 또는 30℃초과,*,배기순환,OFF,ON,OFF,OFF,OFF,OFF,ON,OFF,ON,ON,유지,유지,_determine_devices:298 + _determine_circulation:352,외부온도비정상+저습+고CO2: 배기+가습
+C-21,64케이스,4,생육기/수확기,27~30℃(정상),75~85%(정상),≤1200ppm,*,27℃미만 또는 30℃초과,*,내부순환,OFF,OFF,OFF,OFF,ON,OFF,OFF,ON,ON,ON,유지,유지,_determine_devices:300 + _determine_circulation:353,외부온도비정상+정상: 내부순환
+C-22,64케이스,4,생육기/수확기,27~30℃(정상),75~85%(정상),>1200ppm,*,27℃미만 또는 30℃초과,*,배기순환,OFF,OFF,OFF,OFF,OFF,OFF,ON,OFF,ON,ON,유지,유지,_determine_devices:300 + _determine_circulation:352,외부온도비정상+고CO2: 배기
+C-23,64케이스,4,생육기/수확기,27~30℃(정상),85~95%(고습),≤1200ppm,*,27℃미만 또는 30℃초과,*,내부순환,OFF,OFF,OFF,OFF,ON,OFF,OFF,ON,ON,ON,유지,유지,_determine_devices:300 + _determine_circulation:353,외부온도비정상+고습: 내부순환
+C-24,64케이스,4,생육기/수확기,27~30℃(정상),85~95%(고습),>1200ppm,*,27℃미만 또는 30℃초과,*,배기순환,OFF,OFF,OFF,OFF,OFF,OFF,ON,OFF,ON,ON,유지,유지,_determine_devices:300 + _determine_circulation:352,외부온도비정상+고습+고CO2: 배기
+
+=== 스케줄 제어 (시간 기반 - 센서값 무관) ===,,,,,,,,,,,,,,,,,,,,,,,,
+S-1,스케줄제어,독립,모두,*,*,*,*,*,*,-,유지,유지,유지,유지,유지,유지,유지,유지,유지,유지,ON/OFF,유지,schedule_control.py:157,조명: DB 스케줄 시간범위 내 ON / 외 OFF
+S-2,스케줄제어,독립,모두,*,*,*,*,*,*,-,유지,유지,유지,유지,유지,유지,유지,유지,유지,유지,유지,ON/OFF,schedule_control.py:274,관수밸브: DB 스케줄 시간범위 내 ON / 외 OFF
+
+=== 추가 수정자 (다른 제어결과에 중첩 적용) ===,,,,,,,,,,,,,,,,,,,,,,,,
+M-1,수확기모드,-,수확기,*,*,*,*,*,*,내부순환→배기순환,유지,유지,유지,유지,변경,변경,변경,변경,변경,유지,유지,강제OFF,_execute_control:493,수확기: 내부순환 결정 시 배기순환으로 강제 변환 + 관수 강제 OFF
+M-2,열풍기쿨다운,-,모두,*,*,*,*,*,*,-,유지,유지,강제OFF,강제OFF,유지,유지,유지,유지,유지,유지,유지,유지,control_manual:771,30분 연속운전 후 5분 쿨다운 (비상제어 시 쿨다운 초기화)
+
+========================================
+[4] 고정값 릴레이
+========================================
+릴레이,상태,설명
+배수밸브(drainage_motor),항상 ON,_build_relay_values:437 - 모든 제어에서 배수밸브는 항상 ON
+조명(lighting),스케줄제어에서 설정한 값 유지,_build_relay_values:445 - 수동환경제어에서 조명값을 변경하지 않음
+관수(irrigation),스케줄제어에서 설정한 값 유지,_build_relay_values:447 - 수동환경제어에서 관수값을 변경하지 않음 (수확기 제외)
+미사용(relay_4/12/13/16),항상 OFF,사용하지 않는 릴레이 슬롯
+
+========================================
+[5] 릴레이 핀 매핑 (Standard: 재배사 1/3/4)
+========================================
+릴레이번호,영문명,한글명,수동환경제어_역할
+relay_1st_flag,water_heater_flag,물가열기,온도 가열용 수중 히터
+relay_2st_flag,fog_occurs_flag,분사펌프,습도 상승용 안개 분사
+relay_3st_flag,drainage_motor_flag,배수밸브,항상 ON (배수)
+relay_4st_flag,unused,미사용,-
+relay_5st_flag,intake_fan_flag,흡기팬,순환모드에 따라 제어
+relay_6st_flag,exhaust_fan_flag,배기팬,순환모드에 따라 제어
+relay_7st_flag,lighting_flag,조명토글,스케줄제어에서 관리
+relay_8st_flag,irrigation_flag,관수밸브,스케줄제어에서 관리
+relay_9st_flag,indoor_heater_flag,열풍기,저온+고습 시 가온/제습
+relay_10st_flag,air_circulation_valve_flag,순환댐퍼,순환모드에 따라 제어
+relay_11st_flag,air_intake_valve_flag,흡기댐퍼,순환모드에 따라 제어
+relay_12st_flag,unused,미사용,-
+relay_13st_flag,unused,미사용,-
+relay_14st_flag,air_exhaust_valve_flag,배기댐퍼,순환모드에 따라 제어
+relay_15st_flag,indoor_heater2_flag,열풍댐퍼,열풍기와 연동 (ON 시퀀스: 열풍댐퍼→열풍기)
+relay_16st_flag,unused,미사용,-
+
+========================================
+[6] 릴레이 핀 매핑 (E-Version: 재배사 2)
+========================================
+릴레이번호,영문명,한글명,수동환경제어_역할
+relay_1st_flag,water_heater_flag,물가열기,온도 가열용 수중 히터
+relay_2st_flag,fog_occurs_flag,분사펌프,습도 상승용 안개 분사
+relay_3st_flag,radiator_flag,라디에터,-
+relay_4st_flag,unused,미사용,-
+relay_5st_flag,lighting_flag,조명토글,스케줄제어에서 관리
+relay_6st_flag,irrigation_flag,관수밸브,스케줄제어에서 관리
+relay_7st_flag,intake_fan_flag,흡기팬,순환모드에 따라 제어
+relay_8st_flag,exhaust_fan_flag,배기팬,순환모드에 따라 제어
+relay_9st_flag,air_circulation_valve_flag,순환댐퍼,순환모드에 따라 제어
+relay_10st_flag,air_intake_valve_flag,흡기댐퍼,순환모드에 따라 제어
+relay_11st_flag,air_exhaust_valve_flag,배기댐퍼,순환모드에 따라 제어
+relay_12st_flag,drainage_motor_flag,배수밸브,항상 ON (배수)
+relay_13st_flag,indoor_heater_flag,열풍기,저온+고습 시 가온/제습
+relay_14st_flag,indoor_heater2_flag,열풍댐퍼,열풍기와 연동
+relay_15st_flag,unused,미사용,-
+relay_16st_flag,unused,미사용,-
+
+========================================
+[7] 제어 흐름 요약 (control_manual_environment 의사결정 순서)
+========================================
+순서,판단항목,조건,동작,비고
+1,비상제어,온도<25 또는 >33 또는 습도<70 또는 >95 또는 CO2>1500 또는 수온<35 또는 >60,즉시 비상 릴레이 설정,모든 생육단계 공통 최우선
+2,발이기,생육단계='발이기',온도만으로 판단 (29~33℃ 목표),습도/CO2 무시
+3,열풍기쿨다운,30분 연속운전 후,열풍기/열풍댐퍼 강제 OFF (5분간),비상제어 시 쿨다운 초기화
+4,외부순환,외부온도 27~30℃ AND 외부습도 75~85% AND 내부값 비정상,모든 장치 OFF + 외부순환,외부 환경이 이상적이면 자연환기
+5,64케이스,위 조건 모두 해당없음,온도/습도/CO2/외부환경 조합으로 결정,장치+순환모드 동시 결정
+6,2단계제어,모든 릴레이 쓰기 시,Phase1(댐퍼) → 15초 대기 → Phase2(팬),하드웨어 보호용 시퀀스
+
+========================================
+[8] 센서 상태 분류 기준 (_classify 함수)
+========================================
+센서,상태,범위,비상 제외 후 실효범위
+내부온도,low (저온),<27℃,25~27℃
+내부온도,normal (정상),27~30℃,27~30℃
+내부온도,high (고온),>30℃,30~33℃
+내부습도,low (저습),<75%,70~75%
+내부습도,normal (정상),75~85%,75~85%
+내부습도,high (고습),>85%,85~95%
+CO2,low (저CO2),<300ppm,<300ppm
+CO2,normal (정상),300~1200ppm,300~1200ppm
+CO2,high (고CO2),>1200ppm,1200~1500ppm
+외부온도,normal (정상),27~30℃,-
+외부온도,abnormal (비정상),<27 또는 >30℃,-
+외부습도,normal (정상),75~85%,-
+외부습도,abnormal (비정상),<75 또는 >85%,-

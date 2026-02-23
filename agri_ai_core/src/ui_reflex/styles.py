@@ -140,11 +140,10 @@ INPUT_AREA_STYLE = {
 
 # 헤더 스타일
 HEADER_STYLE = {
-    "text_align": "center",
-    "padding": "16px 20px",
+    "padding": "8px 20px",
     "background_color": COLORS["primary_light"],
     "border_radius": "8px",
-    "margin_bottom": "20px",
+    "margin": "8px 8px 8px 8px",
 }
 
 # Select 스타일 (농장/재배사: 선택값 녹색)
