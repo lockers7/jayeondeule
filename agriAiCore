@@ -1,230 +1,64 @@
 #!/bin/bash
 # -*- coding: utf-8 -*-
 # =========================================================================
-# AgriAI Core 시스템 제어 스크립트
+# AgriAI Core 통합 시스템 제어 스크립트
+# 실제 서비스 관리는 setup/agriCoreCtrl.sh에 위임합니다.
+#
 # Usage: agriAiCore {start|stop|restart|status|logs|enable|disable}
 # =========================================================================
-
-set -e
 
 # 색상 정의
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
+BOLD='\033[1m'
 
 # 프로젝트 경로
-PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-# 서비스명
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CTRL_SCRIPT="$SCRIPT_DIR/setup/agriCoreCtrl.sh"
 CORE_SERVICE="agriAiCore.service"
-ENV_FILE="/workspace/jayeondeule/.env"
 
-get_reflex_env() {
-    if [ -n "${REFLEX_ENV:-}" ]; then
-        echo "$REFLEX_ENV"
-        return
-    fi
-
-    if [ -f "$ENV_FILE" ]; then
-        local env_value
-        env_value="$(grep '^REFLEX_ENV=' "$ENV_FILE" | tail -1 | cut -d'=' -f2- | tr -d '\"' | tr -d ' ' || true)"
-        if [ -n "$env_value" ]; then
-            echo "$env_value"
-            return
-        fi
-    fi
-
-    echo "prod"
-}
-
-is_port_listening() {
-    local port_hex
-    port_hex="$(printf '%04X' "$1")"
-    awk -v p="$port_hex" '
-        NR > 1 {
-            split($2, addr, ":")
-            if (toupper(addr[2]) == p && $4 == "0A") {
-                found = 1
-                exit 0
-            }
-        }
-        END { if (!found) exit 1 }
-    ' /proc/net/tcp /proc/net/tcp6 2>/dev/null
-}
-
-wait_reflex_ready() {
-    local timeout_sec="${1:-90}"
-    local waited=0
-    local reflex_env
-    reflex_env="$(get_reflex_env)"
-
-    while [ "$waited" -lt "$timeout_sec" ]; do
-        if ! service_active "$CORE_SERVICE"; then
-            return 1
-        fi
-
-        if [ "$reflex_env" = "prod" ]; then
-            if is_port_listening 3000; then
-                return 0
-            fi
-        else
-            if is_port_listening 3000 && is_port_listening 8001; then
-                return 0
-            fi
-        fi
-
-        sleep 1
-        waited=$((waited + 1))
-    done
-
-    return 1
-}
+# agriCoreCtrl.sh 존재 확인
+if [ ! -f "$CTRL_SCRIPT" ]; then
+    echo -e "${RED}오류: $CTRL_SCRIPT 파일을 찾을 수 없습니다${NC}"
+    exit 1
+fi
 
 # -------------------------------------------------------------------
 # 도움말
 # -------------------------------------------------------------------
 show_help() {
-    echo -e "${BLUE}=========================================="
-    echo "  AgriAI Core 시스템 제어"
-    echo -e "==========================================${NC}"
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}  ${BOLD}AgriAI Core 통합 시스템 제어${NC}                             ${CYAN}║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo "사용법: agriAiCore {command}"
     echo ""
     echo "명령어:"
-    echo "  start       - 시스템 시작"
-    echo "  stop        - 시스템 중지"
-    echo "  restart     - 시스템 재시작"
-    echo "  status      - 시스템 상태 확인"
+    echo "  start       - 전체 서비스 시작"
+    echo "  stop        - 전체 서비스 중지"
+    echo "  restart     - 전체 서비스 재시작"
+    echo "  status      - 전체 서비스 상태 확인"
     echo "  logs        - 실시간 로그 확인"
     echo "  enable      - 시스템 부팅 시 자동 시작 활성화"
     echo "  disable     - 시스템 부팅 시 자동 시작 비활성화"
     echo "  help        - 도움말 표시"
     echo ""
-    echo "예제:"
-    echo "  agriAiCore start"
-    echo "  agriAiCore status"
-    echo "  agriAiCore logs"
+    echo "관리 서비스:"
+    echo "  1. Ollama          (LLM 서버,       port 11434)"
+    echo "  2. PostgreSQL      (관계형 DB,      port 5432)"
+    echo "  3. ChromaDB        (벡터 DB,        port 8000)"
+    echo "  4. Scheduler       (스케줄/환경제어)"
+    echo "  5. FastAPI         (REST API,       port 8002)"
+    echo "  6. SearXNG         (메타검색엔진,    port 8888)"
+    echo "  7. Spring Boot     (웹 백엔드,       port 9090)"
+    echo "  8. Nginx           (웹서버,          port 80)"
     echo ""
-}
-
-service_active() {
-    local service_name="$1"
-    sudo systemctl is-active --quiet "$service_name"
-}
-
-start_services() {
-    sudo systemctl start "$CORE_SERVICE"
-}
-
-stop_services() {
-    sudo systemctl stop "$CORE_SERVICE"
-}
-
-restart_services() {
-    sudo systemctl restart "$CORE_SERVICE"
-}
-
-# -------------------------------------------------------------------
-# 시스템 시작
-# -------------------------------------------------------------------
-start_system() {
-    echo -e "${GREEN}AgriAI Core 시스템 시작 중...${NC}"
-    start_services
-    echo "Reflex 기동 대기 중..."
-
-    if service_active "$CORE_SERVICE" && wait_reflex_ready 120; then
-        echo -e "${GREEN}✓ 시스템이 정상적으로 시작되었습니다${NC}"
-        echo ""
-        echo "접속 정보:"
-        echo "  - Reflex UI: http://localhost:3000"
-        echo ""
-        echo "상태 확인: agriAiCore status"
-        echo "로그 확인: agriAiCore logs"
-    else
-        echo -e "${RED}✗ 시스템 시작 실패${NC}"
-        echo "상태 확인: agriAiCore status"
-        exit 1
-    fi
-}
-
-# -------------------------------------------------------------------
-# 시스템 중지
-# -------------------------------------------------------------------
-stop_system() {
-    echo -e "${YELLOW}AgriAI Core 시스템 중지 중...${NC}"
-    stop_services
-    sleep 2
-
-    if ! service_active "$CORE_SERVICE"; then
-        echo -e "${GREEN}✓ 시스템이 정상적으로 중지되었습니다${NC}"
-    else
-        echo -e "${RED}✗ 시스템 중지 실패${NC}"
-        exit 1
-    fi
-}
-
-# -------------------------------------------------------------------
-# 시스템 재시작
-# -------------------------------------------------------------------
-restart_system() {
-    echo -e "${YELLOW}AgriAI Core 시스템 재시작 중...${NC}"
-    restart_services
-    echo "Reflex 기동 대기 중..."
-
-    if service_active "$CORE_SERVICE" && wait_reflex_ready 120; then
-        echo -e "${GREEN}✓ 시스템이 정상적으로 재시작되었습니다${NC}"
-        echo ""
-        echo "접속 정보:"
-        echo "  - Reflex UI: http://localhost:3000"
-    else
-        echo -e "${RED}✗ 시스템 재시작 실패${NC}"
-        exit 1
-    fi
-}
-
-# -------------------------------------------------------------------
-# 시스템 상태 확인
-# -------------------------------------------------------------------
-show_status() {
-    echo -e "${BLUE}=========================================="
-    echo "  AgriAI Core 시스템 상태"
-    echo -e "==========================================${NC}"
+    echo "세부 서비스 관리: agriCoreCtrl (setup/agriCoreCtrl.sh)"
     echo ""
-    sudo systemctl status "$CORE_SERVICE" --no-pager
-    echo ""
-    echo "포트 상태:"
-    ss -tuln | grep -E "3000" || echo "  포트가 열려있지 않습니다"
-    echo ""
-    echo "프로세스 상태:"
-    ps aux | grep -E "(reflex|scheduler)" | grep -v grep || echo "  실행 중인 프로세스 없음"
-    echo ""
-}
-
-# -------------------------------------------------------------------
-# 로그 확인
-# -------------------------------------------------------------------
-show_logs() {
-    echo -e "${BLUE}=========================================="
-    echo "  AgriAI Core 실시간 로그"
-    echo -e "==========================================${NC}"
-    echo ""
-    echo "Ctrl+C로 종료"
-    echo ""
-    sudo journalctl -u "$CORE_SERVICE" -f
-}
-
-enable_system() {
-    echo -e "${GREEN}AgriAI Core 자동 시작 활성화 중...${NC}"
-    sudo systemctl enable "$CORE_SERVICE"
-    echo -e "${GREEN}✓ 자동 시작 활성화 완료${NC}"
-}
-
-disable_system() {
-    echo -e "${YELLOW}AgriAI Core 자동 시작 비활성화 중...${NC}"
-    sudo systemctl disable "$CORE_SERVICE"
-    echo -e "${GREEN}✓ 자동 시작 비활성화 완료${NC}"
 }
 
 # -------------------------------------------------------------------
@@ -232,25 +66,35 @@ disable_system() {
 # -------------------------------------------------------------------
 case "${1:-}" in
     start)
-        start_system
+        "$CTRL_SCRIPT" start 0
         ;;
     stop)
-        stop_system
+        "$CTRL_SCRIPT" stop 0
         ;;
     restart)
-        restart_system
+        "$CTRL_SCRIPT" restart 0
         ;;
     status)
-        show_status
+        "$CTRL_SCRIPT" status
         ;;
     logs)
-        show_logs
+        echo -e "${BLUE}=========================================="
+        echo "  AgriAI Core 실시간 로그"
+        echo -e "==========================================${NC}"
+        echo ""
+        echo "Ctrl+C로 종료"
+        echo ""
+        sudo journalctl -u "$CORE_SERVICE" -f
         ;;
     enable)
-        enable_system
+        echo -e "${GREEN}AgriAI Core 자동 시작 활성화 중...${NC}"
+        sudo systemctl enable "$CORE_SERVICE"
+        echo -e "${GREEN}✓ 자동 시작 활성화 완료${NC}"
         ;;
     disable)
-        disable_system
+        echo -e "${YELLOW}AgriAI Core 자동 시작 비활성화 중...${NC}"
+        sudo systemctl disable "$CORE_SERVICE"
+        echo -e "${GREEN}✓ 자동 시작 비활성화 완료${NC}"
         ;;
     help|--help|-h|"")
         show_help

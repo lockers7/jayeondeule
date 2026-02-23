@@ -11,7 +11,8 @@ from datetime import datetime
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.chroma.collections import document_collection
-from agri_ai_core.src.chroma.operations import upsert_collection_data, get_documents, delete_document
+from agri_ai_core.src.chroma.operations import upsert_collection_data, upsert_documents_with_embedding, get_documents, delete_document
+from agri_ai_core.src.ai.rag.embedder import embed_text
 
 logger = setup_logger(__name__)
 
@@ -124,13 +125,13 @@ def store_document_with_chunks(document_content, document_metadata, chunk_size=1
             except Exception as e:
                 logger.warning(f"[청크저장] 기존 청크 삭제 중 오류 (무시): {e}")
 
-        # 각 청크에 메타데이터와 함께 저장
+        # 각 청크에 메타데이터와 임베딩 생성하여 배치 저장
         doc_id_base = file_name.replace(".", "_") if file_name else "unknown"
         success_count = 0
 
+        batch_docs = []
         for i, chunk in enumerate(chunks):
             try:
-                # 안정적 ID: 파일명 + 청크번호 (타임스탬프 제거 → 동일 파일 재학습시 upsert)
                 chunk_id = f"{doc_id_base}_{i}"
 
                 chunk_metadata = document_metadata.copy()
@@ -142,20 +143,35 @@ def store_document_with_chunks(document_content, document_metadata, chunk_size=1
                     "record_datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 })
 
-                status = upsert_collection_data(
-                    calledby="save_document_chunks",
-                    collection=document_collection(),
-                    doc_id=chunk_id,
-                    document=chunk,
-                    metadata=chunk_metadata
-                )
-                if status in ["added", "updated"]:
-                    success_count += 1
-                else:
-                    logger.warning(f"청크 저장 실패: {chunk_id} - status: {status}")
+                # 실제 임베딩 생성
+                embedding = embed_text(chunk)
+                if not embedding:
+                    logger.warning(f"[청크저장] 청크 {chunk_id} 임베딩 실패 → 스킵")
+                    continue
+
+                batch_docs.append({
+                    "doc_id": chunk_id,
+                    "text": chunk,
+                    "metadata": chunk_metadata,
+                    "embedding": embedding,
+                })
 
             except Exception as e:
-                logger.error(f"청크 저장 중 예외 발생: {e}")
+                logger.error(f"청크 임베딩 중 예외 발생: {e}")
+                logger.error(traceback.format_exc())
+
+        # 배치 upsert
+        if batch_docs:
+            try:
+                batch_result = upsert_documents_with_embedding(document_collection(), batch_docs)
+                if isinstance(batch_result, dict) and batch_result.get("success"):
+                    success_count = batch_result.get("count", len(batch_docs))
+                    logger.info(f"[청크저장] 배치 upsert 성공: {success_count}건 (임베딩 포함)")
+                else:
+                    error = batch_result.get("error", "알 수 없는 오류") if isinstance(batch_result, dict) else str(batch_result)
+                    logger.warning(f"[청크저장] 배치 upsert 실패: {error}")
+            except Exception as e:
+                logger.error(f"[청크저장] 배치 upsert 예외: {e}")
                 logger.error(traceback.format_exc())
 
         result["success"] = success_count > 0

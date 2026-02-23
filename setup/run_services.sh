@@ -10,8 +10,9 @@
 #   3. ChromaDB      (벡터 DB,        port 8000)
 #   4. Scheduler     (스케줄/환경제어)
 #   5. FastAPI       (REST API,      port 8002)
-#   6. Spring Boot   (웹 백엔드,      port 9090)
-#   7. Nginx         (웹서버,         port 80)
+#   6. SearXNG       (메타검색엔진,   port 8888)
+#   7. Spring Boot   (웹 백엔드,      port 9090)
+#   8. Nginx         (웹서버,         port 80)
 # =========================================================================
 
 set -e
@@ -32,10 +33,10 @@ export PYTHONDONTWRITEBYTECODE=1
 # Python 가상환경 경로
 PYTHON_BIN="/workspace/jayeondeule/venv/bin/python"
 
-# PID 파일 경로
+# PID 파일 경로 (프로젝트 logs 디렉토리 사용 → 소유권 충돌 방지)
 OLLAMA_PID="/tmp/ollama.pid"
-SCHEDULER_PID="/tmp/scheduler.pid"
-API_PID="/tmp/api.pid"
+SCHEDULER_PID="/workspace/jayeondeule/logs/scheduler.pid"
+API_PID="/workspace/jayeondeule/logs/api.pid"
 
 # Ollama 설정
 OLLAMA_BIN="/usr/local/bin/ollama"
@@ -119,7 +120,7 @@ wait_port() {
 # -------------------------------------------------------------------
 
 start_ollama() {
-    log_msg "[1/7] [Ollama] 시작 중 (모델: $OLLAMA_MODEL)..."
+    log_msg "[1/8] [Ollama] 시작 중 (모델: $OLLAMA_MODEL)..."
 
     # systemd ollama 서비스 먼저 중지 (자동 재시작 방지)
     if systemctl is-active ollama.service >/dev/null 2>&1; then
@@ -154,6 +155,7 @@ start_ollama() {
     fi
 
     # ollama serve 백그라운드 실행
+    export OLLAMA_MODELS="${OLLAMA_MODELS:-/workspace/jayeondeule/.ollama/models}"
     export OLLAMA_NUM_GPU="${OLLAMA_NUM_GPU:-999}"
     export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
     $OLLAMA_BIN serve >> "$LOG_DIR/ollama.log" 2>&1 &
@@ -180,7 +182,7 @@ start_ollama() {
 }
 
 start_postgresql() {
-    log_msg "[2/7] [PostgreSQL] 시작 확인 중..."
+    log_msg "[2/8] [PostgreSQL] 시작 확인 중..."
     if is_port_listening 5432; then
         log_msg "[PostgreSQL] 이미 실행 중 (port 5432)"
         return 0
@@ -195,7 +197,7 @@ start_postgresql() {
 }
 
 start_chromadb() {
-    log_msg "[3/7] [ChromaDB] 시작 확인 중..."
+    log_msg "[3/8] [ChromaDB] 시작 확인 중..."
     if is_port_listening 8000; then
         log_msg "[ChromaDB] 이미 실행 중 (port 8000)"
         return 0
@@ -210,7 +212,7 @@ start_chromadb() {
 }
 
 start_scheduler() {
-    log_msg "[4/7] [스케줄러] 시작 중..."
+    log_msg "[4/8] [스케줄러] 시작 중..."
     pkill -f "agri_ai_core\.scheduler" 2>/dev/null || true
     sleep 1
     $PYTHON_BIN -m agri_ai_core.scheduler >> "$LOG_DIR/scheduler.log" 2>&1 &
@@ -221,7 +223,7 @@ start_scheduler() {
 
 start_fastapi() {
     API_PORT="${API_PORT:-8002}"
-    log_msg "[5/7] [REST API] 시작 중 (Port: $API_PORT)..."
+    log_msg "[5/8] [REST API] 시작 중 (Port: $API_PORT)..."
 
     # Python __pycache__ 정리
     find /workspace/jayeondeule/agri_ai_core -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
@@ -236,8 +238,26 @@ start_fastapi() {
     log_msg "[REST API] 시작됨 (PID: $API_PID_NUM, Port: $API_PORT)"
 }
 
+start_searxng() {
+    log_msg "[6/8] [SearXNG] 시작 확인 중..."
+    if is_port_listening 8888; then
+        log_msg "[SearXNG] 이미 실행 중 (port 8888)"
+        return 0
+    fi
+    if docker ps -a --filter "name=searxng" --format "{{.Names}}" 2>/dev/null | grep -q "searxng"; then
+        docker start searxng >/dev/null 2>&1
+    else
+        docker compose -f /workspace/jayeondeule/setup/searxng/docker-compose.yml up -d >/dev/null 2>&1
+    fi
+    if wait_port 8888 15; then
+        log_msg "[SearXNG] 시작됨 (port 8888)"
+    else
+        log_msg "[SearXNG] 시작 실패 (무시하고 계속)"
+    fi
+}
+
 start_springboot() {
-    log_msg "[6/7] [Spring Boot] 시작 확인 중..."
+    log_msg "[7/8] [Spring Boot] 시작 확인 중..."
     if is_port_listening 9090; then
         log_msg "[Spring Boot] 이미 실행 중 (port 9090)"
         return 0
@@ -252,7 +272,7 @@ start_springboot() {
 }
 
 start_nginx() {
-    log_msg "[7/7] [Nginx] 시작 확인 중..."
+    log_msg "[8/8] [Nginx] 시작 확인 중..."
     if is_port_listening 80; then
         log_msg "[Nginx] 이미 실행 중 (port 80)"
         return 0
@@ -281,6 +301,11 @@ cleanup() {
     log_msg "[Spring Boot] 종료 중..."
     sudo systemctl stop jayeondeule_web.service 2>/dev/null || true
     log_msg "[Spring Boot] 종료 완료"
+
+    # SearXNG 종료
+    log_msg "[SearXNG] 종료 중..."
+    docker stop searxng 2>/dev/null || true
+    log_msg "[SearXNG] 종료 완료"
 
     # REST API 종료
     if [ -f "$API_PID" ]; then
@@ -367,13 +392,16 @@ sleep 3
 # [4/7] 스케줄러 시작
 start_scheduler
 
-# [5/7] REST API 시작
+# [5/8] REST API 시작
 start_fastapi
 
-# [6/7] Spring Boot 시작
+# [6/8] SearXNG 시작
+start_searxng
+
+# [7/8] Spring Boot 시작
 start_springboot
 
-# [7/7] Nginx 시작
+# [8/8] Nginx 시작
 start_nginx
 
 log_msg "========== 전체 서비스 시작 완료 =========="
@@ -382,8 +410,9 @@ log_msg "  2. PostgreSQL:  port 5432"
 log_msg "  3. ChromaDB:    http://0.0.0.0:8000"
 log_msg "  4. Scheduler:   PID $SCHEDULER_PID_NUM"
 log_msg "  5. REST API:    http://0.0.0.0:${API_PORT:-8002}"
-log_msg "  6. Spring Boot: http://0.0.0.0:9090"
-log_msg "  7. Nginx:       http://0.0.0.0:80"
+log_msg "  6. SearXNG:     http://0.0.0.0:8888"
+log_msg "  7. Spring Boot: http://0.0.0.0:9090"
+log_msg "  8. Nginx:       http://0.0.0.0:80"
 
 # 모든 프로세스가 종료될 때까지 대기
 wait

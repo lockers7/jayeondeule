@@ -3,14 +3,269 @@
 # LLM이 요청한 도구를 실제로 실행하는 모듈
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import json
+import os
+import re
 import time
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
 from agri_ai_core.logs import setup_logger
 
 logger = setup_logger(__name__)
+
+
+# ============================================================
+# 웹 검색 API 모듈 (Naver / Brave)
+# API 키가 설정되면 JSON API 우선 사용, 실패 시 MCP fallback
+# ============================================================
+
+def _is_korean_query(query: str) -> bool:
+    """쿼리에 한국어가 포함되어 있는지 판별"""
+    korean_chars = sum(1 for c in query if '\uac00' <= c <= '\ud7a3' or '\u3131' <= c <= '\u3163')
+    return korean_chars > 0
+
+
+def _search_via_naver_api(query: str, display: int = 10) -> Optional[List[Dict[str, Any]]]:
+    """
+    Naver 검색 API를 통한 검색 (블로그 + 웹)
+    Returns: 검색 결과 리스트 또는 None (API 키 없음/실패)
+    """
+    client_id = os.getenv("NAVER_CLIENT_ID", "").strip()
+    client_secret = os.getenv("NAVER_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        return None
+
+    import urllib.request
+    import urllib.parse
+    import urllib.error
+
+    headers = {
+        "X-Naver-Client-Id": client_id,
+        "X-Naver-Client-Secret": client_secret,
+    }
+
+    results = []
+    seen_urls = set()
+
+    # 블로그 + 웹문서 2개 카테고리 검색
+    categories = [
+        ("blog", f"https://openapi.naver.com/v1/search/blog.json?query={urllib.parse.quote(query)}&display={display}&sort=sim"),
+        ("web", f"https://openapi.naver.com/v1/search/webkeyword.json?query={urllib.parse.quote(query)}&display={display}&sort=sim"),
+    ]
+
+    for cat_name, url in categories:
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+
+            for item in data.get("items", []):
+                link = item.get("link", "")
+                if not link or link in seen_urls:
+                    continue
+                seen_urls.add(link)
+
+                # HTML 태그 제거
+                title = re.sub(r'<[^>]+>', '', item.get("title", ""))
+                description = re.sub(r'<[^>]+>', '', item.get("description", ""))
+
+                results.append({
+                    "title": title,
+                    "url": link,
+                    "description": description,
+                    "source": f"naver_{cat_name}",
+                })
+
+            logger.info(f"[NaverAPI] {cat_name} 검색 완료: {len(data.get('items', []))}건")
+
+        except urllib.error.HTTPError as e:
+            logger.warning(f"[NaverAPI] {cat_name} HTTP 오류: {e.code}")
+            if e.code == 429:
+                logger.warning("[NaverAPI] API 호출 한도 초과")
+            continue
+        except Exception as e:
+            logger.warning(f"[NaverAPI] {cat_name} 오류: {e}")
+            continue
+
+    if not results:
+        return None
+
+    logger.info(f"[NaverAPI] 총 {len(results)}건 검색 완료 query=\"{query[:50]}\"")
+    return results
+
+
+def _search_via_brave_api(query: str, count: int = 10) -> Optional[List[Dict[str, Any]]]:
+    """
+    Brave Search API를 통한 검색
+    Returns: 검색 결과 리스트 또는 None (API 키 없음/실패)
+    """
+    api_key = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
+    if not api_key:
+        return None
+
+    import urllib.request
+    import urllib.parse
+    import urllib.error
+
+    params = urllib.parse.urlencode({
+        "q": query,
+        "count": count,
+        "search_lang": "ko",
+        "country": "KR",
+        "text_decorations": "false",
+    })
+    url = f"https://api.search.brave.com/res/v1/web/search?{params}"
+
+    headers = {
+        "Accept": "application/json",
+        "Accept-Encoding": "gzip",
+        "X-Subscription-Token": api_key,
+    }
+
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            # gzip 처리
+            if resp.headers.get("Content-Encoding") == "gzip":
+                import gzip
+                raw = gzip.decompress(resp.read())
+            else:
+                raw = resp.read()
+            data = json.loads(raw.decode("utf-8"))
+
+        results = []
+        web_results = data.get("web", {}).get("results", [])
+        for item in web_results:
+            results.append({
+                "title": item.get("title", ""),
+                "url": item.get("url", ""),
+                "description": item.get("description", ""),
+                "source": "brave",
+            })
+
+        logger.info(f"[BraveAPI] {len(results)}건 검색 완료 query=\"{query[:50]}\"")
+        return results if results else None
+
+    except urllib.error.HTTPError as e:
+        logger.warning(f"[BraveAPI] HTTP 오류: {e.code}")
+        if e.code == 429:
+            logger.warning("[BraveAPI] API 호출 한도 초과")
+        return None
+    except Exception as e:
+        logger.warning(f"[BraveAPI] 오류: {e}")
+        return None
+
+
+def _search_via_searxng(query: str, count: int = 15) -> Optional[List[Dict[str, Any]]]:
+    """
+    SearXNG 자체 호스팅 메타 검색 엔진을 통한 검색
+    무료, API 키 불필요, 다중 검색엔진 (Google/Naver/Bing/DuckDuckGo) 통합
+    Returns: 검색 결과 리스트 또는 None (SearXNG 미실행/실패)
+    """
+    searxng_url = os.getenv("SEARXNG_URL", "").strip()
+    if not searxng_url:
+        return None
+
+    import urllib.request
+    import urllib.parse
+    import urllib.error
+
+    # 한국어 쿼리 감지 → 언어 설정
+    lang = "ko-KR" if _is_korean_query(query) else "en-US"
+
+    params = urllib.parse.urlencode({
+        "q": query,
+        "format": "json",
+        "language": lang,
+        "pageno": 1,
+    })
+    url = f"{searxng_url}/search?{params}"
+
+    try:
+        req = urllib.request.Request(url, headers={
+            "Accept": "application/json",
+            "User-Agent": "AgriAI-Core/1.0",
+        })
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        results = []
+        seen_urls = set()
+        for item in data.get("results", []):
+            item_url = item.get("url", "")
+            if not item_url or item_url in seen_urls:
+                continue
+            seen_urls.add(item_url)
+
+            results.append({
+                "title": item.get("title", ""),
+                "url": item_url,
+                "description": item.get("content", ""),
+                "source": f"searxng_{item.get('engine', 'unknown')}",
+            })
+
+            if len(results) >= count:
+                break
+
+        engines_used = list(set(item.get("engine", "") for item in data.get("results", []) if item.get("engine")))
+        logger.info(f"[SearXNG] {len(results)}건 검색 완료 engines={engines_used[:5]} query=\"{query[:50]}\"")
+        return results if results else None
+
+    except urllib.error.URLError as e:
+        logger.warning(f"[SearXNG] 연결 실패 (SearXNG 미실행?): {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"[SearXNG] 오류: {e}")
+        return None
+
+
+def _search_via_api(query: str) -> Optional[Dict[str, Any]]:
+    """
+    API 검색 통합 라우터
+    우선순위: SearXNG(무료) → Naver/Brave(API키) → None(MCP fallback)
+    한국어 → Naver 우선, 영어 → Brave 우선
+    """
+    t_start = time.time()
+    is_korean = _is_korean_query(query)
+
+    # SearXNG: 무료, API 키 불필요 → 항상 최우선 시도
+    search_order = [("searxng", lambda: _search_via_searxng(query))]
+
+    if is_korean:
+        search_order.extend([
+            ("naver", lambda: _search_via_naver_api(query)),
+            ("brave", lambda: _search_via_brave_api(query)),
+        ])
+    else:
+        search_order.extend([
+            ("brave", lambda: _search_via_brave_api(query)),
+            ("naver", lambda: _search_via_naver_api(query)),
+        ])
+
+    from agri_ai_core.src.ai.stats_collector import get_stats_collector
+
+    for provider_name, search_fn in search_order:
+        try:
+            results = search_fn()
+            if results:
+                elapsed = time.time() - t_start
+                logger.info(f"[API검색] {provider_name} 성공 ({elapsed:.1f}s) {len(results)}건")
+                get_stats_collector().record_search(provider_name, success=True)
+                return {
+                    "success": True,
+                    "query": query,
+                    "results": results,
+                    "search_provider": provider_name,
+                }
+        except Exception as e:
+            logger.warning(f"[API검색] {provider_name} 실패: {e}")
+            get_stats_collector().record_search(provider_name, success=False)
+            continue
+
+    elapsed = time.time() - t_start
+    logger.info(f"[API검색] 모든 API 실패 또는 미설정 ({elapsed:.1f}s) → MCP fallback")
+    return None
 
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -81,8 +336,9 @@ def search_farm_knowledge(query: str, n_results: int = 3) -> Dict[str, Any]:
         metadatas = results.get('metadatas', []) or []
         distances = results.get('distances', []) or []
 
-        # distance 필터링: 관련성 낮은 결과 제거 (L2 distance > 5.0)
-        MAX_DISTANCE = 5.0
+        # distance 필터링: 관련성 낮은 결과 제거
+        # bge-m3 임베딩(노름 ~3.0) 기준: 유사=0~10, 관련=10~20, 무관=20+
+        MAX_DISTANCE = 22.0
         formatted_results = []
         skipped_count = 0
         for idx, (doc, meta) in enumerate(zip(documents, metadatas)):
@@ -256,48 +512,62 @@ def _auto_fetch_urls(results: list, max_fetch: int = 3) -> None:
 def search_web(query: str) -> Dict[str, Any]:
     t_start = time.time()
     logger.info(f"[웹검색] 시작 query=\"{(query or '')[:100]}\"")
+
+    result = None
+
+    # 1단계: API 검색 시도 (Naver/Brave - API 키가 있을 때만)
     try:
-        from agri_ai_core.src.ai.mcp_client import search_web as mcp_search
-
-        result = mcp_search(query, max_results=8)
-        search_elapsed = time.time() - t_start
-        result_count = 0
-        if isinstance(result, dict) and isinstance(result.get("results"), list):
-            result_count = len(result.get("results", []))
-        success = result.get('success', False)
-        logger.info(f"[웹검색] 검색완료 ({search_elapsed:.1f}s) success={success} results={result_count}건")
-
-        if result_count > 0:
-            for idx, item in enumerate(result.get("results", [])[:5], start=1):
-                if isinstance(item, dict):
-                    logger.info(f"[웹검색] 결과[{idx}] title={item.get('title','')[:50]} url={item.get('url','')[:80]}")
-
-            # 상위 URL 본문 자동 읽기 (병렬)
-            _auto_fetch_urls(result.get("results", []), max_fetch=5)
-
-            fetched = sum(1 for r in result.get("results", []) if r.get("page_content"))
-            total_elapsed = time.time() - t_start
-            logger.info(f"[웹검색] 본문읽기완료 ({total_elapsed:.1f}s) 본문확보={fetched}건/{result_count}건")
-
-            # LLM 지시: 본문 데이터 기반으로 답변하라
-            result["instruction"] = (
-                "page_content 필드에 각 URL의 본문이 포함되어 있습니다. "
-                "반드시 이 본문 내용을 꼼꼼히 읽고, 여러 출처의 정보를 종합하여 "
-                "구체적이고 자세한 답변을 작성하세요. "
-                "핵심 요약 + 세부 항목 정리 + 출처 링크 형식으로 답변하세요. "
-                "단답형이나 URL만 나열하는 것은 금지합니다."
-            )
-
-        return result
-
+        api_result = _search_via_api(query)
+        if api_result and api_result.get("success") and api_result.get("results"):
+            result = api_result
+            provider = api_result.get("search_provider", "api")
+            logger.info(f"[웹검색] API 검색 성공 (provider={provider})")
     except Exception as e:
-        elapsed = time.time() - t_start
-        logger.error(f"[웹검색] 오류 ({elapsed:.1f}s): {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "results": []
-        }
+        logger.warning(f"[웹검색] API 검색 예외: {e}")
+
+    # 2단계: API 실패 시 MCP 스크래핑 fallback
+    if not result or not result.get("results"):
+        try:
+            from agri_ai_core.src.ai.mcp_client import search_web as mcp_search
+            mcp_result = mcp_search(query, max_results=8)
+            if mcp_result.get("success") and mcp_result.get("results"):
+                result = mcp_result
+                result["search_provider"] = "mcp_scraping"
+                logger.info(f"[웹검색] MCP 스크래핑 fallback 성공")
+            elif not result:
+                result = mcp_result
+        except Exception as e:
+            logger.warning(f"[웹검색] MCP 스크래핑 fallback 실패: {e}")
+            if not result:
+                result = {"success": False, "error": str(e), "results": []}
+
+    search_elapsed = time.time() - t_start
+    result_count = len(result.get("results", [])) if isinstance(result, dict) else 0
+    provider = result.get("search_provider", "unknown") if isinstance(result, dict) else "none"
+    logger.info(f"[웹검색] 검색완료 ({search_elapsed:.1f}s) provider={provider} results={result_count}건")
+
+    if result_count > 0:
+        for idx, item in enumerate(result.get("results", [])[:5], start=1):
+            if isinstance(item, dict):
+                logger.info(f"[웹검색] 결과[{idx}] title={item.get('title','')[:50]} url={item.get('url','')[:80]}")
+
+        # 상위 URL 본문 자동 읽기 (병렬)
+        _auto_fetch_urls(result.get("results", []), max_fetch=5)
+
+        fetched = sum(1 for r in result.get("results", []) if r.get("page_content"))
+        total_elapsed = time.time() - t_start
+        logger.info(f"[웹검색] 본문읽기완료 ({total_elapsed:.1f}s) 본문확보={fetched}건/{result_count}건")
+
+        # LLM 지시: 본문 데이터 기반으로 답변하라
+        result["instruction"] = (
+            "page_content 필드에 각 URL의 본문이 포함되어 있습니다. "
+            "반드시 이 본문 내용을 꼼꼼히 읽고, 여러 출처의 정보를 종합하여 "
+            "구체적이고 자세한 답변을 작성하세요. "
+            "핵심 요약 + 세부 항목 정리 + 출처 링크 형식으로 답변하세요. "
+            "단답형이나 URL만 나열하는 것은 금지합니다."
+        )
+
+    return result
 
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

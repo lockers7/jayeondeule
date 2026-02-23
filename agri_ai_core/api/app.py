@@ -120,6 +120,12 @@ async def health_check():
     return {"status": "ok"}
 
 
+@app.get("/api/v1/stats")
+async def get_stats(_=Depends(verify_api_key)):
+    from agri_ai_core.src.ai.stats_collector import get_stats_collector
+    return get_stats_collector().get_stats()
+
+
 @app.post("/api/v1/query", response_model=QueryResponse)
 async def query_llm(request: QueryRequest, _=Depends(verify_api_key)):
     from agri_ai_core.src.ai.query_handler_simple import query_llm_simple
@@ -127,7 +133,13 @@ async def query_llm(request: QueryRequest, _=Depends(verify_api_key)):
 
     start = time.time()
     try:
-        response_text = ""
+        # session_id가 없으면 자동 생성
+        session_id = request.session_id
+        if not session_id:
+            import uuid
+            session_id = str(uuid.uuid4())
+
+        result_data = None
         async for chunk in query_llm_simple(
             user_query=request.query,
             file_paths=None,
@@ -135,22 +147,54 @@ async def query_llm(request: QueryRequest, _=Depends(verify_api_key)):
             house_id=request.house_id,
             farm_name=request.farm_name,
             house_name=request.house_name,
+            session_id=session_id,
         ):
-            response_text = chunk
+            result_data = chunk
             break
 
-        response_text = clean_llm_response(response_text)
+        # 구조화된 응답 처리
+        if isinstance(result_data, dict):
+            response_text = clean_llm_response(result_data.get("response", ""))
+            sources = result_data.get("sources") or None  # API 응답에서 빈 목록은 null로 표시
+            tools_used = result_data.get("tools_used") or None  # API 응답에서 빈 목록은 null로 표시
+            response_type = result_data.get("response_type")
+        else:
+            response_text = clean_llm_response(str(result_data or ""))
+            sources = None
+            tools_used = None
+            response_type = None
+
+        processing_time = round(time.time() - start, 3)
+
+        # 통계 기록
+        from agri_ai_core.src.ai.stats_collector import get_stats_collector
+        get_stats_collector().record_query(
+            success=True,
+            processing_time=processing_time,
+            tools_used=tools_used,
+            response_type=response_type,
+        )
+
         return QueryResponse(
             success=True,
             response=response_text,
-            processing_time=round(time.time() - start, 3),
+            processing_time=processing_time,
+            session_id=session_id,
+            sources=sources,
+            tools_used=tools_used,
+            response_type=response_type,
         )
     except Exception as e:
         logger.error(f"API 질의 오류: {e}")
+        processing_time = round(time.time() - start, 3)
+
+        from agri_ai_core.src.ai.stats_collector import get_stats_collector
+        get_stats_collector().record_query(success=False, processing_time=processing_time)
+
         return QueryResponse(
             success=False,
             response=f"오류: {str(e)}",
-            processing_time=round(time.time() - start, 3),
+            processing_time=processing_time,
         )
 
 
@@ -166,11 +210,14 @@ async def rag_perform(
     try:
         file_paths = []
         for upload_file in files:
-            file_path = os.path.join(UPLOAD_DIR, upload_file.filename)
+            safe_name = os.path.basename(upload_file.filename or "upload")
+            if not safe_name:
+                safe_name = "upload"
+            file_path = os.path.join(UPLOAD_DIR, safe_name)
             content = await upload_file.read()
             with open(file_path, "wb") as f:
                 f.write(content)
-            file_paths.append({"filename": upload_file.filename, "path": file_path})
+            file_paths.append({"filename": safe_name, "path": file_path})
 
         api_json_logger.info(
             "[REST API 요청] POST /api/v1/rag/perform\n%s",
