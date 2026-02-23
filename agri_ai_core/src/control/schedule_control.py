@@ -452,7 +452,7 @@ def control_all_schedules():
                 if has_control:
                     sensor = read_current_sensor_info(farm_id, house_id)
                     if sensor:
-                        logger.debug(f"센서 상태: {_format_sensor_status(sensor)}")
+                        logger.info(f"센서 상태: {_format_sensor_status(sensor)}")
                     log_relay_detail(farm_id, house_id)
 
                 # 결과 집계
