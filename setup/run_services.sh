@@ -10,9 +10,8 @@
 #   3. ChromaDB      (벡터 DB,        port 8000)
 #   4. Scheduler     (스케줄/환경제어)
 #   5. FastAPI       (REST API,      port 8002)
-#   6. Reflex        (Reflex UI,     port 3000)
-#   7. Spring Boot   (웹 백엔드,      port 9090)
-#   8. Nginx         (웹서버,         port 80)
+#   6. Spring Boot   (웹 백엔드,      port 9090)
+#   7. Nginx         (웹서버,         port 80)
 # =========================================================================
 
 set -e
@@ -32,12 +31,10 @@ export PYTHONDONTWRITEBYTECODE=1
 
 # Python 가상환경 경로
 PYTHON_BIN="/workspace/jayeondeule/venv/bin/python"
-REFLEX_BIN="/workspace/jayeondeule/venv/bin/reflex"
 
 # PID 파일 경로
 OLLAMA_PID="/tmp/ollama.pid"
 SCHEDULER_PID="/tmp/scheduler.pid"
-REFLEX_PID="/tmp/reflex.pid"
 API_PID="/tmp/api.pid"
 
 # Ollama 설정
@@ -57,9 +54,6 @@ log_msg() {
     echo "[$ts] $*" >> "$SERVICE_LOG"
 }
 
-# Reflex 실행 환경 설정
-REFLEX_ENV="${REFLEX_ENV:-prod}"
-REFLEX_USE_GRANIAN="${REFLEX_USE_GRANIAN:-false}"
 WEB_SEARCH_DNS_SERVERS="${WEB_SEARCH_DNS_SERVERS:-1.1.1.1,8.8.8.8,8.8.4.4}"
 
 dns_health_check() {
@@ -120,44 +114,12 @@ wait_port() {
     return 1
 }
 
-wait_reflex_ready() {
-    local timeout_sec="${1:-60}"
-    local waited=0
-
-    while [ "$waited" -lt "$timeout_sec" ]; do
-        # reflex 런처 프로세스 자체가 죽었으면 즉시 실패
-        if [ -f "$REFLEX_PID" ]; then
-            local pid
-            pid=$(cat "$REFLEX_PID" 2>/dev/null || true)
-            if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
-                return 1
-            fi
-        fi
-
-        # prod(single-port): 3000 오픈 확인
-        if [ "$REFLEX_ENV" = "prod" ]; then
-            if is_port_listening 3000; then
-                return 0
-            fi
-        else
-            # dev 모드: 프론트/백엔드 모두 오픈 확인
-            if is_port_listening 3000 && is_port_listening 8001; then
-                return 0
-            fi
-        fi
-
-        sleep 1
-        waited=$((waited + 1))
-    done
-    return 1
-}
-
 # -------------------------------------------------------------------
 # 개별 서비스 시작 함수
 # -------------------------------------------------------------------
 
 start_ollama() {
-    log_msg "[1/8] [Ollama] 시작 중 (모델: $OLLAMA_MODEL)..."
+    log_msg "[1/7] [Ollama] 시작 중 (모델: $OLLAMA_MODEL)..."
 
     # systemd ollama 서비스 먼저 중지 (자동 재시작 방지)
     if systemctl is-active ollama.service >/dev/null 2>&1; then
@@ -218,7 +180,7 @@ start_ollama() {
 }
 
 start_postgresql() {
-    log_msg "[2/8] [PostgreSQL] 시작 확인 중..."
+    log_msg "[2/7] [PostgreSQL] 시작 확인 중..."
     if is_port_listening 5432; then
         log_msg "[PostgreSQL] 이미 실행 중 (port 5432)"
         return 0
@@ -233,7 +195,7 @@ start_postgresql() {
 }
 
 start_chromadb() {
-    log_msg "[3/8] [ChromaDB] 시작 확인 중..."
+    log_msg "[3/7] [ChromaDB] 시작 확인 중..."
     if is_port_listening 8000; then
         log_msg "[ChromaDB] 이미 실행 중 (port 8000)"
         return 0
@@ -248,7 +210,7 @@ start_chromadb() {
 }
 
 start_scheduler() {
-    log_msg "[4/8] [스케줄러] 시작 중..."
+    log_msg "[4/7] [스케줄러] 시작 중..."
     pkill -f "agri_ai_core\.scheduler" 2>/dev/null || true
     sleep 1
     $PYTHON_BIN -m agri_ai_core.scheduler >> "$LOG_DIR/scheduler.log" 2>&1 &
@@ -259,7 +221,7 @@ start_scheduler() {
 
 start_fastapi() {
     API_PORT="${API_PORT:-8002}"
-    log_msg "[5/8] [REST API] 시작 중 (Port: $API_PORT)..."
+    log_msg "[5/7] [REST API] 시작 중 (Port: $API_PORT)..."
 
     # Python __pycache__ 정리
     find /workspace/jayeondeule/agri_ai_core -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
@@ -274,49 +236,8 @@ start_fastapi() {
     log_msg "[REST API] 시작됨 (PID: $API_PID_NUM, Port: $API_PORT)"
 }
 
-start_reflex_ui() {
-    log_msg "[6/8] [Reflex] 시작 중 (모드: $REFLEX_ENV)..."
-
-    # Reflex는 agri_ai_core 디렉토리에서 실행해야 app_name 경로와 일치함
-    cd /workspace/jayeondeule/agri_ai_core
-
-    # 이전 비정상 종료로 남은 Reflex/gunicorn 잔존 프로세스 정리
-    pkill -f "/workspace/jayeondeule/venv/bin/gunicorn.*main.main:app\\(\\)" 2>/dev/null || true
-    pkill -f "/workspace/jayeondeule/venv/bin/reflex run" 2>/dev/null || true
-
-    # venv/bin을 PATH에 추가 (gunicorn, uvicorn 등 실행 파일 접근용)
-    export PATH="/workspace/jayeondeule/venv/bin:$PATH"
-    export PYTHONPATH="/workspace/jayeondeule:${PYTHONPATH}"
-    export REFLEX_USE_GRANIAN
-
-    # Reflex 초기화 (최초 1회)
-    if [ ! -d "/workspace/jayeondeule/agri_ai_core/.web" ]; then
-        log_msg "[Reflex] 초기화 중 (reflex init)..."
-        $REFLEX_BIN init --template blank >> "$LOG_DIR/reflex.log" 2>&1
-    fi
-
-    if [ "$REFLEX_ENV" = "prod" ]; then
-        $REFLEX_BIN run --env prod --single-port --frontend-port 3000 \
-            >> "$LOG_DIR/reflex.log" 2>&1 &
-    else
-        $REFLEX_BIN run --env "$REFLEX_ENV" --frontend-port 3000 --backend-port 8001 \
-            >> "$LOG_DIR/reflex.log" 2>&1 &
-    fi
-    REFLEX_PID_NUM=$!
-    echo $REFLEX_PID_NUM > "$REFLEX_PID"
-
-    if wait_reflex_ready 75; then
-        log_msg "[Reflex] 시작됨 (PID: $REFLEX_PID_NUM, Port: 3000)"
-    else
-        log_msg "[Reflex] 시작 실패 (PID: $REFLEX_PID_NUM)"
-        log_msg "[Reflex] 최근 로그:"
-        tail -n 30 "$LOG_DIR/reflex.log" || true
-        return 1
-    fi
-}
-
 start_springboot() {
-    log_msg "[7/8] [Spring Boot] 시작 확인 중..."
+    log_msg "[6/7] [Spring Boot] 시작 확인 중..."
     if is_port_listening 9090; then
         log_msg "[Spring Boot] 이미 실행 중 (port 9090)"
         return 0
@@ -331,7 +252,7 @@ start_springboot() {
 }
 
 start_nginx() {
-    log_msg "[8/8] [Nginx] 시작 확인 중..."
+    log_msg "[7/7] [Nginx] 시작 확인 중..."
     if is_port_listening 80; then
         log_msg "[Nginx] 이미 실행 중 (port 80)"
         return 0
@@ -360,22 +281,6 @@ cleanup() {
     log_msg "[Spring Boot] 종료 중..."
     sudo systemctl stop jayeondeule_web.service 2>/dev/null || true
     log_msg "[Spring Boot] 종료 완료"
-
-    # Reflex 종료
-    if [ -f "$REFLEX_PID" ]; then
-        REFLEX_PID_NUM=$(cat "$REFLEX_PID")
-        if kill -0 "$REFLEX_PID_NUM" 2>/dev/null; then
-            log_msg "[Reflex] 종료 중 (PID: $REFLEX_PID_NUM)..."
-            kill "$REFLEX_PID_NUM"
-            wait "$REFLEX_PID_NUM" 2>/dev/null || true
-            log_msg "[Reflex] 종료 완료"
-        else
-            log_msg "[Reflex] 이미 종료됨 (PID: $REFLEX_PID_NUM)"
-        fi
-        rm -f "$REFLEX_PID"
-    fi
-    pkill -f "/workspace/jayeondeule/venv/bin/gunicorn.*main.main:app\\(\\)" 2>/dev/null || true
-    pkill -f "/workspace/jayeondeule/venv/bin/reflex run" 2>/dev/null || true
 
     # REST API 종료
     if [ -f "$API_PID" ]; then
@@ -443,7 +348,6 @@ trap cleanup SIGTERM SIGINT
 # 서비스 시작
 # -------------------------------------------------------------------
 log_msg "========== AgriAI Core 전체 서비스 시작 =========="
-log_msg "  Reflex 모드: $REFLEX_ENV"
 log_msg "  Ollama 모델: $OLLAMA_MODEL"
 
 dns_health_check
@@ -460,19 +364,16 @@ start_chromadb
 # 초기화 완료 대기
 sleep 3
 
-# [4/8] 스케줄러 시작
+# [4/7] 스케줄러 시작
 start_scheduler
 
-# [5/8] REST API 시작
+# [5/7] REST API 시작
 start_fastapi
 
-# [6/8] Reflex UI 시작
-start_reflex_ui
-
-# [7/8] Spring Boot 시작
+# [6/7] Spring Boot 시작
 start_springboot
 
-# [8/8] Nginx 시작
+# [7/7] Nginx 시작
 start_nginx
 
 log_msg "========== 전체 서비스 시작 완료 =========="
@@ -481,14 +382,8 @@ log_msg "  2. PostgreSQL:  port 5432"
 log_msg "  3. ChromaDB:    http://0.0.0.0:8000"
 log_msg "  4. Scheduler:   PID $SCHEDULER_PID_NUM"
 log_msg "  5. REST API:    http://0.0.0.0:${API_PORT:-8002}"
-if [ "$REFLEX_ENV" = "prod" ]; then
-    log_msg "  6. Reflex:      http://0.0.0.0:3000 (프로덕션)"
-else
-    log_msg "  6. Reflex FE:   http://0.0.0.0:3000"
-    log_msg "     Reflex BE:   http://0.0.0.0:8001"
-fi
-log_msg "  7. Spring Boot: http://0.0.0.0:9090"
-log_msg "  8. Nginx:       http://0.0.0.0:80"
+log_msg "  6. Spring Boot: http://0.0.0.0:9090"
+log_msg "  7. Nginx:       http://0.0.0.0:80"
 
 # 모든 프로세스가 종료될 때까지 대기
 wait

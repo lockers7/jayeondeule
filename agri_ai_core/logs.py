@@ -314,7 +314,7 @@ def trim_old_log_entries(log_dir, days=LOG_RETENTION_DAYS):
 
 def trim_large_plain_logs(log_dir, max_lines=MAX_PLAIN_LOG_LINES):
     """타임스탬프 없는 로그 파일의 크기를 제한 (최근 줄만 유지)"""
-    target_files = ["ollama.log", "reflex.log", "react_build.log"]
+    target_files = ["ollama.log", "react_build.log"]
     trimmed_count = 0
 
     for filename in target_files:
