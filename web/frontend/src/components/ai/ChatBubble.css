@@ -1,0 +1,105 @@
+/* 마크다운 렌더링 스타일 (assistant 말풍선) */
+.chat-markdown h1 {
+    font-size: 1.4em;
+    font-weight: 700;
+    margin: 12px 0 6px 0;
+    padding-bottom: 4px;
+    border-bottom: 2px solid #198754;
+    color: #1a1a1a;
+}
+
+.chat-markdown h2 {
+    font-size: 1.25em;
+    font-weight: 700;
+    margin: 10px 0 5px 0;
+    color: #1a1a1a;
+}
+
+.chat-markdown h3 {
+    font-size: 1.1em;
+    font-weight: 700;
+    margin: 8px 0 4px 0;
+    color: #2d2d2d;
+}
+
+.chat-markdown h4 {
+    font-size: 1em;
+    font-weight: 700;
+    margin: 6px 0 3px 0;
+    color: #2d2d2d;
+}
+
+.chat-markdown p {
+    margin: 8px 0;
+}
+
+.chat-markdown p:empty {
+    display: none;
+}
+
+.chat-markdown strong {
+    font-weight: 700;
+    color: #1a1a1a;
+}
+
+.chat-markdown em {
+    font-style: italic;
+}
+
+.chat-markdown ul,
+.chat-markdown ol {
+    margin: 4px 0;
+    padding-left: 20px;
+}
+
+.chat-markdown li {
+    margin: 2px 0;
+}
+
+.chat-markdown li > ul,
+.chat-markdown li > ol {
+    margin: 2px 0;
+}
+
+.chat-markdown code {
+    background-color: #f0f0f0;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.9em;
+    color: #c7254e;
+}
+
+.chat-markdown pre {
+    background-color: #f5f5f5;
+    padding: 10px;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 6px 0;
+}
+
+.chat-markdown pre code {
+    background-color: transparent;
+    padding: 0;
+    color: inherit;
+}
+
+.chat-markdown hr {
+    margin: 8px 0;
+    border-color: #ddd;
+}
+
+.chat-markdown blockquote {
+    border-left: 3px solid #198754;
+    padding-left: 10px;
+    margin: 6px 0;
+    color: #555;
+}
+
+/* 첫 번째, 마지막 자식 여백 제거 */
+.chat-markdown > *:first-child {
+    margin-top: 0;
+}
+
+.chat-markdown > *:last-child {
+    margin-bottom: 0;
+}
