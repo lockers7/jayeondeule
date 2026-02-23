@@ -23,7 +23,7 @@ echo ""
 # -----------------------------------------------------------------
 # 1. 기존 불필요 서비스 정리
 # -----------------------------------------------------------------
-for svc in fastapi.service agriAiCore-reflex.service reflex.service; do
+for svc in fastapi.service; do
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
         echo -e "${YELLOW}기존 $svc 중지 중...${NC}"
         sudo systemctl stop "$svc"

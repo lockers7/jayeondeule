@@ -1,28 +1,22 @@
 [Unit]
-Description=AgriAI Core Services (Scheduler + REST API)
-After=network-online.target chromadb.service postgresql.service
-Wants=network-online.target chromadb.service
+Description=AgriAI Core Services (All Services)
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-Type=simple
-User=jayeondeule
-Group=jayeondeule
-WorkingDirectory=/workspace/jayeondeule
+Type=oneshot
+RemainAfterExit=yes
 
-# 통합 실행 스크립트 사용
-ExecStart=/workspace/jayeondeule/setup/run_services.sh
+# agriCoreCtrl.sh로 전체 서비스 시작/종료
+ExecStart=/workspace/jayeondeule/setup/agriCoreCtrl.sh start 0
+ExecStop=/workspace/jayeondeule/setup/agriCoreCtrl.sh stop 0
 
 # 환경 변수 로드
 EnvironmentFile=/workspace/jayeondeule/.env
 
-# 재시작 정책
-Restart=always
-RestartSec=10
-
-# 프로세스 종료 설정
-KillMode=mixed
-KillSignal=SIGTERM
-TimeoutStopSec=30
+# 타임아웃 (전체 서비스 시작에 시간 소요)
+TimeoutStartSec=180
+TimeoutStopSec=60
 
 # 로그 출력
 StandardOutput=journal

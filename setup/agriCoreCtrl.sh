@@ -17,8 +17,9 @@ PYTHON_BIN="$VENV_BIN/python"
 LOG_DIR="${LOG_PATH:-$BASE_DIR/logs}"
 ENV_FILE="$BASE_DIR/.env"
 
-# PID 파일
-PID_DIR="/tmp"
+# PID 파일 (/tmp는 root 소유 파일 충돌 가능 → 프로젝트 logs 디렉토리 사용)
+PID_DIR="$BASE_DIR/logs"
+mkdir -p "$PID_DIR"
 API_PID="$PID_DIR/api.pid"
 SCHEDULER_PID="$PID_DIR/scheduler.pid"
 
@@ -355,6 +356,38 @@ nginx_restart() {
     fi
 }
 
+# --- SearXNG (Docker) ---
+searxng_start() {
+    log_msg "${BLUE}[SearXNG]${NC} 시작 중 (port 8888)..."
+    if docker ps --filter "name=searxng" --format "{{.Names}}" 2>/dev/null | grep -q "searxng"; then
+        log_msg "${YELLOW}[SearXNG]${NC} 이미 실행 중"
+        return 0
+    fi
+    if docker ps -a --filter "name=searxng" --format "{{.Names}}" 2>/dev/null | grep -q "searxng"; then
+        docker start searxng >/dev/null 2>&1
+    else
+        docker compose -f "$BASE_DIR/setup/searxng/docker-compose.yml" up -d >/dev/null 2>&1
+    fi
+    if wait_port 8888 15; then
+        log_msg "${GREEN}[SearXNG]${NC} 시작 완료 (port 8888)"
+    else
+        log_msg "${RED}[SearXNG]${NC} 시작 실패"
+        return 1
+    fi
+}
+
+searxng_stop() {
+    log_msg "${BLUE}[SearXNG]${NC} 종료 중..."
+    docker stop searxng >/dev/null 2>&1 || true
+    log_msg "${GREEN}[SearXNG]${NC} 종료 완료"
+}
+
+searxng_restart() {
+    searxng_stop
+    sleep 2
+    searxng_start
+}
+
 # --- React (빌드 전용) ---
 react_build() {
     log_msg "${BLUE}[React]${NC} 빌드 시작..."
@@ -369,13 +402,25 @@ react_build() {
 }
 
 # ─── 전체 서비스 관리 ───
+
+# agriAiCore.service(run_services.sh)가 실행 중이면 충돌 방지를 위해 중지
+_stop_legacy_service() {
+    if systemctl is-active --quiet agriAiCore.service 2>/dev/null; then
+        log_msg "${YELLOW}[agriAiCore.service]${NC} 충돌 방지를 위해 중지..."
+        sudo systemctl stop agriAiCore.service 2>/dev/null || true
+        sleep 2
+    fi
+}
+
 all_start() {
+    _stop_legacy_service
     log_msg "${BOLD}========== 전체 서비스 시작 ==========${NC}"
     ollama_start
     postgresql_start
     chromadb_start
     scheduler_start
     fastapi_start
+    searxng_start
     springboot_start
     nginx_start
     log_msg "${BOLD}========== 전체 서비스 시작 완료 ==========${NC}"
@@ -383,9 +428,11 @@ all_start() {
 }
 
 all_stop() {
+    _stop_legacy_service
     log_msg "${BOLD}========== 전체 서비스 종료 ==========${NC}"
     nginx_stop
     springboot_stop
+    searxng_stop
     fastapi_stop
     scheduler_stop
     chromadb_stop
@@ -418,11 +465,13 @@ show_status() {
     check_status "Scheduler" pid_file "$SCHEDULER_PID"
     printf "  %-4s %-16s %-8s " "5" "FastAPI" "${API_PORT:-8002}"
     check_status "FastAPI" port "${API_PORT:-8002}"
-    printf "  %-4s %-16s %-8s " "6" "Spring Boot" "9090"
+    printf "  %-4s %-16s %-8s " "6" "SearXNG" "8888"
+    check_status "SearXNG" port 8888
+    printf "  %-4s %-16s %-8s " "7" "Spring Boot" "9090"
     check_status "Spring Boot" port 9090
-    printf "  %-4s %-16s %-8s " "7" "Nginx" "80"
+    printf "  %-4s %-16s %-8s " "8" "Nginx" "80"
     check_status "Nginx" port 80
-    printf "  %-4s %-16s %-8s " "8" "React" "(빌드)"
+    printf "  %-4s %-16s %-8s " "9" "React" "(빌드)"
     echo -e "${YELLOW}● 빌드 전용${NC}"
     echo -e "  ─────────────────────────────────────────────"
     echo ""
@@ -438,9 +487,10 @@ show_menu() {
     echo -e "   ${CYAN}3${NC}. ChromaDB         (벡터 DB,        port 8000)"
     echo -e "   ${CYAN}4${NC}. Scheduler        (스케줄/환경제어)"
     echo -e "   ${CYAN}5${NC}. FastAPI          (REST API,      port ${API_PORT:-8002})"
-    echo -e "   ${CYAN}6${NC}. Spring Boot      (웹 백엔드,      port 9090)"
-    echo -e "   ${CYAN}7${NC}. Nginx            (웹서버,         port 80)"
-    echo -e "   ${CYAN}8${NC}. React Build      (프론트엔드 빌드)"
+    echo -e "   ${CYAN}6${NC}. SearXNG          (메타검색엔진,   port 8888)"
+    echo -e "   ${CYAN}7${NC}. Spring Boot      (웹 백엔드,      port 9090)"
+    echo -e "   ${CYAN}8${NC}. Nginx            (웹서버,         port 80)"
+    echo -e "   ${CYAN}9${NC}. React Build      (프론트엔드 빌드)"
     echo ""
     echo -n -e "  번호 입력 (q=종료): "
 }
@@ -498,7 +548,15 @@ execute_service() {
                 status)  printf "  FastAPI: "; check_status "FastAPI" port "${API_PORT:-8002}" ;;
             esac
             ;;
-        6) # Spring Boot
+        6) # SearXNG
+            case "$action" in
+                start)   searxng_start ;;
+                stop)    searxng_stop ;;
+                restart) searxng_restart ;;
+                status)  printf "  SearXNG: "; check_status "SearXNG" port 8888 ;;
+            esac
+            ;;
+        7) # Spring Boot
             case "$action" in
                 start)   springboot_start ;;
                 stop)    springboot_stop ;;
@@ -506,7 +564,7 @@ execute_service() {
                 status)  printf "  Spring Boot: "; check_status "Spring Boot" port 9090 ;;
             esac
             ;;
-        7) # Nginx
+        8) # Nginx
             case "$action" in
                 start)   nginx_start ;;
                 stop)    nginx_stop ;;
@@ -514,7 +572,7 @@ execute_service() {
                 status)  printf "  Nginx: "; check_status "Nginx" port 80 ;;
             esac
             ;;
-        8) # React Build
+        9) # React Build
             case "$action" in
                 start|restart) react_build ;;
                 stop) log_msg "${YELLOW}[React]${NC} 빌드 전용 서비스입니다 (stop 불필요)" ;;
@@ -596,7 +654,7 @@ if [ "$choice" = "q" ] || [ "$choice" = "Q" ]; then
 fi
 
 # 숫자 유효성 검사
-if ! [[ "$choice" =~ ^[0-8]$ ]]; then
+if ! [[ "$choice" =~ ^[0-9]$ ]]; then
     echo -e "  ${RED}잘못된 입력입니다.${NC}"
     exit 1
 fi

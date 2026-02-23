@@ -1740,12 +1740,38 @@ def _append_source_urls(answer: str, sources: list) -> str:
     return answer.rstrip() + "\n\n**출처:**\n" + "\n".join(lines)
 
 
+def _determine_response_type(tools_used: List[str]) -> str:
+    """사용된 도구 목록으로 응답 유형 결정."""
+    if "search_web" in tools_used or "fetch_url_content" in tools_used:
+        return "web_search"
+    if "get_farm_realtime_data" in tools_used:
+        return "farm_data"
+    if "search_farm_knowledge" in tools_used:
+        return "knowledge"
+    return "general"
+
+
+def _build_structured_result(
+    response_text: str,
+    sources: list,
+    tools_used: list,
+) -> Dict[str, Any]:
+    """구조화된 응답 결과 생성."""
+    return {
+        "response": response_text,
+        "sources": sources if sources else [],
+        "tools_used": tools_used if tools_used else [],
+        "response_type": _determine_response_type(tools_used),
+    }
+
+
 def get_llm_response_with_tools(
     user_query: str,
     farm_name: str = None,
     temperature: float = 0.7,
     max_tool_iterations: int = 8,
     default_tool_args: Optional[Dict[str, Dict[str, Any]]] = None,
+    conversation_history: Optional[List[Dict[str, str]]] = None,
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # Tool Use를 지원하는 LLM 응답 생성
@@ -1755,9 +1781,10 @@ def get_llm_response_with_tools(
 #       temperature: 창의성 정도
 #       max_tool_iterations: 최대 도구 호출 반복 횟수
 #       default_tool_args: 도구별 기본 인자
-# Returns: str: 최종 응답
+#       conversation_history: 이전 대화 히스토리 (멀티턴)
+# Returns: dict: 구조화된 응답 {response, sources, tools_used, response_type}
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-) -> str:
+) -> Dict[str, Any]:
     try:
         from agri_ai_core.src.ai.tools_definition import get_available_tools, get_system_prompt_with_tools
         from agri_ai_core.src.ai.tools_executor import execute_tool
@@ -1791,10 +1818,25 @@ def get_llm_response_with_tools(
 
         # 메시지 히스토리
         messages = [{"role": "system", "content": system_prompt}]
+
+        # 이전 대화 히스토리 주입 (멀티턴)
+        if conversation_history:
+            # 컨텍스트 길이 보호: 이전 대화 내용을 요약하여 주입
+            # 각 턴의 content를 500자로 제한하여 총 컨텍스트 제한
+            for turn in conversation_history:
+                role = turn.get("role", "user")
+                content = turn.get("content", "")
+                if len(content) > 500:
+                    content = content[:500] + "..."
+                messages.append({"role": role, "content": content})
+            logger.info(f"[멀티턴] 이전 대화 {len(conversation_history)}턴 주입 (messages={len(messages)}개)")
+
         messages.append({"role": "user", "content": user_query})
 
         # 웹 검색 출처 URL 수집용
         _collected_sources = []
+        # 사용된 도구 추적
+        _tools_used: List[str] = []
 
         logger.info(
             f"[Tool Use] 시작 model={model_name} tools={len(tools)}개 "
@@ -1828,7 +1870,7 @@ def get_llm_response_with_tools(
                 assistant_message_raw = response['message']
             else:
                 logger.error("LLM 응답 형식 오류")
-                return "죄송합니다. 응답을 생성할 수 없습니다."
+                return _build_structured_result("죄송합니다. 응답을 생성할 수 없습니다.", [], [])
 
             assistant_message = _normalize_assistant_message(assistant_message_raw)
 
@@ -1850,7 +1892,8 @@ def get_llm_response_with_tools(
                     farm_name=farm_name,
                     raw_answer=final_answer,
                 )
-                return _append_source_urls(finalized, _collected_sources)
+                text_with_sources = _append_source_urls(finalized, _collected_sources)
+                return _build_structured_result(text_with_sources, _collected_sources, _tools_used)
 
             # 도구 호출 처리
             logger.info(f"[Tool Use] 도구호출 {len(tool_calls)}건 감지 (반복{iteration + 1})")
@@ -1867,6 +1910,10 @@ def get_llm_response_with_tools(
                     default_tool_args=default_tool_args,
                 )
                 logger.info(f"[도구호출] [{tc_idx}/{len(tool_calls)}] {tool_name}({tool_args})")
+
+                # 도구 사용 추적
+                if tool_name not in _tools_used:
+                    _tools_used.append(tool_name)
 
                 # 도구 실행
                 t_tool = time.time()
@@ -1906,7 +1953,8 @@ def get_llm_response_with_tools(
                     farm_name=farm_name,
                     raw_answer=msg.get("content", "죄송합니다. 응답을 완료할 수 없습니다."),
                 )
-                return _append_source_urls(finalized, _collected_sources)
+                text_with_sources = _append_source_urls(finalized, _collected_sources)
+                return _build_structured_result(text_with_sources, _collected_sources, _tools_used)
             elif hasattr(msg, 'content') and hasattr(msg, 'role'):
                 if msg.role == "assistant":
                     finalized = _finalize_user_facing_answer(
@@ -1915,15 +1963,17 @@ def get_llm_response_with_tools(
                         farm_name=farm_name,
                         raw_answer=msg.content,
                     )
-                    return _append_source_urls(finalized, _collected_sources)
+                    text_with_sources = _append_source_urls(finalized, _collected_sources)
+                    return _build_structured_result(text_with_sources, _collected_sources, _tools_used)
 
-        return "죄송합니다. 응답을 생성할 수 없습니다."
+        return _build_structured_result("죄송합니다. 응답을 생성할 수 없습니다.", [], [])
 
     except Exception as e:
         if _is_connection_related_error(e):
             logger.warning(f"Tool Use LLM 응답 생성 실패(연결/환경): {e}")
-            return "죄송합니다. 현재 LLM 서버 연결이 불안정합니다. 잠시 후 다시 시도해 주세요."
+            return _build_structured_result(
+                "죄송합니다. 현재 LLM 서버 연결이 불안정합니다. 잠시 후 다시 시도해 주세요.", [], [])
         else:
             logger.error(f"Tool Use LLM 응답 생성 중 오류: {e}")
             logger.error(traceback.format_exc())
-        return f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}"
+        return _build_structured_result(f"죄송합니다. 응답 생성 중 오류가 발생했습니다: {str(e)}", [], [])
