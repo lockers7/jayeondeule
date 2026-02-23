@@ -1,0 +1,43 @@
+/* 선택되지 않은 탭의 텍스트 색상 */
+#custom-tabs .nav-link:not(.active) {
+    color: #198754; /* 원하는 색상으로 변경 */
+}
+
+/* 실시간 재배사 현황 아코디언 헤더 중앙 정렬 */
+.accordion-button {
+    justify-content: center;
+    position: relative;
+    background-color: #fff !important;
+}
+
+.accordion-button:not(.collapsed) {
+    background-color: #fff !important;
+    box-shadow: none;
+}
+
+.accordion-button::after {
+    position: absolute;
+    right: 1.25rem;
+}
+
+.accordion-button:focus {
+    box-shadow: none;
+    border-color: transparent;
+}
+
+.accordion-item {
+    border: none !important;
+}
+
+.accordion-button:focus,
+.accordion-button:active,
+.accordion-button:hover {
+    outline: none !important;
+    box-shadow: none !important;
+    border-color: transparent !important;
+}
+
+/* 센서 테이블 헤더 배경색 */
+.sensor-table thead th {
+    background-color: #d0d0d0 !important;
+}

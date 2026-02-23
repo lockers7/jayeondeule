@@ -1,0 +1,13 @@
+td {
+    white-space: nowrap;
+}
+
+.sensorItem:hover td{
+    background-color: #F4F8FDFF;
+}
+
+.sensor-table,
+.sensor-table th,
+.sensor-table td {
+    border-color: #198754 !important;
+}
