@@ -1412,9 +1412,9 @@ def _finalize_user_facing_answer(
     logger.info(f"[필터링-reasoning잔존] reasoning흔적 감지 terms={detected_terms} → 재작성 시도")
 
     rewritten = candidate
-    for attempt in range(2):
+    for attempt in range(1):
         rewrite_attempts = attempt + 1
-        logger.info(f"[필터링-재작성] 시도 {attempt + 1}/2 입력길이={len(rewritten)}자")
+        logger.info(f"[필터링-재작성] 시도 {attempt + 1}/1 입력길이={len(rewritten)}자")
         try:
             rewritten = _rewrite_without_reasoning(
                 model_name=model_name,
@@ -1815,7 +1815,8 @@ def get_llm_response_with_tools(
                     "temperature": temperature,
                     "top_p": 0.9,
                     "top_k": 40,
-                    "num_predict": NUM_PREDICT
+                    "num_predict": NUM_PREDICT,
+                    "think": False,
                 },
                 keep_alive='1h'
             )
