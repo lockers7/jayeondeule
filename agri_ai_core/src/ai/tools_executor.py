@@ -230,8 +230,8 @@ def _auto_fetch_urls(results: list, max_fetch: int = 3) -> None:
         content_result = _direct_fetch_url(url, timeout=10)
         if content_result.get("success"):
             text = _strip_html(content_result.get("text", ""))
-            if len(text) > 2500:
-                text = text[:2500]
+            if len(text) > 4000:
+                text = text[:4000]
             item["page_content"] = text
             return True
         return False
@@ -342,7 +342,7 @@ def _direct_fetch_url(url: str, timeout: int = 15) -> Dict[str, Any]:
 def fetch_url_content(url: str) -> Dict[str, Any]:
     t_start = time.time()
     logger.info(f"[URL본문] 시작 url={url[:120]}")
-    MAX_CONTENT_LEN = 5000
+    MAX_CONTENT_LEN = 8000
 
     try:
         # 1차: MCP fetch 시도
