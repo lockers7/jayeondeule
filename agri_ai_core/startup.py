@@ -11,7 +11,7 @@ import time
 import logging
 import traceback
 
-from agri_ai_core.logs import setup_logger
+from agri_ai_core.logs import setup_logger, cleanup_all_logs
 from agri_ai_core.src.chroma import heartbeat, ensure_required_collections_exist
 from agri_ai_core.src.control import setup_scheduler, start_scheduler, stop_scheduler, setup_default_jobs, control_all_schedules, control_all_manual
 
@@ -54,7 +54,6 @@ def initialize_app():
         logger.info("[환경정보] CHROMA_DB_HTTP_HOST=%s:%s",
                      os.getenv('CHROMA_DB_HTTP_HOST', '(미설정)'),
                      os.getenv('CHROMA_DB_HTTP_PORT', '(미설정)'))
-        logger.info("[환경정보] REFLEX_ENV=%s", os.getenv('REFLEX_ENV', '(미설정)'))
         logger.info("[환경정보] API_PORT=%s", os.getenv('API_PORT', '(미설정)'))
 
         # -----------------------------------------------------------

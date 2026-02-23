@@ -6,27 +6,15 @@ from agri_ai_core.config import settings, get_settings
 from agri_ai_core.logs import setup_logger
 
 __all__ = [
-    # 설정 및 유틸리티
     "settings",
     "get_settings",
     "setup_logger",
-    # 엔트리포인트 (지연 로드)
     "db_session",
-    "run_streamlit",
-    "run_reflex",
 ]
 
 
-# 지연 로드 함수들 (순환 import 방지)
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# Lazy import for modules that may cause circular imports
-# --->
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def __getattr__(name):
     if name == "db_session":
         from agri_ai_core.src.postgresql import db_session
         return db_session
-    if name in ("run_streamlit", "run_reflex"):
-        from agri_ai_core.main.main import app
-        return app
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

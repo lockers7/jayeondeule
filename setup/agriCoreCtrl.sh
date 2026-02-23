@@ -297,57 +297,6 @@ fastapi_restart() {
     fastapi_start
 }
 
-# --- Reflex ---
-reflex_start() {
-    log_msg "${BLUE}[Reflex]${NC} 시작 중 (port 3000)..."
-    if is_port_listening 3000; then
-        log_msg "${YELLOW}[Reflex]${NC} 이미 실행 중 (port 3000)"
-        return 0
-    fi
-    cd "$BASE_DIR/agri_ai_core"
-    export PATH="$VENV_BIN:$PATH"
-    export PYTHONPATH="$BASE_DIR:${PYTHONPATH}"
-    export REFLEX_ENV="${REFLEX_ENV:-prod}"
-    if [ "$REFLEX_ENV" = "prod" ]; then
-        $VENV_BIN/reflex run --env prod --single-port --frontend-port 3000 \
-            >> "$LOG_DIR/reflex.log" 2>&1 &
-    else
-        $VENV_BIN/reflex run --env "$REFLEX_ENV" --frontend-port 3000 --backend-port 8001 \
-            >> "$LOG_DIR/reflex.log" 2>&1 &
-    fi
-    local pid=$!
-    echo $pid > /tmp/reflex.pid
-    if wait_port 3000 75; then
-        log_msg "${GREEN}[Reflex]${NC} 시작 완료 (PID $pid, port 3000)"
-    else
-        log_msg "${RED}[Reflex]${NC} 시작 실패"
-        return 1
-    fi
-}
-
-reflex_stop() {
-    log_msg "${BLUE}[Reflex]${NC} 종료 중..."
-    if [ -f /tmp/reflex.pid ]; then
-        local pid
-        pid=$(cat /tmp/reflex.pid 2>/dev/null)
-        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            kill "$pid" 2>/dev/null
-            sleep 2
-        fi
-        rm -f /tmp/reflex.pid
-    fi
-    pkill -f "gunicorn.*main.main:app" 2>/dev/null || true
-    pkill -f "reflex run" 2>/dev/null || true
-    sleep 1
-    log_msg "${GREEN}[Reflex]${NC} 종료 완료"
-}
-
-reflex_restart() {
-    reflex_stop
-    sleep 2
-    reflex_start
-}
-
 # --- Spring Boot (jayeondeule_web) ---
 springboot_start() {
     log_msg "${BLUE}[Spring Boot]${NC} 시작 중 (port 9090)..."
@@ -427,7 +376,6 @@ all_start() {
     chromadb_start
     scheduler_start
     fastapi_start
-    reflex_start
     springboot_start
     nginx_start
     log_msg "${BOLD}========== 전체 서비스 시작 완료 ==========${NC}"
@@ -438,7 +386,6 @@ all_stop() {
     log_msg "${BOLD}========== 전체 서비스 종료 ==========${NC}"
     nginx_stop
     springboot_stop
-    reflex_stop
     fastapi_stop
     scheduler_stop
     chromadb_stop
@@ -471,13 +418,11 @@ show_status() {
     check_status "Scheduler" pid_file "$SCHEDULER_PID"
     printf "  %-4s %-16s %-8s " "5" "FastAPI" "${API_PORT:-8002}"
     check_status "FastAPI" port "${API_PORT:-8002}"
-    printf "  %-4s %-16s %-8s " "6" "Reflex" "3000"
-    check_status "Reflex" port 3000
-    printf "  %-4s %-16s %-8s " "7" "Spring Boot" "9090"
+    printf "  %-4s %-16s %-8s " "6" "Spring Boot" "9090"
     check_status "Spring Boot" port 9090
-    printf "  %-4s %-16s %-8s " "8" "Nginx" "80"
+    printf "  %-4s %-16s %-8s " "7" "Nginx" "80"
     check_status "Nginx" port 80
-    printf "  %-4s %-16s %-8s " "9" "React" "(빌드)"
+    printf "  %-4s %-16s %-8s " "8" "React" "(빌드)"
     echo -e "${YELLOW}● 빌드 전용${NC}"
     echo -e "  ─────────────────────────────────────────────"
     echo ""
@@ -493,10 +438,9 @@ show_menu() {
     echo -e "   ${CYAN}3${NC}. ChromaDB         (벡터 DB,        port 8000)"
     echo -e "   ${CYAN}4${NC}. Scheduler        (스케줄/환경제어)"
     echo -e "   ${CYAN}5${NC}. FastAPI          (REST API,      port ${API_PORT:-8002})"
-    echo -e "   ${CYAN}6${NC}. Reflex           (Reflex UI,     port 3000)"
-    echo -e "   ${CYAN}7${NC}. Spring Boot      (웹 백엔드,      port 9090)"
-    echo -e "   ${CYAN}8${NC}. Nginx            (웹서버,         port 80)"
-    echo -e "   ${CYAN}9${NC}. React Build      (프론트엔드 빌드)"
+    echo -e "   ${CYAN}6${NC}. Spring Boot      (웹 백엔드,      port 9090)"
+    echo -e "   ${CYAN}7${NC}. Nginx            (웹서버,         port 80)"
+    echo -e "   ${CYAN}8${NC}. React Build      (프론트엔드 빌드)"
     echo ""
     echo -n -e "  번호 입력 (q=종료): "
 }
@@ -554,15 +498,7 @@ execute_service() {
                 status)  printf "  FastAPI: "; check_status "FastAPI" port "${API_PORT:-8002}" ;;
             esac
             ;;
-        6) # Reflex
-            case "$action" in
-                start)   reflex_start ;;
-                stop)    reflex_stop ;;
-                restart) reflex_restart ;;
-                status)  printf "  Reflex: "; check_status "Reflex" port 3000 ;;
-            esac
-            ;;
-        7) # Spring Boot
+        6) # Spring Boot
             case "$action" in
                 start)   springboot_start ;;
                 stop)    springboot_stop ;;
@@ -570,7 +506,7 @@ execute_service() {
                 status)  printf "  Spring Boot: "; check_status "Spring Boot" port 9090 ;;
             esac
             ;;
-        8) # Nginx
+        7) # Nginx
             case "$action" in
                 start)   nginx_start ;;
                 stop)    nginx_stop ;;
@@ -578,7 +514,7 @@ execute_service() {
                 status)  printf "  Nginx: "; check_status "Nginx" port 80 ;;
             esac
             ;;
-        9) # React Build
+        8) # React Build
             case "$action" in
                 start|restart) react_build ;;
                 stop) log_msg "${YELLOW}[React]${NC} 빌드 전용 서비스입니다 (stop 불필요)" ;;
@@ -660,7 +596,7 @@ if [ "$choice" = "q" ] || [ "$choice" = "Q" ]; then
 fi
 
 # 숫자 유효성 검사
-if ! [[ "$choice" =~ ^[0-9]$ ]]; then
+if ! [[ "$choice" =~ ^[0-8]$ ]]; then
     echo -e "  ${RED}잘못된 입력입니다.${NC}"
     exit 1
 fi
