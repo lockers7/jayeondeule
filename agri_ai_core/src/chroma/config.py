@@ -15,17 +15,15 @@ CHROMA_API_BASE = f"http://{CHROMA_HOST}:{CHROMA_PORT}/api/v2/tenants/{TENANT}/d
 
 # 컬렉션 ID 캐시 (성능 최적화)
 _COLLECTION_ID_MAP = {
-    "farm_collection": "farm_collection",
-    "source_collection": "source_collection",
-    "stats_collection": "stats_collection",
-    "optimal_collection": "optimal_collection",
-    "learned_collection": "learned_collection",
-    "setting_collection": "setting_collection",
+    "farm_knowledge": "farm_knowledge",
     "document_collection": "document_collection",
-    "last_learned_date": "last_learned_date",
-    "self_learned_collection": "self_learned_collection",
-    "learning_pattern_collection": "learning_pattern_collection",
+    "conversation_collection": "conversation_collection",
+    "web_knowledge": "web_knowledge",
 }
+
+# 컬렉션 ID 캐시 타임스탬프 (TTL 지원)
+_COLLECTION_ID_TIMESTAMPS = {}
+_COLLECTION_CACHE_TTL = 300  # 초 (5분)
 
 __all__ = [
     "CHROMA_HOST",
@@ -34,4 +32,6 @@ __all__ = [
     "DATABASE",
     "CHROMA_API_BASE",
     "_COLLECTION_ID_MAP",
+    "_COLLECTION_ID_TIMESTAMPS",
+    "_COLLECTION_CACHE_TTL",
 ]

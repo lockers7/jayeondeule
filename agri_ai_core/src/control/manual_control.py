@@ -14,7 +14,8 @@ from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.postgresql.connection import db_session
 from agri_ai_core.src.postgresql import queries as dbQry
 from agri_ai_core.src.postgresql.reader import read_current_sensor_info, read_latest_relay_info, read_current_growth_stage
-from agri_ai_core.src.control.relay_manager import set_relay_value
+from agri_ai_core.src.control.relay_manager import set_relay_value, RELAY_COUNT
+from agri_ai_core.src.utils.sorting import sort_houses as _sort_houses
 
 logger = setup_logger(__name__)
 
@@ -24,30 +25,6 @@ def _house_prefix(order_label="", farm_id=None, house_id=None):
     if farm_id is None or house_id is None:
         return prefix.strip()
     return f"{prefix}농장 {farm_id}, 재배사 {house_id}"
-
-
-def _to_sortable_int(value):
-    try:
-        return int(value)
-    except Exception:
-        digits = "".join(ch for ch in str(value or "") if ch.isdigit())
-        if digits:
-            try:
-                return int(digits)
-            except Exception:
-                pass
-    return 10**9
-
-
-def _sort_houses(houses):
-    return sorted(
-        houses or [],
-        key=lambda house: (
-            _to_sortable_int(house.get("farm_id")),
-            _to_sortable_int(house.get("hous_id")),
-            str(house.get("hous_id") or ""),
-        ),
-    )
 
 
 # ============================================================
@@ -190,6 +167,58 @@ def _get_pin_map(house_id):
     if int(house_id) == 2:
         return _RELAY_PIN_MAP_E
     return _RELAY_PIN_MAP_STANDARD
+
+
+_SEMANTIC_LABELS = {
+    'water_heater_flag': '물가열기',
+    'fog_occurs_flag': '분사펌프',
+    'drainage_motor_flag': '배수밸브',
+    'intake_fan_flag': '흡기팬',
+    'exhaust_fan_flag': '배기팬',
+    'lighting_flag': '조명',
+    'irrigation_flag': '관수',
+    'indoor_heater_flag': '열풍기',
+    'indoor_heater2_flag': '열풍댐퍼',
+    'air_circulation_valve_flag': '순환댐퍼',
+    'air_intake_valve_flag': '흡기댐퍼',
+    'air_exhaust_valve_flag': '배기댐퍼',
+    'radiator_flag': '라디에이터',
+}
+
+
+def _log_house_status(farm_id, house_id, order_label=""):
+    """센서 현황(INFO) + 릴레이 상세(DEBUG) 로그"""
+    scope = _house_prefix(order_label, farm_id, house_id)
+
+    # INFO: 주요 센서값
+    sensor = read_current_sensor_info(farm_id, house_id)
+    if sensor:
+        parts = []
+        for key, label, unit in [
+            ('indoor_temperature', '온도', '℃'),
+            ('indoor_humidity', '습도', '%'),
+            ('co2', 'CO2', 'ppm'),
+            ('water_temperature', '수온', '℃'),
+        ]:
+            v = sensor.get(key)
+            parts.append(f"{label} {v}{unit}" if v is not None else f"{label} -")
+        logger.info(f"{scope}: 센서 현황 - {', '.join(parts)}")
+    else:
+        logger.info(f"{scope}: 센서 데이터 없음")
+
+    # DEBUG: 릴레이 상세
+    relay = read_latest_relay_info(farm_id, house_id)
+    if relay:
+        pin_map = _get_pin_map(house_id)
+        reverse = {v: k for k, v in pin_map.items()}
+        on_names = []
+        for i in range(1, RELAY_COUNT + 1):
+            pin = f"relay_{i}st_flag"
+            if relay.get(pin):
+                semantic = reverse.get(pin)
+                on_names.append(_SEMANTIC_LABELS.get(semantic, pin))
+        relay_str = ", ".join(on_names) if on_names else "전체 OFF"
+        logger.debug(f"{scope}: 릴레이 ON → [{relay_str}]")
 
 
 def _classify(value, low, high):
@@ -431,7 +460,7 @@ def _check_emergency(sensor_data):
 def _build_relay_values(house_id, semantic_settings, current_relay, harvest_mode):
     pin_map = _get_pin_map(house_id)
 
-    relay_values = {f"relay_{i}st_flag": False for i in range(1, 17)}
+    relay_values = {f"relay_{i}st_flag": False for i in range(1, RELAY_COUNT + 1)}
 
     # 배수밸브 상시 ON
     drainage_pin = pin_map.get('drainage_motor_flag')
@@ -583,7 +612,7 @@ def _execute_water_temp_emergency(
 ):
     pin_map = _get_pin_map(house_id)
 
-    relay_values = {f"relay_{i}st_flag": False for i in range(1, 17)}
+    relay_values = {f"relay_{i}st_flag": False for i in range(1, RELAY_COUNT + 1)}
 
     # 현재 상태 전체 복사
     if current_relay:
@@ -837,36 +866,36 @@ def control_all_manual():
                 if farm_id is None or house_id is None:
                     continue
 
+                order_label = f"[{index}/{len(ordered_houses)}]"
+
+                # 생육단계 조회 (모든 재배사 공통)
+                growth_stage = read_current_growth_stage(farm_id, house_id)
+                if not growth_stage:
+                    growth_stage = '생육기'
+
                 # 제어 모드 확인
                 mnul_ctrl_flag = house.get("mnul_ctrl_flag")
                 ctrl_type = house.get("ctrl_type", "algorithm")
 
+                # 운용 모드 라벨 결정
                 if not mnul_ctrl_flag:
-                    # 사용자 직접 입력 모드 → 환경제어 스킵
-                    logger.debug(f"농장 {farm_id}, 재배사 {house_id}: 사용자 입력 모드 (mnul_ctrl_flag=false) → 환경제어 스킵")
-                    continue
+                    mode_label = "사용자 직접입력 모드"
+                elif ctrl_type == 'ai':
+                    mode_label = "AI 제어 모드"
+                elif growth_stage == '휴지기':
+                    mode_label = "휴지기"
+                else:
+                    mode_label = "알고리즘 수동제어"
 
-                if ctrl_type == 'ai':
-                    # AI 제어 모드 → AI가 별도로 제어 (여기서는 스킵)
-                    logger.debug(f"농장 {farm_id}, 재배사 {house_id}: AI 제어 모드 → 알고리즘 환경제어 스킵")
-                    continue
-
-                # 알고리즘 수동제어 모드 (ctrl_type == 'algorithm')
-                # crop_lvel 조회하여 생육단계 결정
-                growth_stage = read_current_growth_stage(farm_id, house_id)
-                if not growth_stage:
-                    logger.warning(f"농장 {farm_id}, 재배사 {house_id}: 생육단계 조회 실패, 기본값 '생육기' 적용")
-                    growth_stage = '생육기'
-
-                if growth_stage == '휴지기':
-                    logger.debug(f"농장 {farm_id}, 재배사 {house_id}: 휴지기 → 환경제어 스킵")
-                    continue
-
-                order_label = f"[{index}/{len(ordered_houses)}]"
                 logger.info(
                     f"{order_label} ──── 농장 {farm_id}, 재배사 {house_id} "
-                    f"──── 알고리즘 수동제어 (생육단계: {growth_stage})"
+                    f"──── {mode_label} (생육단계: {growth_stage})"
                 )
+
+                # 알고리즘 수동제어 이외 모드 → 센서/릴레이 현황만 로깅 후 스킵
+                if mode_label != "알고리즘 수동제어":
+                    _log_house_status(farm_id, house_id, order_label)
+                    continue
                 result = control_manual_environment(
                     farm_id,
                     house_id,

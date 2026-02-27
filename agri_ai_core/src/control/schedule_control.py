@@ -18,32 +18,11 @@ from agri_ai_core.src.postgresql.connection import db_session
 from agri_ai_core.src.postgresql import queries as dbQry
 from agri_ai_core.src.postgresql.reader import read_light_irrigation_settings, read_current_sensor_info
 from agri_ai_core.src.control.relay_manager import set_relay_value, log_relay_detail
+from agri_ai_core.src.utils.sorting import sort_houses as _sort_houses
 
 logger = setup_logger(__name__)
 
-
-def _to_sortable_int(value):
-    try:
-        return int(value)
-    except Exception:
-        digits = "".join(ch for ch in str(value or "") if ch.isdigit())
-        if digits:
-            try:
-                return int(digits)
-            except Exception:
-                pass
-    return 10**9
-
-
-def _sort_houses(houses):
-    return sorted(
-        houses or [],
-        key=lambda house: (
-            _to_sortable_int(house.get("farm_id")),
-            _to_sortable_int(house.get("hous_id")),
-            str(house.get("hous_id") or ""),
-        ),
-    )
+_WEEKDAY_NAMES = {1: '월', 2: '화', 3: '수', 4: '목', 5: '금', 6: '토', 7: '일'}
 
 
 # 센서 상태 포맷 (임계값 비교 포함)
@@ -154,227 +133,77 @@ def is_time_in_range(current_time, start_time, finish_time):
 # Returns:
 #     dict: 제어 결과
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def _handle_schedule_control(farm_id, house_id, setting_type, relay_flag_key, label, action_name):
+    """조명/관수 공통 스케줄 제어 로직."""
+    try:
+        settings = read_light_irrigation_settings(farm_id, house_id, setting_type)
+
+        if not settings:
+            logger.debug(f"농장 {farm_id}, 재배사 {house_id}: {label} 스케줄 없음")
+            return {"success": True, "action": "none", "message": f"{label} 스케줄이 설정되지 않음"}
+
+        now = datetime.now()
+        current_time = now.time()
+        current_date = now.date()
+
+        should_turn_on = False
+        active_schedules = []
+
+        for setting in settings:
+            start_time = setting.get('strt_time')
+            finish_time = setting.get('fnsh_time')
+            excs_type = setting.get('excs_type', 'daily')
+            excs_itvl = setting.get('excs_itvl')
+            excs_strt_date = setting.get('excs_strt_date')
+            excs_wkdy = setting.get('excs_wkdy')
+
+            if not (start_time and finish_time):
+                continue
+            if not is_time_in_range(current_time, start_time, finish_time):
+                continue
+
+            should_execute = False
+            if excs_type == 'daily':
+                should_execute = True
+            elif excs_type == 'interval':
+                should_execute = should_execute_interval(excs_strt_date, excs_itvl, current_date)
+            elif excs_type == 'weekdays':
+                should_execute = should_execute_weekdays(excs_wkdy, current_date)
+
+            if should_execute:
+                should_turn_on = True
+                schedule_info = f"{start_time.strftime('%H:%M')}-{finish_time.strftime('%H:%M')}"
+                if excs_type == 'interval' and excs_itvl:
+                    schedule_info += f"({excs_itvl}일마다)"
+                elif excs_type == 'weekdays' and excs_wkdy:
+                    days = [_WEEKDAY_NAMES.get(int(d.strip()), d) for d in excs_wkdy.split(',') if d.strip()]
+                    schedule_info += f"({'/'.join(days)})"
+                active_schedules.append(schedule_info)
+
+        result = set_relay_value(farm_id, house_id, {relay_flag_key: should_turn_on})
+
+        if result.get("success"):
+            status = "ON" if should_turn_on else "OFF"
+            sched_str = f" (스케줄: {', '.join(active_schedules)})" if active_schedules else ""
+            logger.debug(f"농장 {farm_id}, 재배사 {house_id}: {label} {status}{sched_str}")
+            return {"success": True, "action": action_name, "status": status,
+                    "schedules": active_schedules, "message": f"{label} {status}"}
+        else:
+            logger.error(f"농장 {farm_id}, 재배사 {house_id}: {label} 제어 실패 - {result.get('message')}")
+            return {"success": False, "message": f"{label} 제어 실패: {result.get('message')}"}
+
+    except Exception as e:
+        logger.error(f"{label} 스케줄 제어 중 오류: {e}")
+        logger.error(traceback.format_exc())
+        return {"success": False, "message": f"오류 발생: {str(e)}"}
+
+
 def control_lighting_schedule(farm_id, house_id):
-    try:
-        # 조명 설정 조회 (dlte_yn = False만)
-        light_settings = read_light_irrigation_settings(farm_id, house_id, 'light')
-
-        if not light_settings:
-            logger.debug(f"농장 {farm_id}, 재배사 {house_id}: 조명 스케줄 없음")
-            return {
-                "success": True,
-                "action": "none",
-                "message": "조명 스케줄이 설정되지 않음"
-            }
-
-        # 현재 시간
-        now = datetime.now()
-        current_time = now.time()
-        current_date = now.date()
-
-        # 조명을 켜야 하는 시간대인지 확인
-        should_turn_on = False
-        active_schedules = []
-
-        for setting in light_settings:
-            start_time = setting.get('strt_time')
-            finish_time = setting.get('fnsh_time')
-            excs_type = setting.get('excs_type', 'daily')
-            excs_itvl = setting.get('excs_itvl')
-            excs_strt_date = setting.get('excs_strt_date')
-            excs_wkdy = setting.get('excs_wkdy')
-
-            # 시간대 확인
-            if not (start_time and finish_time):
-                continue
-
-            if not is_time_in_range(current_time, start_time, finish_time):
-                continue
-
-            # 실행 유형에 따른 추가 확인
-            should_execute = False
-
-            if excs_type == 'daily':
-                # 매일 실행
-                should_execute = True
-
-            elif excs_type == 'interval':
-                # N일마다 실행
-                should_execute = should_execute_interval(
-                    excs_strt_date, excs_itvl, current_date
-                )
-
-            elif excs_type == 'weekdays':
-                # 특정 요일만 실행
-                should_execute = should_execute_weekdays(
-                    excs_wkdy, current_date
-                )
-
-            if should_execute:
-                should_turn_on = True
-                schedule_info = f"{start_time.strftime('%H:%M')}-{finish_time.strftime('%H:%M')}"
-
-                # 주기 정보 추가
-                if excs_type == 'interval' and excs_itvl:
-                    schedule_info += f"({excs_itvl}일마다)"
-                elif excs_type == 'weekdays' and excs_wkdy:
-                    weekday_names = {1: '월', 2: '화', 3: '수', 4: '목', 5: '금', 6: '토', 7: '일'}
-                    days = [weekday_names.get(int(d.strip()), d) for d in excs_wkdy.split(',') if d.strip()]
-                    schedule_info += f"({'/'.join(days)})"
-
-                active_schedules.append(schedule_info)
-
-        # 릴레이 설정
-        relay_settings = {
-            "lighting_flag": should_turn_on
-        }
-
-        # 릴레이 값 설정
-        result = set_relay_value(farm_id, house_id, relay_settings)
-
-        if result.get("success"):
-            status = "ON" if should_turn_on else "OFF"
-            schedule_info = f" (스케줄: {', '.join(active_schedules)})" if active_schedules else ""
-            logger.debug(f"농장 {farm_id}, 재배사 {house_id}: 조명 {status}{schedule_info}")
-
-            return {
-                "success": True,
-                "action": "lighting_controlled",
-                "status": status,
-                "schedules": active_schedules,
-                "message": f"조명 {status}"
-            }
-        else:
-            logger.error(f"농장 {farm_id}, 재배사 {house_id}: 조명 제어 실패 - {result.get('message')}")
-            return {
-                "success": False,
-                "message": f"조명 제어 실패: {result.get('message')}"
-            }
-
-    except Exception as e:
-        logger.error(f"조명 스케줄 제어 중 오류: {e}")
-        logger.error(traceback.format_exc())
-        return {
-            "success": False,
-            "message": f"오류 발생: {str(e)}"
-        }
+    return _handle_schedule_control(farm_id, house_id, 'light', 'lighting_flag', '조명', 'lighting_controlled')
 
 
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 관수밸브 스케줄 제어
-# 관수밸브 스케줄에 따라 관수밸브 제어
-#
-# Args:
-#     farm_id: 농장 ID
-#     house_id: 재배사 ID
-#
-# Returns:
-#     dict: 제어 결과
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def control_irrigation_schedule(farm_id, house_id):
-    try:
-        # 관수밸브 설정 조회 (dlte_yn = False만)
-        irrigation_settings = read_light_irrigation_settings(farm_id, house_id, 'water')
-
-        if not irrigation_settings:
-            logger.debug(f"농장 {farm_id}, 재배사 {house_id}: 관수밸브 스케줄 없음")
-            return {
-                "success": True,
-                "action": "none",
-                "message": "관수밸브 스케줄이 설정되지 않음"
-            }
-
-        # 현재 시간
-        now = datetime.now()
-        current_time = now.time()
-        current_date = now.date()
-
-        # 관수밸브를 켜야 하는 시간대인지 확인
-        should_turn_on = False
-        active_schedules = []
-
-        for setting in irrigation_settings:
-            start_time = setting.get('strt_time')
-            finish_time = setting.get('fnsh_time')
-            excs_type = setting.get('excs_type', 'daily')
-            excs_itvl = setting.get('excs_itvl')
-            excs_strt_date = setting.get('excs_strt_date')
-            excs_wkdy = setting.get('excs_wkdy')
-
-            # 시간대 확인
-            if not (start_time and finish_time):
-                continue
-
-            if not is_time_in_range(current_time, start_time, finish_time):
-                continue
-
-            # 실행 유형에 따른 추가 확인
-            should_execute = False
-
-            if excs_type == 'daily':
-                # 매일 실행
-                should_execute = True
-
-            elif excs_type == 'interval':
-                # N일마다 실행
-                should_execute = should_execute_interval(
-                    excs_strt_date, excs_itvl, current_date
-                )
-
-            elif excs_type == 'weekdays':
-                # 특정 요일만 실행
-                should_execute = should_execute_weekdays(
-                    excs_wkdy, current_date
-                )
-
-            if should_execute:
-                should_turn_on = True
-                schedule_info = f"{start_time.strftime('%H:%M')}-{finish_time.strftime('%H:%M')}"
-
-                # 주기 정보 추가
-                if excs_type == 'interval' and excs_itvl:
-                    schedule_info += f"({excs_itvl}일마다)"
-                elif excs_type == 'weekdays' and excs_wkdy:
-                    weekday_names = {1: '월', 2: '화', 3: '수', 4: '목', 5: '금', 6: '토', 7: '일'}
-                    days = [weekday_names.get(int(d.strip()), d) for d in excs_wkdy.split(',') if d.strip()]
-                    schedule_info += f"({'/'.join(days)})"
-
-                active_schedules.append(schedule_info)
-
-        # 릴레이 설정
-        relay_settings = {
-            "irrigation_flag": should_turn_on
-        }
-
-        # 릴레이 값 설정
-        result = set_relay_value(farm_id, house_id, relay_settings)
-
-        if result.get("success"):
-            status = "ON" if should_turn_on else "OFF"
-            schedule_info = f" (스케줄: {', '.join(active_schedules)})" if active_schedules else ""
-            logger.debug(f"농장 {farm_id}, 재배사 {house_id}: 관수밸브 {status}{schedule_info}")
-
-            return {
-                "success": True,
-                "action": "irrigation_controlled",
-                "status": status,
-                "schedules": active_schedules,
-                "message": f"관수밸브 {status}"
-            }
-        else:
-            logger.error(f"농장 {farm_id}, 재배사 {house_id}: 관수밸브 제어 실패 - {result.get('message')}")
-            return {
-                "success": False,
-                "message": f"관수밸브 제어 실패: {result.get('message')}"
-            }
-
-    except Exception as e:
-        logger.error(f"관수밸브 스케줄 제어 중 오류: {e}")
-        logger.error(traceback.format_exc())
-        return {
-            "success": False,
-            "message": f"오류 발생: {str(e)}"
-        }
+    return _handle_schedule_control(farm_id, house_id, 'water', 'irrigation_flag', '관수밸브', 'irrigation_controlled')
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

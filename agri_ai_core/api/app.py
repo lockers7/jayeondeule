@@ -4,16 +4,20 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+import uuid
+
 from fastapi import FastAPI, Depends, HTTPException, Security, UploadFile, File, Form, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+from starlette.responses import Response, StreamingResponse
 
 from agri_ai_core.logs import setup_logger, setup_web_logger
 from agri_ai_core.api.models import (
     QueryRequest, QueryResponse,
     RagSaveRequest, RagResponse,
 )
+from agri_ai_core.api.voice_router import voice_router
 
 logger = setup_logger(__name__)
 
@@ -24,10 +28,13 @@ api_json_logger = setup_web_logger("api_json")
 API_KEY = os.getenv("AGRI_API_KEY", "")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-# 업로드 디렉토리
+# 업로드 디렉토리 및 보안 설정
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 UPLOAD_DIR = os.getenv("UPLOAD_PATH", os.path.join(PROJECT_ROOT, "upload"))
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE_MB", "100")) * 1024 * 1024  # 기본 100MB
+ALLOWED_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".pdf", ".xlsx"}
 
 
 async def verify_api_key(api_key: str = Security(api_key_header)):
@@ -37,23 +44,29 @@ async def verify_api_key(api_key: str = Security(api_key_header)):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
+def _try_parse_json(data, fallback="(non-JSON)"):
+    """바이트/문자열을 JSON 파싱, 실패 시 fallback 반환"""
+    if not data:
+        return None
+    try:
+        return json.loads(data)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return fallback
+
+
 class JsonLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if not request.url.path.startswith("/api/"):
             return await call_next(request)
 
         # /api/v1/query는 query_handler_simple.py에서 web 로그 기록 (중복 방지)
-        if request.url.path == "/api/v1/query":
+        # /api/v1/voice/는 바이너리(음성) 데이터이므로 JSON 로깅 바이패스
+        if request.url.path in ("/api/v1/query", "/api/v1/query/stream") or \
+           request.url.path.startswith("/api/v1/voice/"):
             return await call_next(request)
 
         # 요청 body 읽기
-        body_bytes = await request.body()
-        request_body = None
-        if body_bytes:
-            try:
-                request_body = json.loads(body_bytes)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                request_body = "(binary or non-JSON body)"
+        request_body = _try_parse_json(await request.body(), "(binary or non-JSON body)")
 
         api_json_logger.info(
             "[REST API 요청] %s %s\n%s",
@@ -73,11 +86,7 @@ class JsonLoggingMiddleware(BaseHTTPMiddleware):
             else:
                 response_body_bytes += chunk
 
-        response_body = None
-        try:
-            response_body = json.loads(response_body_bytes)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            response_body = "(non-JSON response)"
+        response_body = _try_parse_json(response_body_bytes, "(non-JSON response)")
 
         api_json_logger.info(
             "[REST API 응답] %s %s (status=%d)\n%s",
@@ -112,7 +121,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.include_router(voice_router)
 app.add_middleware(JsonLoggingMiddleware)
+
+# CORS 미들웨어
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost").split(","),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/health")
@@ -136,7 +154,6 @@ async def query_llm(request: QueryRequest, _=Depends(verify_api_key)):
         # session_id가 없으면 자동 생성
         session_id = request.session_id
         if not session_id:
-            import uuid
             session_id = str(uuid.uuid4())
 
         result_data = None
@@ -198,6 +215,38 @@ async def query_llm(request: QueryRequest, _=Depends(verify_api_key)):
         )
 
 
+@app.post("/api/v1/query/stream")
+async def query_llm_stream(request: QueryRequest, _=Depends(verify_api_key)):
+    """SSE 스트리밍 질의 엔드포인트 — 실시간 status/token/done 이벤트 전송"""
+    from agri_ai_core.src.ai.query_handler_simple import query_llm_simple_stream
+
+    session_id = request.session_id
+    if not session_id:
+        session_id = str(uuid.uuid4())
+
+    async def event_generator():
+        async for chunk in query_llm_simple_stream(
+            user_query=request.query,
+            farm_id=request.farm_id,
+            house_id=request.house_id,
+            farm_name=request.farm_name,
+            house_name=request.house_name,
+            session_id=session_id,
+        ):
+            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # nginx 버퍼링 비활성화
+        },
+    )
+
+
 @app.post("/api/v1/rag/perform", response_model=RagResponse)
 async def rag_perform(
     files: list[UploadFile] = File(...),
@@ -210,11 +259,21 @@ async def rag_perform(
     try:
         file_paths = []
         for upload_file in files:
-            safe_name = os.path.basename(upload_file.filename or "upload")
-            if not safe_name:
-                safe_name = "upload"
-            file_path = os.path.join(UPLOAD_DIR, safe_name)
+            # 확장자 검증
+            ext = os.path.splitext(upload_file.filename or "")[1].lower()
+            if ext not in ALLOWED_EXTENSIONS:
+                raise HTTPException(400, f"허용되지 않는 파일 형식: {ext} (허용: {', '.join(ALLOWED_EXTENSIONS)})")
+
             content = await upload_file.read()
+
+            # 파일 크기 검증
+            if len(content) > MAX_UPLOAD_SIZE:
+                raise HTTPException(413, f"파일 크기 초과: {upload_file.filename} ({len(content) // (1024*1024)}MB > {MAX_UPLOAD_SIZE // (1024*1024)}MB)")
+
+            # UUID 접두사로 파일명 충돌 방지
+            base_name = os.path.basename(upload_file.filename or "upload")
+            safe_name = f"{uuid.uuid4().hex[:8]}_{base_name}" if base_name else "upload"
+            file_path = os.path.join(UPLOAD_DIR, safe_name)
             with open(file_path, "wb") as f:
                 f.write(content)
             file_paths.append({"filename": safe_name, "path": file_path})

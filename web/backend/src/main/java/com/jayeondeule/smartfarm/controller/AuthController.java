@@ -22,6 +22,7 @@ public class AuthController {
     private final JwtUtil jwtUtil;
 
     //로그인
+    @SuppressWarnings("unchecked")
     @PostMapping
     public ResponseEntity<Map<String, Object>> login(@RequestBody @Valid LoginDTO loginInfo) {
         try {

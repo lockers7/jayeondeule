@@ -3,7 +3,6 @@ package com.jayeondeule.smartfarm.entity.farm;
 import com.jayeondeule.smartfarm.converter.ProductConverter;
 import com.jayeondeule.smartfarm.enums.farm.Product;
 import jakarta.persistence.*;
-import lombok.Builder;
 import lombok.Getter;
 import lombok.Setter;
 

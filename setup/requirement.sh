@@ -1,16 +1,15 @@
 #!/bin/bash
 # -*- coding: utf-8 -*-
 # =========================================================================
-# agriAiCore 필수 패키지 일괄 설치 스크립트
+# agriAiCore 필수 패키지 관리 스크립트
 # -----------------------------------------
-# 다른 PC에 소스만 복사한 뒤, 이 스크립트 하나로
-# agriAiCore 실행에 필요한 모든 패키지를 설치합니다.
+# requirements.txt 기반으로 전체 설치 또는 일괄 업그레이드를 수행합니다.
 #
 # 사용법:
-#   chmod +x scripts/requirement.sh
-#   ./scripts/requirement.sh
-#
-# 참조: docs/.requirement.md
+#   ./setup/requirement.sh              # 전체 설치 (신규 환경)
+#   ./setup/requirement.sh install      # 전체 설치
+#   ./setup/requirement.sh upgrade      # 설치된 모든 패키지 일괄 업그레이드
+#   ./setup/requirement.sh freeze       # 현재 설치된 패키지로 requirements.txt 갱신
 # =========================================================================
 
 set -e
@@ -28,13 +27,23 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 # 프로젝트 루트 (이 스크립트의 상위 디렉토리)
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VENV_DIR="$PROJECT_DIR/venv"
+REQUIREMENTS_FILE="$PROJECT_DIR/setup/system-configs/data/requirements.txt"
+
+# 실행 모드 (install / upgrade / freeze)
+MODE="${1:-install}"
 
 echo "=========================================="
-echo "  agriAiCore 필수 패키지 설치"
+echo "  agriAiCore 패키지 관리 [$MODE]"
 echo "=========================================="
 echo ""
 log_info "프로젝트 경로: $PROJECT_DIR"
+log_info "requirements: $REQUIREMENTS_FILE"
 echo ""
+
+if [ ! -f "$REQUIREMENTS_FILE" ]; then
+    log_error "requirements.txt를 찾을 수 없습니다: $REQUIREMENTS_FILE"
+    exit 1
+fi
 
 # =================================================================
 # 1단계: Python 버전 확인
@@ -86,9 +95,8 @@ else
 fi
 
 # =================================================================
-# 4단계: [InVenv] Python 패키지 설치
+# 4단계: [InVenv] Python 패키지 관리
 # =================================================================
-log_info "[4/5] Python 패키지 설치 (venv 내부)..."
 
 # venv 활성화
 source "$VENV_DIR/bin/activate"
@@ -96,38 +104,43 @@ source "$VENV_DIR/bin/activate"
 # pip 업그레이드
 pip install --upgrade pip -q
 
-# --- 핵심 프레임워크 ---
-pip install \
-    pydantic \
-    fastapi
+case "$MODE" in
+    install)
+        log_info "[4/5] requirements.txt 기반 전체 설치..."
+        pip install -r "$REQUIREMENTS_FILE"
+        log_info "패키지 설치 완료"
+        ;;
+    upgrade)
+        log_info "[4/5] requirements.txt 기반 일괄 업그레이드..."
+        pip install --upgrade -r "$REQUIREMENTS_FILE"
+        log_info "패키지 업그레이드 완료"
 
-# --- 데이터베이스 / 데이터 ---
-pip install \
-    psycopg2-binary \
-    numpy \
-    pandas
-
-# --- LLM / AI ---
-pip install \
-    ollama \
-    chromadb \
-    'uvicorn[standard]>=0.18.3'
-
-# --- 유틸리티 ---
-pip install \
-    python-dotenv \
-    requests \
-    apscheduler
-
-log_info "Python 패키지 설치 완료"
+        # 업그레이드 후 requirements.txt 자동 갱신
+        log_info "requirements.txt 갱신 중..."
+        pip freeze > "$REQUIREMENTS_FILE"
+        cp "$REQUIREMENTS_FILE" "$PROJECT_DIR/.backup/data/requirements.txt" 2>/dev/null || true
+        log_info "requirements.txt 갱신 완료"
+        ;;
+    freeze)
+        log_info "[4/5] 현재 설치된 패키지로 requirements.txt 갱신..."
+        pip freeze > "$REQUIREMENTS_FILE"
+        cp "$REQUIREMENTS_FILE" "$PROJECT_DIR/.backup/data/requirements.txt" 2>/dev/null || true
+        log_info "requirements.txt 갱신 완료 ($(wc -l < "$REQUIREMENTS_FILE")개 패키지)"
+        ;;
+    *)
+        log_error "알 수 없는 모드: $MODE"
+        log_error "사용법: $0 [install|upgrade|freeze]"
+        exit 1
+        ;;
+esac
 
 # =================================================================
-# 5단계: 설치 검증
+# 5단계: 핵심 패키지 검증
 # =================================================================
-log_info "[5/5] 설치 검증..."
+log_info "[5/5] 핵심 패키지 검증..."
 
 FAILED=0
-for pkg in pydantic fastapi psycopg2 numpy pandas ollama chromadb uvicorn dotenv requests apscheduler; do
+for pkg in pydantic fastapi psycopg2 numpy pandas ollama chromadb uvicorn dotenv requests apscheduler faster_whisper edge_tts av; do
     if python3 -c "import $pkg" 2>/dev/null; then
         echo "  [OK] $pkg"
     else
@@ -139,7 +152,7 @@ done
 if [ $FAILED -eq 1 ]; then
     log_warn "일부 패키지 import 실패. 위 로그를 확인하세요."
 else
-    log_info "모든 패키지 검증 완료"
+    log_info "모든 핵심 패키지 검증 완료"
 fi
 
 # =================================================================
@@ -147,13 +160,11 @@ fi
 # =================================================================
 echo ""
 echo "=========================================="
-log_info "설치 완료!"
+log_info "$MODE 완료! (총 $(pip list --format=columns 2>/dev/null | tail -n +3 | wc -l)개 패키지)"
 echo "=========================================="
 echo ""
-log_info "다음 단계:"
-log_info "  1. .env 파일 확인/편집 (DB 접속 정보 등)"
-log_info "  2. venv 활성화:  source $VENV_DIR/bin/activate"
-log_info "  3. 서비스 실행:  ./run_services.sh"
-echo ""
-log_info "설치된 패키지 확인:  pip list"
+log_info "사용법:"
+log_info "  ./setup/requirement.sh install   — 전체 설치"
+log_info "  ./setup/requirement.sh upgrade   — 일괄 업그레이드"
+log_info "  ./setup/requirement.sh freeze    — requirements.txt 갱신"
 echo ""

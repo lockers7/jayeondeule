@@ -2,18 +2,358 @@
 # LLM 쿼리 핸들러 (Tool Use 방식)
 # LLM이 필요한 도구를 자율적으로 선택하고 실행하여 사용자 질문 처리
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+import hashlib
 import json
 import os
+import re
 import asyncio
+import threading
+import time
 import traceback
 from datetime import datetime
 
 from agri_ai_core.logs import setup_logger, setup_web_logger
-from agri_ai_core.src.ai.llm_client import get_llm_response_with_tools
+from agri_ai_core.src.ai.llm_client import get_llm_response_with_tools, clean_llm_response
 from agri_ai_core.src.ai.file_processor import process_uploaded_files
+from agri_ai_core.src.ai.conversation_store import get_conversation_store
 
 logger = setup_logger(__name__)
 web_logger = setup_web_logger("chat")
+
+_LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT_SECONDS", "600"))
+_STREAM_HEARTBEAT_SECONDS = max(5, int(os.getenv("STREAM_HEARTBEAT_SECONDS", "15")))
+
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 공통 헬퍼 함수
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def _dedupe_list(items, type_check, key_fn, value_fn=None):
+    """공통 중복 제거 헬퍼"""
+    deduped, seen = [], set()
+    for item in items or []:
+        if not isinstance(item, type_check):
+            continue
+        key = key_fn(item)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(value_fn(item) if value_fn else item)
+    return deduped
+
+
+def _dedupe_tools(items):
+    """도구 목록 중복 제거"""
+    return _dedupe_list(items, str, str.strip, str.strip)
+
+
+def _dedupe_sources(items):
+    """출처 목록 중복 제거"""
+    def _key(d):
+        t, u = str(d.get("title", "")).strip(), str(d.get("url", "")).strip()
+        return (t, u) if t and u else None
+    def _val(d):
+        return {"title": str(d.get("title", "")).strip(), "url": str(d.get("url", "")).strip()}
+    return _dedupe_list(items, dict, _key, _val)
+
+
+def _build_default_tool_args(user_query, farm_id, house_id):
+    """도구별 기본 인자 생성"""
+    return {
+        "search_web": {"query": user_query},
+        "search_farm_knowledge": {
+            "query": user_query,
+            "n_results": 5,
+            "farm_id": str(farm_id) if farm_id is not None else None,
+            "house_id": str(house_id) if house_id is not None else None,
+        },
+        "get_farm_realtime_data": {
+            "farm_id": str(farm_id) if farm_id is not None else None,
+            "house_id": str(house_id) if house_id is not None else None,
+            "data_type": "all",
+        },
+    }
+
+
+def _load_conversation_history(session_id, label=""):
+    """대화 히스토리 로드 (멀티턴)"""
+    if not session_id:
+        return None
+    store = get_conversation_store()
+    history = store.get_history(session_id)
+    if history:
+        logger.info(f"[{label}멀티턴] session={session_id[:12]}... 이전 대화 {len(history)}턴 로드")
+    return history
+
+
+def _save_conversation_turn(session_id, user_query, response_text, label=""):
+    """대화 턴 저장 (멀티턴) - 레거시, 폴백용"""
+    if not session_id:
+        return
+    store = get_conversation_store()
+    store.add_turn(session_id, "user", user_query)
+    store.add_turn(session_id, "assistant", response_text)
+    logger.info(f"[{label}멀티턴] session={session_id[:12]}... 턴 저장 완료")
+
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 하이브리드 대화 컨텍스트 (VectorDB + 최근 턴)
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+_HYBRID_RECENT_TURNS = int(os.getenv("HYBRID_RECENT_TURNS", "2"))
+_HYBRID_RELATED_RESULTS = int(os.getenv("HYBRID_RELATED_RESULTS", "5"))
+_HYBRID_MAX_RECORDS_PER_FARM = int(os.getenv("HYBRID_MAX_RECORDS", "30"))
+_CONVERSATION_MAX_DISTANCE = float(os.getenv("CONV_VECTOR_MAX_DISTANCE", "22.0"))
+_GREETING_RE_HYBRID = re.compile(
+    r"^(안녕|반가|잘\s*지내|하이|헬로|좋은\s*(아침|저녁|하루)|수고|얀녕|고마워|감사)"
+)
+
+
+def _load_hybrid_context(session_id, user_query, farm_id, label=""):
+    """하이브리드 대화 컨텍스트: 직전 N턴 + VectorDB 관련 대화 검색"""
+    if not session_id:
+        return None
+
+    store = get_conversation_store()
+
+    # [1] 직전 2턴 (즉시 맥락: "이거", "아까 그거" 참조 보장)
+    recent_turns = store.get_recent_turns(session_id, n_turns=_HYBRID_RECENT_TURNS)
+
+    # [2] VectorDB에서 관련 과거 대화 검색
+    related_context = _search_related_conversations(user_query, farm_id)
+
+    # [3] 하이브리드 컨텍스트 조합
+    history = []
+    if related_context:
+        history.append({
+            "role": "system",
+            "content": f"[관련 과거 대화 참고]\n{related_context}",
+        })
+    if recent_turns:
+        history.extend(recent_turns)
+
+    if history:
+        logger.info(
+            f"[{label}하이브리드] session={session_id[:12]}... "
+            f"최근={len(recent_turns)}턴, 관련대화={'있음' if related_context else '없음'}"
+        )
+    return history if history else None
+
+
+def _search_related_conversations(user_query, farm_id):
+    """VectorDB conversation_collection에서 관련 과거 대화를 검색"""
+    try:
+        from agri_ai_core.src.ai.rag.embedder import embed_text
+        from agri_ai_core.src.chroma.collections import conversation_collection
+        from agri_ai_core.src.chroma.operations import query_documents
+
+        _t0 = time.time()
+        collection_name = conversation_collection()
+        if not collection_name:
+            return None
+
+        _t1 = time.time()
+        query_embedding = embed_text(user_query)
+        _embed_ms = (time.time() - _t1) * 1000
+        logger.debug(f"[PERF:대화] 관련대화-임베딩={_embed_ms:.0f}ms")
+        if not query_embedding:
+            return None
+
+        # farm_id 기반 필터
+        if farm_id:
+            where_filter = {
+                "$and": [
+                    {"farm_id": {"$eq": str(farm_id)}},
+                    {"data_kind": {"$eq": "conversation_turn"}},
+                ]
+            }
+        else:
+            where_filter = {"data_kind": {"$eq": "conversation_turn"}}
+
+        _t2 = time.time()
+        results = query_documents(
+            collection_name=collection_name,
+            query_embeddings=[query_embedding],
+            n_results=_HYBRID_RELATED_RESULTS,
+            where=where_filter,
+            include=["documents", "metadatas", "distances"],
+        )
+        _query_ms = (time.time() - _t2) * 1000
+        _total_ms = (time.time() - _t0) * 1000
+        logger.debug(f"[PERF:대화] 관련대화-VectorDB검색={_query_ms:.0f}ms, 관련대화-전체={_total_ms:.0f}ms")
+
+        if "error" in results:
+            logger.debug(f"[하이브리드] VectorDB 검색 실패: {results['error']}")
+            return None
+
+        documents = results.get("documents", []) or []
+        metadatas = results.get("metadatas", []) or []
+        distances = results.get("distances", []) or []
+
+        # 거리 임계값 필터 + 포맷
+        lines = []
+        for idx, doc in enumerate(documents):
+            dist = distances[idx] if idx < len(distances) else None
+            if dist is not None and dist > _CONVERSATION_MAX_DISTANCE:
+                continue
+            meta = metadatas[idx] if idx < len(metadatas) else {}
+            record_dt = (meta or {}).get("record_datetime", "")[:10]
+            preview = (doc or "")[:300]
+            if preview:
+                lines.append(f"- ({record_dt}) {preview}")
+
+        if not lines:
+            return None
+
+        logger.info(f"[하이브리드] 관련 대화 {len(lines)}건 검색됨 (farm={farm_id})")
+        return "\n".join(lines[:5])
+
+    except Exception as e:
+        logger.debug(f"[하이브리드] 관련 대화 검색 실패: {e}")
+        return None
+
+
+def _save_conversation_turn_hybrid(session_id, user_query, response_text, farm_id=None, label=""):
+    """대화 턴 저장: PostgreSQL(동기) + VectorDB(비동기)"""
+    if not session_id:
+        return
+
+    # [1] PostgreSQL 저장 (기존 동기 방식)
+    store = get_conversation_store()
+    store.add_turn(session_id, "user", user_query, farm_id)
+    store.add_turn(session_id, "assistant", response_text, farm_id)
+    logger.info(f"[{label}하이브리드] session={session_id[:12]}... PostgreSQL 저장 완료")
+
+    # [2] VectorDB 비동기 저장 (응답 지연 방지)
+    threading.Thread(
+        target=_async_vectordb_save,
+        args=(session_id, user_query, response_text, farm_id),
+        daemon=True,
+    ).start()
+
+
+def _async_vectordb_save(session_id, user_query, response_text, farm_id):
+    """백그라운드: Q+A 쌍을 VectorDB에 임베딩 저장 + 수명 관리"""
+    try:
+        from agri_ai_core.src.ai.rag.embedder import embed_text
+        from agri_ai_core.src.chroma.collections import conversation_collection
+        from agri_ai_core.src.chroma.operations import upsert_documents_with_embedding
+
+        collection_name = conversation_collection()
+        if not collection_name:
+            return
+
+        # 인사/잡담은 VectorDB에 저장하지 않음
+        stripped = (user_query or "").strip()
+        if len(stripped) < 10 and _GREETING_RE_HYBRID.search(stripped):
+            return
+
+        # Q+A 결합 문서
+        combined_text = f"질문: {user_query}\n답변: {(response_text or '')[:500]}"
+
+        embedding = embed_text(combined_text)
+        if not embedding:
+            return
+
+        doc_id_hash = hashlib.md5(
+            f"{farm_id}_{session_id}_{time.time()}".encode()
+        ).hexdigest()[:16]
+        doc_id = f"conv_turn_{doc_id_hash}"
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        docs = [{
+            "doc_id": doc_id,
+            "text": combined_text,
+            "metadata": {
+                "farm_id": str(farm_id) if farm_id else "",
+                "session_id": session_id,
+                "data_kind": "conversation_turn",
+                "record_datetime": now_str,
+                "query_preview": user_query[:100],
+            },
+            "embedding": embedding,
+        }]
+
+        result = upsert_documents_with_embedding(collection_name, docs)
+        if result.get("success"):
+            logger.debug(f"[하이브리드] VectorDB 대화 저장 완료: {doc_id}")
+        else:
+            logger.debug(f"[하이브리드] VectorDB 저장 실패: {result.get('error', '')}")
+
+        # 수명 관리: farm_id당 최대 30건
+        _prune_old_conversations(collection_name, farm_id)
+
+    except Exception as e:
+        logger.debug(f"[하이브리드] VectorDB 비동기 저장 실패: {e}")
+
+
+def _prune_old_conversations(collection_name, farm_id):
+    """farm_id별 대화 기록을 최대 N건으로 유지"""
+    try:
+        from agri_ai_core.src.chroma.operations import get_documents, delete_document
+
+        if not farm_id:
+            return
+
+        where_filter = {
+            "$and": [
+                {"farm_id": {"$eq": str(farm_id)}},
+                {"data_kind": {"$eq": "conversation_turn"}},
+            ]
+        }
+
+        result = get_documents(
+            collection_name,
+            where=where_filter,
+            include=["metadatas"],
+            limit=100,
+        )
+
+        if "error" in result:
+            return
+
+        ids = result.get("ids", []) or []
+        metadatas = result.get("metadatas", []) or []
+
+        if len(ids) <= _HYBRID_MAX_RECORDS_PER_FARM:
+            return
+
+        # record_datetime 기준 정렬, 오래된 것부터
+        paired = list(zip(ids, metadatas))
+        paired.sort(key=lambda p: (p[1] or {}).get("record_datetime", ""))
+
+        to_delete = len(paired) - _HYBRID_MAX_RECORDS_PER_FARM
+        if to_delete > 0:
+            delete_ids = [p[0] for p in paired[:to_delete]]
+            delete_document(collection_name, ids=delete_ids)
+            logger.debug(f"[하이브리드] 오래된 대화 {to_delete}건 삭제 (farm={farm_id})")
+
+    except Exception as e:
+        logger.debug(f"[하이브리드] 대화 수명관리 실패: {e}")
+
+
+async def _call_llm_with_timeout(full_query, farm_name, default_tool_args, conversation_history):
+    """LLM 호출 + 타임아웃 처리"""
+    return await asyncio.wait_for(
+        asyncio.to_thread(
+            get_llm_response_with_tools,
+            user_query=full_query,
+            farm_name=farm_name,
+            default_tool_args=default_tool_args,
+            conversation_history=conversation_history,
+        ),
+        timeout=_LLM_TIMEOUT,
+    )
+
+
+def _unpack_llm_result(result):
+    """LLM 결과를 (response_text, sources, tools_used, response_type) 튜플로 언패킹"""
+    if isinstance(result, dict):
+        return (
+            result.get("response", ""),
+            result.get("sources", []),
+            result.get("tools_used", []),
+            result.get("response_type", "general"),
+        )
+    return (str(result), [], [], "general")
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -63,81 +403,44 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
             file_content = process_uploaded_files(file_paths)
             full_query = f"{user_query}\n\n{file_content}"
 
-        default_tool_args = {
-            "search_web": {"query": full_query},
-            "search_farm_knowledge": {"query": full_query, "n_results": 3},
-            "get_farm_realtime_data": {
-                "farm_id": str(farm_id) if farm_id is not None else None,
-                "house_id": str(house_id) if house_id is not None else None,
-                "data_type": "all",
-            },
-        }
+        default_tool_args = _build_default_tool_args(user_query, farm_id, house_id)
 
-        # 대화 히스토리 로드 (멀티턴)
-        conversation_history = None
-        if session_id:
-            from agri_ai_core.src.ai.conversation_store import get_conversation_store
-            store = get_conversation_store()
-            conversation_history = store.get_history(session_id)
-            if conversation_history:
-                logger.info(f"[멀티턴] session={session_id[:12]}... 이전 대화 {len(conversation_history)}턴 로드")
+        # [PERF:대화] 하이브리드 컨텍스트 로드 시간 측정
+        _t_ctx = time.time()
+        conversation_history = _load_hybrid_context(session_id, user_query, farm_id)
+        _ctx_ms = (time.time() - _t_ctx) * 1000
+        logger.debug(f"[PERF:대화] 하이브리드컨텍스트로드={_ctx_ms:.0f}ms (session={session_id[:12] if session_id else '-'})")
 
         # [2/3] LLM 답변 생성 (LLM이 도구 자율 선택)
         llm_start = datetime.now()
         logger.info("[LLM시작] 모드=Tool Use (LLM 자율 도구 선택)")
-        LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT_SECONDS", "180"))
         try:
-            result = await asyncio.wait_for(
-                asyncio.to_thread(
-                    get_llm_response_with_tools,
-                    user_query=full_query,
-                    farm_name=farm_name,
-                    default_tool_args=default_tool_args,
-                    conversation_history=conversation_history,
-                ),
-                timeout=LLM_TIMEOUT,
-            )
+            result = await _call_llm_with_timeout(full_query, farm_name, default_tool_args, conversation_history)
         except asyncio.TimeoutError:
-            logger.error(f"[LLM타임아웃] {LLM_TIMEOUT}초 초과")
+            logger.error(f"[LLM타임아웃] {_LLM_TIMEOUT}초 초과")
             yield {
-                "response": f"죄송합니다. 응답 생성 시간이 초과되었습니다. ({LLM_TIMEOUT}초)",
+                "response": f"죄송합니다. 응답 생성 시간이 초과되었습니다. ({_LLM_TIMEOUT}초)",
                 "sources": [],
                 "tools_used": [],
                 "response_type": "general",
             }
             return
 
-        # 구조화된 응답 처리
-        if isinstance(result, dict):
-            response_text = result.get("response", "")
-            sources = result.get("sources", [])
-            tools_used = result.get("tools_used", [])
-            response_type = result.get("response_type", "general")
-        else:
-            # 하위 호환: str 반환 시
-            response_text = str(result)
-            sources = []
-            tools_used = []
-            response_type = "general"
+        response_text, sources, tools_used, response_type = _unpack_llm_result(result)
 
         llm_elapsed = (datetime.now() - llm_start).total_seconds()
         total_elapsed = (datetime.now() - start_time).total_seconds()
 
         # [3/3] 최종 답변
         logger.info(f"[LLM완료] 답변생성={llm_elapsed:.1f}s type={response_type} tools={tools_used}")
+        logger.debug(f"[PERF:대화] 전체파이프라인={total_elapsed:.1f}s (LLM={llm_elapsed:.1f}s, 전처리={total_elapsed - llm_elapsed:.1f}s)")
         answer_preview = (response_text or "")[:200]
         if len(response_text or "") > 200:
             answer_preview += "..."
         logger.info(f"[최종답변] len={len(response_text or '')} 총소요={total_elapsed:.1f}s")
         logger.info(f"[답변내용] {answer_preview}")
 
-        # 대화 히스토리 저장 (멀티턴)
-        if session_id:
-            from agri_ai_core.src.ai.conversation_store import get_conversation_store
-            store = get_conversation_store()
-            store.add_turn(session_id, "user", user_query)
-            store.add_turn(session_id, "assistant", response_text)
-            logger.info(f"[멀티턴] session={session_id[:12]}... 현재 턴 저장 완료")
+        _save_conversation_turn_hybrid(session_id, user_query, response_text, farm_id)
 
         # 웹 로그: 응답 JSON 기록
         response_json = {
@@ -174,3 +477,150 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
             "tools_used": [],
             "response_type": "general",
         }
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# SSE 스트리밍 질의 처리
+# 도구 실행 중 status 이벤트, 답변 텍스트 token 이벤트, 완료 done 이벤트를 yield
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+def _split_for_streaming(text, target_size=30):
+    """텍스트를 스트리밍 전송에 적합한 작은 청크로 분할"""
+    if not text:
+        return
+    i = 0
+    text_len = len(text)
+    while i < text_len:
+        if i + target_size >= text_len:
+            yield text[i:]
+            break
+        end = i + target_size
+        best = -1
+        for delim in ['\n', '. ', '? ', '! ', ', ', ' ']:
+            pos = text.rfind(delim, i + 5, end + 10)
+            if pos > i:
+                best = pos + len(delim)
+                break
+        if best > i:
+            yield text[i:best]
+            i = best
+        else:
+            yield text[i:end]
+            i = end
+
+
+async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
+                                   farm_name=None, house_name=None, session_id=None):
+    """
+    SSE 스트리밍 질의 처리.
+    yield 이벤트 형식:
+      {"type": "status",  "content": "상태 메시지"}
+      {"type": "token",   "content": "텍스트 청크"}
+      {"type": "done",    "session_id": "...", "sources": [...], "tools_used": [...], "response_type": "..."}
+      {"type": "error",   "content": "에러 메시지"}
+    """
+    start_time = datetime.now()
+
+    try:
+        # [1] 질문 분석
+        yield {"type": "status", "content": "질문을 분석하고 있습니다..."}
+
+        logger.info(f"[스트리밍] \"{(user_query or '')[:120]}\" (farm={farm_name or '-'})")
+        web_logger.info(
+            "[Chat 스트리밍 요청]\n%s",
+            json.dumps({
+                "type": "chat_stream_request",
+                "timestamp": start_time.isoformat(),
+                "query": user_query,
+                "farm_id": farm_id, "house_id": house_id,
+                "farm_name": farm_name, "house_name": house_name,
+            }, ensure_ascii=False, indent=2),
+        )
+
+        full_query = user_query
+        default_tool_args = _build_default_tool_args(user_query, farm_id, house_id)
+
+        # [PERF:대화] 하이브리드 컨텍스트 로드 시간 측정
+        _t_ctx = time.time()
+        conversation_history = _load_hybrid_context(session_id, user_query, farm_id, label="스트리밍][")
+        _ctx_ms = (time.time() - _t_ctx) * 1000
+        logger.debug(f"[PERF:대화] 스트리밍-하이브리드컨텍스트로드={_ctx_ms:.0f}ms")
+
+        # [3] LLM 답변 생성
+        yield {"type": "status", "content": "답변을 생성하고 있습니다..."}
+
+        llm_start = datetime.now()
+        llm_task = asyncio.create_task(
+            _call_llm_with_timeout(full_query, farm_name, default_tool_args, conversation_history)
+        )
+        while True:
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.shield(llm_task),
+                    timeout=_STREAM_HEARTBEAT_SECONDS,
+                )
+                break
+            except asyncio.TimeoutError:
+                # LLM 자체 타임아웃이면 즉시 에러 반환
+                if llm_task.done():
+                    logger.error(f"[스트리밍][LLM타임아웃] {_LLM_TIMEOUT}초 초과")
+                    yield {"type": "error", "content": f"응답 생성 시간이 초과되었습니다. ({_LLM_TIMEOUT}초)"}
+                    return
+
+                elapsed_wait = int((datetime.now() - llm_start).total_seconds())
+                yield {"type": "status", "content": f"답변 생성 중입니다... ({elapsed_wait}초 경과)"}
+
+        response_text, sources, tools_used, response_type = _unpack_llm_result(result)
+
+        llm_elapsed = (datetime.now() - llm_start).total_seconds()
+        total_elapsed = (datetime.now() - start_time).total_seconds()
+        logger.info(f"[스트리밍][LLM완료] 답변생성={llm_elapsed:.1f}s type={response_type} tools={tools_used}")
+        logger.debug(f"[PERF:대화] 스트리밍-전체파이프라인={total_elapsed:.1f}s (LLM={llm_elapsed:.1f}s, 전처리={total_elapsed - llm_elapsed:.1f}s)")
+
+        # [4] 응답 텍스트를 청크 단위로 전송
+        cleaned = clean_llm_response(response_text)
+        for chunk in _split_for_streaming(cleaned):
+            yield {"type": "token", "content": chunk}
+
+        # [5] 완료 이벤트
+        yield {
+            "type": "done",
+            "session_id": session_id,
+            "sources": sources,
+            "tools_used": tools_used,
+            "response_type": response_type,
+            "elapsed_sec": round(total_elapsed, 1),
+        }
+
+        _save_conversation_turn_hybrid(session_id, user_query, response_text, farm_id, label="스트리밍][")
+
+        # 통계 기록
+        from agri_ai_core.src.ai.stats_collector import get_stats_collector
+        get_stats_collector().record_query(
+            success=True,
+            processing_time=round(total_elapsed, 3),
+            tools_used=tools_used,
+            response_type=response_type,
+        )
+
+        # 웹 로그
+        web_logger.info(
+            "[Chat 스트리밍 응답]\n%s",
+            json.dumps({
+                "type": "chat_stream_response",
+                "timestamp": datetime.now().isoformat(),
+                "query": user_query,
+                "response_length": len(response_text or ""),
+                "sources": sources,
+                "tools_used": tools_used,
+                "response_type": response_type,
+                "processing_time": round(total_elapsed, 3),
+                "farm_name": farm_name,
+                "session_id": session_id,
+            }, ensure_ascii=False, indent=2),
+        )
+
+    except Exception as e:
+        logger.error(f"스트리밍 질의 처리 중 오류: {e}")
+        logger.error(traceback.format_exc())
+        yield {"type": "error", "content": f"질의 처리 중 문제가 발생했습니다. ({str(e)})"}

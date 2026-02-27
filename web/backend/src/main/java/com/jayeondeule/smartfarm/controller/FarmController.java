@@ -13,8 +13,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
-
 //농장 등록, 수정, 조회 관련 API
 @RestController
 @RequestMapping("/api/farms")

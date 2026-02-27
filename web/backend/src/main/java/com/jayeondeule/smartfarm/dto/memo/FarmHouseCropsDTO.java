@@ -1,7 +1,5 @@
 package com.jayeondeule.smartfarm.dto.memo;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Id;
 import lombok.Getter;
 import lombok.Setter;
 

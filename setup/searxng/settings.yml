@@ -1,0 +1,67 @@
+# SearXNG 설정 - AgriAI Core 웹 검색용
+# JSON API 활성화, 불필요한 UI 기능 최소화
+
+use_default_settings: true
+
+general:
+  instance_name: "AgriAI Search"
+  enable_metrics: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "ko-KR"
+  formats:
+    - html
+    - json
+
+server:
+  secret_key: "agri-ai-searxng-secret-key-2026"
+  limiter: false
+  image_proxy: false
+  port: 8080
+  bind_address: "0.0.0.0"
+
+ui:
+  static_use_hash: true
+
+outgoing:
+  request_timeout: 10.0
+  max_request_timeout: 15.0
+  useragent_suffix: ""
+
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+
+  - name: naver
+    engine: naver
+    shortcut: nv
+    disabled: false
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+
+  - name: bing
+    engine: bing
+    shortcut: bi
+    disabled: false
+
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    disabled: false
+
+  - name: wikidata
+    engine: wikidata
+    shortcut: wd
+    disabled: true
+
+  - name: google scholar
+    engine: google_scholar
+    shortcut: gs
+    disabled: true

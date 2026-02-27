@@ -34,9 +34,7 @@ def initialize_app():
     total_start = time.time()
 
     try:
-        for n in range(50):
-            logger.info("-")
-
+        logger.info("-" * 50)
         logger.info("=" * 60)
         logger.info("AgriAI Core 시작 초기화")
         logger.info("=" * 60)
@@ -124,6 +122,8 @@ def initialize_app():
         try:
             import psycopg2
             from agri_ai_core.config import settings as _settings
+            from agri_ai_core.src.postgresql import queries as dbQry
+
             conn = psycopg2.connect(
                 host=_settings.database.host,
                 port=_settings.database.port,
@@ -132,12 +132,25 @@ def initialize_app():
                 password=_settings.database.password,
                 connect_timeout=5,
             )
-            cursor = conn.cursor()
-            cursor.execute("SELECT version()")
-            pg_version = cursor.fetchone()[0].split(",")[0]
-            cursor.close()
+            conn.autocommit = True
+
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT version()")
+                pg_version = cursor.fetchone()[0].split(",")[0]
+                logger.info("[3/4] PostgreSQL 연결 성공 (%.1fs): %s", time.time() - t0, pg_version)
+
+                # AI 학습 상태/패턴 테이블 자동 생성
+                try:
+                    cursor.execute(dbQry.CREATE_AI_LEARNING_STATUS_TABLE)
+                    cursor.execute(dbQry.CREATE_AI_LEARNING_PATTERN_TABLE)
+                    cursor.execute(dbQry.CREATE_AI_LEARNING_PATTERN_INDEX)
+                    cursor.execute(dbQry.ALTER_CROPS_ADD_GROWTH_DETAIL_COLUMNS)
+                    logger.info("[3/4] AI 학습 테이블 초기화 + 생육 컬럼 확장 완료")
+                except Exception as e2:
+                    logger.warning("[3/4] AI 학습 테이블 초기화 실패: %s", e2)
+
             conn.close()
-            logger.info("[3/4] PostgreSQL 연결 성공 (%.1fs): %s", time.time() - t0, pg_version)
+
         except Exception as e:
             logger.warning("[3/4] PostgreSQL 연결 실패 (%.1fs): %s", time.time() - t0, e)
 
@@ -147,13 +160,16 @@ def initialize_app():
         logger.info("[4/4] 스케줄러 설정 중...")
         t0 = time.time()
         try:
+            from agri_ai_core.src.ai.learning.growth_rag_processor import run_growth_rag
+
             setup_scheduler()
             setup_default_jobs(
                 schedule_control_func=control_all_schedules,
                 manual_control_func=control_all_manual,
+                growth_rag_func=run_growth_rag,
             )
             start_scheduler()
-            logger.info("[4/4] 스케줄러 시작됨 (%.1fs) - 조명/관수 (1분) + 수동환경제어 (5분)", time.time() - t0)
+            logger.info("[4/4] 스케줄러 시작됨 (%.1fs) - 릴레이제어 (1분) + 생육RAG (12:00/00:00)", time.time() - t0)
         except Exception as e:
             logger.warning("[4/4] 스케줄러 설정 실패 (%.1fs): %s", time.time() - t0, e)
 

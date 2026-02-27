@@ -6,6 +6,7 @@
 # read_csv_file: CSV 파일 읽기
 # read_excel_file: Excel 파일 읽기
 # read_text_file: 텍스트 파일 읽기
+# read_pdf_file: PDF 파일 읽기
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import os
 import pandas as pd
@@ -28,25 +29,21 @@ logger = setup_logger(__name__)
 # Returns:
 #     str: CSV 내용 (텍스트 형식)
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def _format_dataframe(df, max_rows, prefix=""):
+    """DataFrame을 행 제한 + 요약 텍스트로 변환 (CSV/Excel 공용)"""
+    total_rows = len(df)
+    if total_rows > max_rows:
+        df = df.head(max_rows)
+        summary = f"{prefix}총 {total_rows}개 행 중 처음 {max_rows}개 행만 표시합니다.\n"
+    else:
+        summary = f"{prefix}총 {total_rows}개 행입니다.\n"
+    columns_info = f"컬럼: {', '.join(df.columns.tolist())}\n"
+    return f"{summary}{columns_info}\n{df.to_string(index=False)}"
+
+
 def read_csv_file(file_path: str, max_rows: int = 100) -> str:
     try:
-        df = pd.read_csv(file_path)
-
-        total_rows = len(df)
-        if total_rows > max_rows:
-            df = df.head(max_rows)
-            summary = f"총 {total_rows}개 행 중 처음 {max_rows}개 행만 표시합니다.\n\n"
-        else:
-            summary = f"총 {total_rows}개 행입니다.\n\n"
-
-        # 데이터프레임을 문자열로 변환
-        content = df.to_string(index=False)
-
-        # 컬럼 정보 추가
-        columns_info = f"컬럼: {', '.join(df.columns.tolist())}\n"
-
-        return f"{summary}{columns_info}\n{content}"
-
+        return _format_dataframe(pd.read_csv(file_path), max_rows, prefix="\n")
     except Exception as e:
         logger.error(f"CSV 파일 읽기 오류 ({file_path}): {e}")
         return f"CSV 파일을 읽을 수 없습니다: {str(e)}"
@@ -66,31 +63,16 @@ def read_csv_file(file_path: str, max_rows: int = 100) -> str:
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def read_excel_file(file_path: str, max_rows: int = 100) -> str:
     try:
-        # 모든 시트 읽기
         excel_file = pd.ExcelFile(file_path)
-        sheet_names = excel_file.sheet_names
-
-        result = []
-        for sheet_name in sheet_names:
-            df = pd.read_excel(file_path, sheet_name=sheet_name)
-
-            total_rows = len(df)
-            if total_rows > max_rows:
-                df = df.head(max_rows)
-                summary = f"[시트: {sheet_name}] 총 {total_rows}개 행 중 처음 {max_rows}개 행만 표시합니다.\n"
-            else:
-                summary = f"[시트: {sheet_name}] 총 {total_rows}개 행입니다.\n"
-
-            # 컬럼 정보
-            columns_info = f"컬럼: {', '.join(df.columns.tolist())}\n"
-
-            # 데이터
-            content = df.to_string(index=False)
-
-            result.append(f"{summary}{columns_info}\n{content}")
-
+        result = [
+            _format_dataframe(
+                pd.read_excel(file_path, sheet_name=name),
+                max_rows,
+                prefix=f"[시트: {name}] ",
+            )
+            for name in excel_file.sheet_names
+        ]
         return "\n\n".join(result)
-
     except Exception as e:
         logger.error(f"Excel 파일 읽기 오류 ({file_path}): {e}")
         return f"Excel 파일을 읽을 수 없습니다: {str(e)}"
@@ -135,6 +117,45 @@ def read_text_file(file_path: str, max_chars: int = 10000) -> str:
     except Exception as e:
         logger.error(f"텍스트 파일 읽기 오류 ({file_path}): {e}")
         return f"텍스트 파일을 읽을 수 없습니다: {str(e)}"
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# PDF 파일 읽기
+# --->
+# PDF 파일의 텍스트를 추출하여 문자열로 반환
+#
+# Args:
+#     file_path: 파일 경로
+# Returns:
+#     str: PDF 텍스트 내용
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def read_pdf_file(file_path: str) -> str:
+    try:
+        from PyPDF2 import PdfReader
+
+        reader = PdfReader(file_path)
+        total_pages = len(reader.pages)
+
+        extracted = []
+
+        for i, page in enumerate(reader.pages):
+            text = page.extract_text()
+            if not text:
+                continue
+            text = text.strip()
+            if not text:
+                continue
+            extracted.append(f"[페이지 {i+1}]\n{text}")
+
+        if not extracted:
+            return "PDF 파일에서 텍스트를 추출할 수 없습니다. (이미지 PDF일 수 있습니다)"
+
+        header = f"총 {total_pages}페이지입니다.\n\n"
+        return header + "\n\n".join(extracted)
+
+    except Exception as e:
+        logger.error(f"PDF 파일 읽기 오류 ({file_path}): {e}")
+        return f"PDF 파일을 읽을 수 없습니다: {str(e)}"
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -185,8 +206,8 @@ def process_uploaded_files(file_paths: List[Dict[str, str]]) -> str:
             file_contents.append(f"[첨부 파일: {filename}]\n{content}\n")
 
         elif ext == '.pdf':
-            # PDF는 나중에 구현
-            file_contents.append(f"[첨부 파일: {filename}]\nPDF 파일은 현재 지원하지 않습니다.\n")
+            content = read_pdf_file(filepath)
+            file_contents.append(f"[첨부 파일: {filename}]\n{content}\n")
 
         elif ext in ['.jpg', '.jpeg', '.png']:
             # 이미지는 나중에 구현 (OCR 필요)

@@ -16,6 +16,13 @@ function parseOperationMode(mode) {
     return {mnulCtrlFlag: true, ctrlType: "algorithm"};
 }
 
+const CROP_LEVEL_OPTIONS = [
+    {value: 1, label: "발이기"},
+    {value: 2, label: "생육기"},
+    {value: 3, label: "수확기"},
+    {value: 4, label: "휴지기"},
+];
+
 export default function LatestSensorItem({latestSensorData, house, setSelectedHouse, selectedHouse, farmId}) {
     const queryClient = useQueryClient();
     const trStyle = {};
@@ -42,6 +49,11 @@ export default function LatestSensorItem({latestSensorData, house, setSelectedHo
         modeMutation.mutate({...house, mnulCtrlFlag, ctrlType});
     };
 
+    const handleCropLevelChange = (e) => {
+        e.stopPropagation();
+        modeMutation.mutate({...house, cropLvel: Number(e.target.value)});
+    };
+
     const formatDate = (dateString) => {
         const d = new Date(dateString);
         const yyyy = d.getFullYear();
@@ -61,6 +73,21 @@ export default function LatestSensorItem({latestSensorData, house, setSelectedHo
     return (
             <tr className="sensorItem" onClick={() => setSelectedHouse(house)} style={{cursor: "pointer"}}>
                 <td style={{...trStyle, padding: "0"}}>{house.housName}</td>
+                <td style={{...trStyle, padding: "2px", textAlign: "center"}} onClick={(e) => e.stopPropagation()}>
+                    <div style={{display: "inline-block"}}>
+                    <Form.Select
+                        size="sm"
+                        value={house.cropLvel ?? 2}
+                        onChange={handleCropLevelChange}
+                        disabled={modeMutation.isPending}
+                        style={{fontSize: "inherit", padding: "2px 2.2rem 2px 2px", width: "fit-content", color: trStyle.color || "inherit", fontWeight: trStyle.fontWeight || "normal"}}
+                    >
+                        {CROP_LEVEL_OPTIONS.map(opt => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
+                    </Form.Select>
+                    </div>
+                </td>
                 <td style={{...trStyle, padding: "2px", textAlign: "center"}} onClick={(e) => e.stopPropagation()}>
                     <div style={{display: "inline-block"}}>
                     <Form.Select

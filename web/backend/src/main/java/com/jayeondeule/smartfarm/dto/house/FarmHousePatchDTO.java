@@ -1,6 +1,5 @@
 package com.jayeondeule.smartfarm.dto.house;
 
-import com.jayeondeule.smartfarm.entity.farm.Farm;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -17,4 +16,5 @@ public class FarmHousePatchDTO {
     private String cropKind; // 작물 종류
     private boolean mnulCtrlFlag; // 릴레이 수동 조작 여부
     private String ctrlType; // 제어 유형 (algorithm, ai)
+    private int cropLvel; // 생육단계 (1:발이기, 2:생육기, 3:수확기, 4:휴지기)
 }

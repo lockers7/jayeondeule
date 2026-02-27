@@ -2,7 +2,6 @@ package com.jayeondeule.smartfarm.entity.user;
 
 import com.jayeondeule.smartfarm.converter.AuthLvelConverter;
 import com.jayeondeule.smartfarm.enums.user.AuthLvel;
-import com.jayeondeule.smartfarm.entity.farm.Farm;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;

@@ -2,11 +2,9 @@ package com.jayeondeule.smartfarm.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import com.jayeondeule.smartfarm.dto.farm.FarmDTO;
 import com.jayeondeule.smartfarm.dto.memo.FarmHouseCropsDTO;
 import com.jayeondeule.smartfarm.dto.memo.FarmHouseCropsInsertDTO;
 import com.jayeondeule.smartfarm.dto.user.UserClaimDTO;
-import com.jayeondeule.smartfarm.entity.farm.Farm;
 import com.jayeondeule.smartfarm.entity.memo.FarmHouseCrops;
 import com.jayeondeule.smartfarm.entity.memo.FarmHouseCropsId;
 import com.jayeondeule.smartfarm.repository.FarmHouseCropsRepository;
@@ -21,7 +19,6 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -42,6 +39,7 @@ public class MemoService {
         data.setHousId(houseId);
         data.setAthr(author.getUserId());
         data.setRmks(insertInfo.getMemo());
+        data.setCropStat(insertInfo.getCropStat());
 
         farmHouseCropsRepository.save(data);
     }

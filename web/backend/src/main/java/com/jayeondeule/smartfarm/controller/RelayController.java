@@ -3,7 +3,6 @@ package com.jayeondeule.smartfarm.controller;
 import com.jayeondeule.smartfarm.dto.relay.RelayDTO;
 import com.jayeondeule.smartfarm.dto.relay.RelayInsertDTO;
 import com.jayeondeule.smartfarm.dto.user.UserClaimDTO;
-import com.jayeondeule.smartfarm.dto.user.UserDTO;
 import com.jayeondeule.smartfarm.enums.user.AuthLvel;
 import com.jayeondeule.smartfarm.service.FarmService;
 import com.jayeondeule.smartfarm.service.RelayService;

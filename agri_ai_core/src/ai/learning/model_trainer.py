@@ -10,11 +10,12 @@
 # update_ollama_model: LLM 모델 학습
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import json
+import traceback
 import pandas as pd
 from datetime import datetime
 
 from agri_ai_core.logs import setup_logger
-from agri_ai_core.src.chroma.collections import source_collection, learned_collection
+from agri_ai_core.src.chroma.collections import farm_knowledge_collection
 from agri_ai_core.src.utils.date_utils import parse_datetime
 from agri_ai_core.src.utils.conversion import convert_sensor_relay_data
 from agri_ai_core.src.chroma.client import heartbeat
@@ -23,11 +24,8 @@ from agri_ai_core.src.chroma.operations import (
     upsert_collection_data,
     generate_doc_id
 )
-# NOTE: PostgreSQL에서 Chroma로 직접 적재
-from agri_ai_core.src.ai.rag.postgres_loader import sync_postgresql_to_vcdb
 from agri_ai_core.src.chroma.loader import (
     get_unlearned_data,
-    update_learned_source_data,
     update_learned_last_status
 )
 from agri_ai_core.src.ai.learning.data_analyzer import (
@@ -80,16 +78,8 @@ def create_default_crop_entry(farm_id, house_id="0"):
         "crop_end_date": today_str,
         "code_name": "",
         "crop_qtty": 0,
-        "crop_grde_qtty_1": 0,
-        "crop_grde_qtty_2": 0,
-        "crop_grde_qtty_3": 0,
-        "crop_grde_qtty_4": 0,
-        "crop_grde_qtty_5": 0,
-        "crop_grde_amut_1": 0,
-        "crop_grde_amut_2": 0,
-        "crop_grde_amut_3": 0,
-        "crop_grde_amut_4": 0,
-        "crop_grde_amut_5": 0,
+        **{f"crop_grde_qtty_{i}": 0 for i in range(1, 6)},
+        **{f"crop_grde_amut_{i}": 0 for i in range(1, 6)},
         "grade_1_ratio": 0.0,
         "rmks": "empty_crop_data",
         "source_agg": {},
@@ -154,7 +144,7 @@ def process_farm_hour_data(farm_id, hour, data, hour_timestamp=None):
         logger.debug(f"농장 {farm_id} 시간대 {hour}시 최적 환경 조건 분석 완료")
     except Exception as e:
         logger.error(f"최적 환경 조건 분석 중 오류: {e}")
-        import traceback
+
         logger.error(traceback.format_exc())
         farm_optimal_conditions = {
             "hour_of_day": hour,
@@ -172,7 +162,7 @@ def process_farm_hour_data(farm_id, hour, data, hour_timestamp=None):
         farm_time_patterns = analyze_farm_time_patterns(data, hour)
     except Exception as e:
         logger.error(f"시간 패턴 분석 중 오류: {e}")
-        import traceback
+
         logger.error(traceback.format_exc())
         farm_time_patterns = {
             "hour_of_day": hour,
@@ -274,15 +264,6 @@ def update_ollama_model(after_date=None, top_cnt=0):
             except Exception as e:
                 logger.warning(f"after_date 1 필터링 중 오류: {e}")
 
-        source_results = get_documents(collection_name=source_collection())
-        if "error" in source_results and "not found" in str(source_results.get("error", "")).lower():
-            logger.debug("source_collection이 없거나 데이터가 없습니다. 데이터 초기화를 시도합니다.")
-
-            sync_postgresql_to_vcdb()
-            logger.debug("PostgreSQL에서 ChromaDB(source_collection) 직접 적재 완료")
-
-            unlearned_datas = get_unlearned_data(after_date, top_cnt)
-
         if not unlearned_datas:
             logger.debug("학습할 신규 데이터가 없습니다.")
             end_time = datetime.now()
@@ -292,7 +273,7 @@ def update_ollama_model(after_date=None, top_cnt=0):
             return []
 
         data_count = len(unlearned_datas)
-        logger.debug(f"신규 데이터 {data_count}건 학습 시작 !!! 기타건수: {len(source_results)}")
+        logger.debug(f"신규 데이터 {data_count}건 학습 시작")
 
         # 통계 및 최적 환경 데이터 처리
         stats_start = datetime.now()
@@ -303,7 +284,6 @@ def update_ollama_model(after_date=None, top_cnt=0):
             logger.debug(f"통계 및 최적 환경 데이터 처리 완료 (처리시간: {stats_time:.3f}초)")
         except Exception as e:
             logger.error(f"update_ollama_model 통계 및 최적 환경 데이터 처리 중 오류: {e}")
-            import traceback
             logger.error(traceback.format_exc())
 
         # 데이터 분류
@@ -372,15 +352,8 @@ def update_ollama_model(after_date=None, top_cnt=0):
                         "code_name": data.get("growth_status"),
                         "crop_qtty": total_yield,
                         "crop_grde_qtty_1": grade_1_yield,
-                        "crop_grde_qtty_2": data.get("grade_2_yield"),
-                        "crop_grde_qtty_3": data.get("grade_3_yield"),
-                        "crop_grde_qtty_4": data.get("grade_4_yield"),
-                        "crop_grde_qtty_5": data.get("grade_5_yield"),
-                        "crop_grde_amut_1": data.get("grade_1_price"),
-                        "crop_grde_amut_2": data.get("grade_2_price"),
-                        "crop_grde_amut_3": data.get("grade_3_price"),
-                        "crop_grde_amut_4": data.get("grade_4_price"),
-                        "crop_grde_amut_5": data.get("grade_5_price"),
+                        **{f"crop_grde_qtty_{i}": data.get(f"grade_{i}_yield") for i in range(2, 6)},
+                        **{f"crop_grde_amut_{i}": data.get(f"grade_{i}_price") for i in range(1, 6)},
                         "rmks": data.get("alert"),
                         "grade_1_ratio": grade_1_ratio
                     }
@@ -390,7 +363,6 @@ def update_ollama_model(after_date=None, top_cnt=0):
                 processed_count += 1
         except Exception as e:
             logger.error(f"데이터 변환 중 오류: {e}")
-            import traceback
             logger.error(traceback.format_exc())
 
         transform_processed_count = processed_count
@@ -411,15 +383,14 @@ def update_ollama_model(after_date=None, top_cnt=0):
                 hour = data.get("hour")
                 house_id = data.get("house_id", "0")
 
-                # crops_data 보완
+                # crops_data / units_data 없으면 스킵 (더미 데이터 생성 대신 건너뜀)
                 if not data.get("crops_data"):
-                    logger.debug(f"농장 {farm_id}, 시간대 {hour} crops_data가 없어 기본 데이터 추가")
-                    data["crops_data"] = [create_default_crop_entry(str(farm_id or "0"), house_id)]
+                    logger.debug(f"농장 {farm_id}, 시간대 {hour} crops_data 없음 → 스킵")
+                    continue
 
-                # units_data 보완
                 if not data.get("units_data"):
-                    logger.debug(f"농장 {farm_id}, 시간대 {hour} units_data가 없어 더미 추가")
-                    data["units_data"] = [create_default_units_entry(farm_id, house_id)]
+                    logger.debug(f"농장 {farm_id}, 시간대 {hour} units_data 없음 → 스킵")
+                    continue
 
                 # 학습 실행
                 farm_learned_data = process_farm_hour_data(
@@ -432,7 +403,6 @@ def update_ollama_model(after_date=None, top_cnt=0):
 
             except Exception as e:
                 logger.error(f"농장 {farm_id}, 시간대 {hour}시 처리 중 오류: {e}")
-                import traceback
                 logger.error(traceback.format_exc())
                 process_error_count += 1
 
@@ -463,7 +433,7 @@ def update_ollama_model(after_date=None, top_cnt=0):
                         doc_id = generate_doc_id("learned", farm_id, 0, base_dt.strftime("%Y-%m-%d %H:%M:%S"))
                         status = upsert_collection_data(
                             calledby="update_ollama_model",
-                            collection=learned_collection(),
+                            collection=farm_knowledge_collection(),
                             doc_id=doc_id,
                             document=text,
                             metadata=metadata
@@ -475,17 +445,15 @@ def update_ollama_model(after_date=None, top_cnt=0):
                             logger.warning(f"문서 저장 실패 - doc_id={doc_id}, status={status}")
                     except Exception as e:
                         logger.error(f"문서 저장 중 예외 발생: {e}")
-                        import traceback
                         logger.error(traceback.format_exc())
 
                 if success_count > 0:
-                    update_learned_source_data(unlearned_datas)
                     update_learned_last_status()
 
                     try:
-                        learned_items = get_documents(collection_name=learned_collection())
+                        learned_items = get_documents(collection_name=farm_knowledge_collection())
                         learned_count = len(learned_items.get("ids", [])) if "error" not in learned_items else 0
-                        logger.debug(f"학습 완료: 총 {len(unlearned_datas)}건 처리, learned_collection에 {success_count}건 저장됨 (총 {learned_count}건)")
+                        logger.debug(f"학습 완료: 총 {len(unlearned_datas)}건 처리, farm_knowledge에 {success_count}건 저장됨 (총 {learned_count}건)")
                     except Exception as e:
                         logger.debug(f"학습 완료: 저장 건수 {success_count}건 (컬렉션 조회 실패: {e})")
                 else:
@@ -493,14 +461,13 @@ def update_ollama_model(after_date=None, top_cnt=0):
 
             except Exception as e:
                 logger.error(f"학습 결과 저장 중 오류: {e}")
-                import traceback
                 logger.error(traceback.format_exc())
         else:
             logger.debug("학습 결과가 없습니다.")
 
     except Exception as e:
         logger.error(f"LLM 학습 중 최상위 오류: {e}")
-        import traceback
+
         logger.error(traceback.format_exc())
 
     end_time = datetime.now()
@@ -508,6 +475,10 @@ def update_ollama_model(after_date=None, top_cnt=0):
     results_count = len(learned_results)
     data_count = len(unlearned_datas) if 'unlearned_datas' in locals() and unlearned_datas else 0
     logger.debug(f"LLM 학습 종료: 원본 데이터 {data_count}건, 학습 결과 {results_count}건 (처리시간: {processing_time:.3f}초)")
+    logger.debug(
+        f"[PERF:대화학습] 모델학습-전체={processing_time:.1f}s, "
+        f"원본={data_count}건, 학습결과={results_count}건"
+    )
     logger.debug("=" * 100)
 
     return learned_results

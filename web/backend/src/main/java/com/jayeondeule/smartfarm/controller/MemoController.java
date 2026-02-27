@@ -4,8 +4,6 @@ import com.jayeondeule.smartfarm.dto.memo.FarmHouseCropsDTO;
 import com.jayeondeule.smartfarm.dto.memo.FarmHouseCropsInsertDTO;
 import com.jayeondeule.smartfarm.dto.memo.FarmHouseCropsPatchDTO;
 import com.jayeondeule.smartfarm.dto.user.UserClaimDTO;
-import com.jayeondeule.smartfarm.dto.user.UserDTO;
-import com.jayeondeule.smartfarm.entity.memo.FarmHouseCropsId;
 import com.jayeondeule.smartfarm.enums.user.AuthLvel;
 import com.jayeondeule.smartfarm.service.FarmService;
 import com.jayeondeule.smartfarm.service.MemoService;
@@ -17,7 +15,6 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
-import java.util.List;
 
 @RestController
 @RequestMapping("/api/farms/{farmId}/houses/{houseId}/memos")

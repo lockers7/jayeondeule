@@ -1,7 +1,5 @@
 package com.jayeondeule.smartfarm.entity.setting;
 
-import com.jayeondeule.smartfarm.entity.farm.Farm;
-import com.jayeondeule.smartfarm.entity.house.FarmHouse;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;

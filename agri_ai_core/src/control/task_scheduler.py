@@ -208,7 +208,6 @@ def remove_job(job_id):
 # 기본 스케줄 작업 설정
 #
 # Args:
-#     data_export_func: 데이터 내보내기 함수
 #     learning_func: 학습 함수
 #     stats_func: 통계 처리 함수
 #     schedule_control_func: 조명/관수밸브 스케줄 제어 함수
@@ -226,18 +225,76 @@ def _daily_log_cleanup():
         logger.error(f"[스케줄] 일일 로그 정리 실패: {e}")
 
 
-def setup_default_jobs(data_export_func=None, learning_func=None, stats_func=None,
-                       schedule_control_func=None, manual_control_func=None):
+def _chunk_cleanup_job():
+    """매일 03:00에 실행 — farm_knowledge 컬렉션에서 180일 이상 된 오래된 청크 삭제"""
     try:
-        # 데이터 내보내기 작업 (매 3분)
-        if data_export_func:
-            add_job(
-                job_id="data_export_job",
-                func=data_export_func,
-                trigger_type="interval",
-                minutes=3
-            )
+        from datetime import datetime, timedelta
+        from agri_ai_core.src.chroma.collections import farm_knowledge_collection
+        from agri_ai_core.src.chroma.operations import get_documents
+        from agri_ai_core.src.chroma.client import get_collection
 
+        collection_name = farm_knowledge_collection()
+        if not collection_name:
+            return
+
+        cutoff_date = (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%d")
+        logger.info(f"[스케줄] 청크 정리 시작 — 기준일: {cutoff_date} 이전 데이터 삭제 대상")
+
+        # 전체 문서 조회 (메타데이터만)
+        result = get_documents(collection_name, include=["metadatas"], limit=10000)
+        if "error" in result:
+            logger.warning(f"[스케줄] 청크 정리 — 문서 조회 실패: {result['error']}")
+            return
+
+        ids = result.get("ids", [])
+        metadatas = result.get("metadatas", [])
+
+        delete_ids = []
+        for doc_id, meta in zip(ids, metadatas):
+            if not isinstance(meta, dict):
+                continue
+            record_dt = meta.get("record_datetime", "")
+            if isinstance(record_dt, str) and len(record_dt) >= 10:
+                if record_dt[:10] < cutoff_date:
+                    delete_ids.append(doc_id)
+
+        if delete_ids:
+            # ChromaDB REST API로 삭제
+            collection_info = get_collection(collection_name)
+            if "error" not in collection_info:
+                import json
+                from agri_ai_core.src.chroma.config import CHROMA_API_BASE
+                from agri_ai_core.src.ai.mcp_client import mcp_http_request
+
+                collection_id = collection_info.get("id")
+                if collection_id:
+                    # 배치 단위로 삭제 (한번에 100개씩)
+                    total_deleted = 0
+                    for i in range(0, len(delete_ids), 100):
+                        batch = delete_ids[i:i + 100]
+                        url = f"{CHROMA_API_BASE}/collections/{collection_id}/delete"
+                        status, _, _ = mcp_http_request(
+                            method="POST",
+                            url=url,
+                            json_body={"ids": batch},
+                            timeout=30,
+                        )
+                        if status == 200:
+                            total_deleted += len(batch)
+
+                    logger.info(f"[스케줄] 청크 정리 완료 — {total_deleted}/{len(delete_ids)}건 삭제")
+        else:
+            logger.info("[스케줄] 청크 정리 — 삭제 대상 없음")
+
+    except Exception as e:
+        logger.error(f"[스케줄] 청크 정리 실패: {e}")
+        logger.error(traceback.format_exc())
+
+
+def setup_default_jobs(learning_func=None, stats_func=None,
+                       schedule_control_func=None, manual_control_func=None,
+                       growth_rag_func=None):
+    try:
         # 학습 작업 (매일 지정 시간)
         if learning_func:
             add_job(
@@ -281,6 +338,24 @@ def setup_default_jobs(data_export_func=None, learning_func=None, stats_func=Non
                 minutes=1
             )
 
+        # 생육 RAG 작업 (일 2회: 12:00, 00:00)
+        # 생육 데이터 입력 시점 기반으로 센서/릴레이 환경 통계를 RAG 데이터로 저장
+        if growth_rag_func:
+            add_job(
+                job_id="growth_rag_job_noon",
+                func=growth_rag_func,
+                trigger_type="cron",
+                hour=12,
+                minute=0
+            )
+            add_job(
+                job_id="growth_rag_job_midnight",
+                func=lambda: growth_rag_func(is_midnight=True),
+                trigger_type="cron",
+                hour=0,
+                minute=5   # 로그 정리(00:00) 직후
+            )
+
         # 로그 정리 작업 (매일 00:00:00)
         # 100일 이전 로그 파일 삭제, 단일 파일 트리밍
         add_job(
@@ -288,6 +363,16 @@ def setup_default_jobs(data_export_func=None, learning_func=None, stats_func=Non
             func=_daily_log_cleanup,
             trigger_type="cron",
             hour=0,
+            minute=0
+        )
+
+        # 청크 정리 작업 (매일 03:00)
+        # farm_knowledge 컬렉션에서 180일 이상 오래된 데이터 삭제
+        add_job(
+            job_id="chunk_cleanup_job",
+            func=_chunk_cleanup_job,
+            trigger_type="cron",
+            hour=3,
             minute=0
         )
 

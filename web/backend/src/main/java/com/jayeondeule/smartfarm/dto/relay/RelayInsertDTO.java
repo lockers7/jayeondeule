@@ -1,10 +1,7 @@
 package com.jayeondeule.smartfarm.dto.relay;
 
-import com.jayeondeule.smartfarm.entity.house.FarmHouse;
 import lombok.Getter;
 import lombok.Setter;
-
-import java.time.LocalDateTime;
 
 @Getter
 @Setter

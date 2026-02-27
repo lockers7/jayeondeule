@@ -6,6 +6,7 @@
 # chunk_document: 문서를 청크로 분할
 # store_document_with_chunks: 문서를 청크로 나누어 벡터 DB에 저장
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+import re
 import traceback
 from datetime import datetime
 
@@ -51,17 +52,24 @@ def chunk_document(document_content, chunk_size=1000, chunk_overlap=200):
 
             # 새 문단이 너무 길면 더 작은 단위로 분할
             if len(paragraph) > chunk_size:
-                sentences = paragraph.split('. ')
+                # 한국어 종결어미 + 구두점 / 영문 마침표 기준 문장 분리
+                sentences = re.split(
+                    r'(?<=[다요죠까지음임함됨렵])[.]\s+|(?<=[?!])\s+|(?<=\.)\s+',
+                    paragraph,
+                )
                 temp_chunk = ""
 
                 for sentence in sentences:
-                    if len(temp_chunk) + len(sentence) + 2 <= chunk_size:
+                    sentence = sentence.strip()
+                    if not sentence:
+                        continue
+                    if len(temp_chunk) + len(sentence) + 1 <= chunk_size:
                         if temp_chunk:
-                            temp_chunk += ". "
+                            temp_chunk += " "
                         temp_chunk += sentence
                     else:
                         if temp_chunk:
-                            chunks.append(temp_chunk + ".")
+                            chunks.append(temp_chunk)
                         temp_chunk = sentence
 
                 if temp_chunk:

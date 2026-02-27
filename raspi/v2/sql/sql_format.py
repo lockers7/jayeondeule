@@ -53,7 +53,7 @@ class LghtSetFormat:
         self.fnsh_time = fnsh_time
 
 #--------------------------------
-# 관수밸브 On, Off 설정 기본 값 
+# 관수 On, Off 설정 기본 값 
 #--------------------------------
 class WatrSetFormat:
     def __init__(self, strt_time, fnsh_time):

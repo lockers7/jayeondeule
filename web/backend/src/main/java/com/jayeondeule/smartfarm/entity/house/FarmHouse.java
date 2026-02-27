@@ -46,6 +46,10 @@ public class FarmHouse {
     @Column(columnDefinition = "VARCHAR(20) DEFAULT 'algorithm'")
     private String ctrlType = "algorithm"; // 제어 유형 (algorithm, ai)
 
+    @Setter
+    @Column(columnDefinition = "NUMERIC DEFAULT 2")
+    private int cropLvel = 2; // 생육단계 (1:발이기, 2:생육기, 3:수확기, 4:휴지기)
+
     @Column(nullable = false, columnDefinition = "TIMESTAMP(6) WITHOUT TIME ZONE")
     private LocalDateTime rgstDttm = LocalDateTime.now(); // 등록일자
 }

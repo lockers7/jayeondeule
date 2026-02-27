@@ -2,6 +2,7 @@ import React from "react";
 import {Button, Form, ListGroup, OverlayTrigger, Spinner, Tooltip} from "react-bootstrap";
 import {PencilFill, TrashFill} from "react-bootstrap-icons";
 import {useSelector} from "react-redux";
+import {getCropStatLabel} from "./cropStatOptions.js";
 
 export default function MemoList({
                                      memos,
@@ -28,7 +29,14 @@ export default function MemoList({
                             className="d-flex flex-column"
                         >
                             <div className="d-flex justify-content-between align-items-center mb-1">
-                                <span className="fw-bold">{memo.athrName}</span>
+                                <span>
+                                    <span className="fw-bold">{memo.athrName}</span>
+                                    {memo.cropStat > 0 && (
+                                        <span style={{color: "#8B0000", fontWeight: "normal"}}>
+                                            {": (" + getCropStatLabel(memo.cropStat) + ")"}
+                                        </span>
+                                    )}
+                                </span>
                                 <span className="text-muted"
                                       style={{fontSize: "0.8rem"}}>{new Date(memo.recdDttm).toLocaleString()}</span>
                             </div>

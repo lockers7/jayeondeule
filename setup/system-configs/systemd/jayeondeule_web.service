@@ -1,0 +1,15 @@
+[Unit]
+Description=Jayeondeule Web Service
+After=network.target
+
+[Service]
+WorkingDirectory=/workspace/jayeondeule/web/backend/target
+ExecStart=java -jar smartfarm-0.0.1-SNAPSHOT.jar --server.port=9090
+SuccessExitStatus=143
+Restart=always
+RestartSec=10
+TimeoutStopSec=5
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
