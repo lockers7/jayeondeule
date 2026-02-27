@@ -1,5 +1,6 @@
 import os
 import re
+import threading
 from datetime import date, datetime
 from typing import Any, Optional, Tuple
 from contextlib import contextmanager
@@ -7,9 +8,11 @@ from contextlib import contextmanager
 try:
     import psycopg2
     from psycopg2.extras import RealDictCursor
+    from psycopg2.pool import ThreadedConnectionPool
 except Exception:
     psycopg2 = None
     RealDictCursor = None
+    ThreadedConnectionPool = None
 
 from agri_ai_core.config import settings
 from agri_ai_core.logs import setup_logger
@@ -38,7 +41,8 @@ class DatabaseHandler:
         self.USER = settings.database.user
         self.PASSWORD = settings.database.password
 
-        self.connection = None
+        self._pool = None
+        self._pool_lock = threading.Lock()
         self._initialized = True
         self.logger = setup_logger(__name__)
 
@@ -116,52 +120,69 @@ class DatabaseHandler:
         else:
             self.logger.debug(f"MCP postgres 실패 지속 -> direct DB fallback 유지: {err}")
 
-    def _ensure_direct_connection(self) -> bool:
-        if psycopg2 is None:
-            self.logger.error("psycopg2 미설치로 direct DB fallback을 사용할 수 없습니다")
+    # ------------------------------------------------------------------
+    # 커넥션 풀 관리
+    # ------------------------------------------------------------------
+    def _ensure_pool(self):
+        """ThreadedConnectionPool을 지연 초기화 (스레드 안전)"""
+        if self._pool is not None:
+            return True
+
+        if psycopg2 is None or ThreadedConnectionPool is None:
+            self.logger.error("psycopg2 미설치로 커넥션 풀을 생성할 수 없습니다")
             return False
 
-        try:
-            if self.connection:
-                self.logger.debug(f" 커넥션 상태: closed={self.connection.closed}")
-
-            if self.connection is not None:
-                try:
-                    with self.connection.cursor() as test_cursor:
-                        test_cursor.execute("SELECT 1")
-                except Exception:
-                    self.logger.warning("기존 커넥션이 죽어있음. 재연결 시도.")
-                    self.close()
-
-            if self.connection is None or self.connection.closed:
-                self.connection = psycopg2.connect(
+        with self._pool_lock:
+            if self._pool is not None:
+                return True
+            try:
+                self._pool = ThreadedConnectionPool(
+                    minconn=1,
+                    maxconn=5,
                     host=self.HOST,
                     port=self.PORT,
                     database=self.DATABASE,
                     user=self.USER,
                     password=self.PASSWORD,
-                    cursor_factory=RealDictCursor,
                 )
-                self.logger.info(" DB 재연결 성공")
-            return True
+                self.logger.info("DB 커넥션 풀 초기화 완료 (minconn=1, maxconn=5)")
+                return True
+            except Exception as e:
+                self.logger.error(f"DB 커넥션 풀 초기화 실패: {e}")
+                return False
 
+    def _getconn(self):
+        """풀에서 커넥션 획득"""
+        if not self._ensure_pool():
+            return None
+        try:
+            return self._pool.getconn()
         except Exception as e:
-            self.logger.error(f"DatabaseHandler.connect -> DB Connection ERR Desc: [{e}]")
-            return False
+            self.logger.error(f"풀에서 커넥션 획득 실패: {e}")
+            return None
+
+    def _putconn(self, conn):
+        """풀에 커넥션 반환"""
+        if self._pool is not None and conn is not None:
+            try:
+                self._pool.putconn(conn)
+            except Exception as e:
+                self.logger.debug(f"풀에 커넥션 반환 중 오류: {e}")
 
     def connect(self):
         # MCP 우선 모드에서는 소켓 연결을 선행하지 않는다.
         if self.use_mcp_postgres:
             return True
-        return self._ensure_direct_connection()
+        return self._ensure_pool()
 
     def close(self):
         try:
-            if self.connection:
-                self.connection.close()
-                self.connection = None
+            if self._pool is not None:
+                self._pool.closeall()
+                self._pool = None
+                self.logger.info("DB 커넥션 풀 종료 완료")
         except Exception as e:
-            self.logger.error(f"DatabaseHandler.close -> DB Close ERR Desc: [{e}]")
+            self.logger.error(f"DatabaseHandler.close -> Pool Close ERR Desc: [{e}]")
 
     @contextmanager
     def get_connection(self):
@@ -173,6 +194,35 @@ class DatabaseHandler:
         finally:
             pass
 
+    def _run_direct(self, op_name, query, vals, error_default, cursor_factory=None, fetch_mode=None, commit=False):
+        """직접 DB 연결로 쿼리 실행 공통 래퍼."""
+        conn = self._getconn()
+        if conn is None:
+            self.logger.error(f"DatabaseHandler.{op_name} -> direct DB fallback unavailable: query: [{query}], values: [{vals}]")
+            return error_default
+
+        try:
+            with conn.cursor(cursor_factory=cursor_factory) as cursor:
+                cursor.execute(query, vals) if vals else cursor.execute(query)
+                if commit:
+                    conn.commit()
+                    return True
+                if fetch_mode == "all":
+                    return cursor.fetchall()
+                if fetch_mode == "one":
+                    return cursor.fetchone()
+                return True
+        except Exception as e:
+            if commit:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            self.logger.error(f"DatabaseHandler.{op_name} -> ERR: query: [{query}], values: [{vals}], Desc: [{e}]")
+            return error_default
+        finally:
+            self._putconn(conn)
+
     def execute_query(self, query, vals=None):
         self.logger.debug(f"[SQL-EXECUTE] 실행할 쿼리: \n{query} \n파라미터: \n{vals}\n")
 
@@ -183,29 +233,7 @@ class DatabaseHandler:
             except Exception as mcp_err:
                 self._log_mcp_fallback(mcp_err)
 
-        if not self._ensure_direct_connection():
-            self.logger.error(
-                "DatabaseHandler.execute_query -> direct DB fallback unavailable: "
-                f"query: [{query}], values: [{vals}]"
-            )
-            return False
-
-        try:
-            with self.connection.cursor() as cursor:
-                if vals:
-                    cursor.execute(query, vals)
-                else:
-                    cursor.execute(query)
-            self.connection.commit()
-            return True
-        except Exception as e:
-            if self.connection:
-                self.connection.rollback()
-            self.logger.error(
-                "DatabaseHandler.execute_query -> Query Execute ERR: "
-                f"query: [{query}], values: [{vals}], Desc: [{e}]"
-            )
-            return False
+        return self._run_direct("execute_query", query, vals, False, commit=True)
 
     def fetch_all(self, query: str, vals: Optional[Tuple[Any, ...]] = None, as_dict: bool = False):
         self.logger.debug(f"[SQL-FETCH_ALL] 실행할 쿼리: \n{query} \n파라미터: \n{vals}\n")
@@ -223,27 +251,8 @@ class DatabaseHandler:
             except Exception as mcp_err:
                 self._log_mcp_fallback(mcp_err)
 
-        if not self._ensure_direct_connection():
-            self.logger.error(
-                "DatabaseHandler.fetch_all -> direct DB fallback unavailable: "
-                f"query: [{query}], values: [{vals}]"
-            )
-            return []
-
-        try:
-            cursor_factory = RealDictCursor if as_dict else None
-            with self.connection.cursor(cursor_factory=cursor_factory) as cursor:
-                if vals:
-                    cursor.execute(query, vals)
-                else:
-                    cursor.execute(query)
-                return cursor.fetchall()
-        except Exception as e:
-            self.logger.error(
-                "DatabaseHandler.fetch_all -> Fetch All ERR: "
-                f"query: [{query}], values: [{vals}], Desc: [{e}]"
-            )
-            return []
+        return self._run_direct("fetch_all", query, vals, [],
+                                cursor_factory=RealDictCursor if as_dict else None, fetch_mode="all")
 
     def fetch_one(self, query, vals=None):
         self.logger.debug(f"[SQL-FETCH_ONE] 실행할 쿼리: \n{query} \n파라미터: \n{vals}\n")
@@ -260,26 +269,8 @@ class DatabaseHandler:
             except Exception as mcp_err:
                 self._log_mcp_fallback(mcp_err)
 
-        if not self._ensure_direct_connection():
-            self.logger.error(
-                "DatabaseHandler.fetch_one -> direct DB fallback unavailable: "
-                f"query: [{query}], values: [{vals}]"
-            )
-            return None
-
-        try:
-            with self.connection.cursor(cursor_factory=RealDictCursor) as cursor:
-                if vals:
-                    cursor.execute(query, vals)
-                else:
-                    cursor.execute(query)
-                return cursor.fetchone()
-        except Exception as e:
-            self.logger.error(
-                "DatabaseHandler.fetch_one -> Fetch One ERR: "
-                f"query: [{query}], values: [{vals}], Desc: [{e}]"
-            )
-            return None
+        return self._run_direct("fetch_one", query, vals, None,
+                                cursor_factory=RealDictCursor, fetch_mode="one")
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -289,7 +280,6 @@ db = DatabaseHandler()
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 데이터베이스 세션 컨텍스트 매니저
 # 데이터베이스 세션 컨텍스트 매니저
 #
 # Yields:

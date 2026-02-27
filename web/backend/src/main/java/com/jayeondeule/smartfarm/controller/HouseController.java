@@ -4,7 +4,6 @@ import com.jayeondeule.smartfarm.dto.house.*;
 import com.jayeondeule.smartfarm.dto.house.FarmHousePatchDTO;
 import com.jayeondeule.smartfarm.dto.user.UserClaimDTO;
 import com.jayeondeule.smartfarm.enums.user.AuthLvel;
-import com.jayeondeule.smartfarm.service.FarmService;
 import com.jayeondeule.smartfarm.service.HouseService;
 import com.jayeondeule.smartfarm.service.UserService;
 import lombok.RequiredArgsConstructor;

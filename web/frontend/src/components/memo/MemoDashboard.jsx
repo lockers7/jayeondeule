@@ -5,7 +5,6 @@ import {
     Button,
     Row,
     Col,
-    InputGroup,
 } from "react-bootstrap";
 import {
     useQuery,
@@ -15,9 +14,13 @@ import {createMemo, deleteMemo, getMemos, updateMemo} from "../../utils/memoUtil
 import AlertModal from "../common/AlertModal.jsx";
 import MemoList from "./MemoList.jsx";
 
+import {CROP_STAT_OPTIONS} from "./cropStatOptions.js";
+import "./MemoDashboard.css";
+
 export default function MemoDashboard({farmId, houseId}) {
     const queryClient = useQueryClient();
     const [newMemo, setNewMemo] = useState("");
+    const [cropStat, setCropStat] = useState(0);
     const [editingId, setEditingId] = useState(null);
     const [editText, setEditText] = useState("");
     const [page, setPage] = useState(0);
@@ -76,13 +79,14 @@ export default function MemoDashboard({farmId, houseId}) {
     // 메모 추가
     const addMemoMutation = useMutation({
         mutationFn: async () =>
-            await createMemo(farmId, houseId, {memo: newMemo}),
+            await createMemo(farmId, houseId, {memo: newMemo, cropStat}),
         onSuccess: () => {
             setMemos([]);
             setPage(0);
             setHasMore(true);
             queryClient.invalidateQueries(["memos", farmId, houseId]);
             setNewMemo("");
+            setCropStat(0);
         },
     });
 
@@ -139,13 +143,30 @@ export default function MemoDashboard({farmId, houseId}) {
                 {/* 새 메모 작성 */}
                 <Card className="mt-3 mb-3 p-3">
                     <Form onSubmit={handleAddMemo}>
-                        <InputGroup>
+                        <div style={{display: "flex", gap: "1em", alignItems: "stretch"}}>
+                            <div style={{flex: "0 0 7em", display: "flex", flexDirection: "column", gap: "0.3em"}}>
+                                <Form.Label style={{margin: 0, fontSize: "1.07rem", fontWeight: "bold", textAlign: "center"}}>
+                                    생육 상태
+                                </Form.Label>
+                                <Form.Select
+                                    value={cropStat}
+                                    onChange={(e) => setCropStat(Number(e.target.value))}
+                                    className="memo-input-border"
+                                    style={{flex: "1"}}
+                                >
+                                    {CROP_STAT_OPTIONS.map(opt => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                    ))}
+                                </Form.Select>
+                            </div>
                             <Form.Control
                                 as="textarea"
                                 rows={2}
                                 placeholder="새 메모 입력... (Shift+Enter: 줄바꿈, Enter: 전송)"
                                 value={newMemo}
                                 onChange={(e) => setNewMemo(e.target.value)}
+                                className="memo-input-border"
+                                style={{flex: "1 1 auto"}}
                                 onKeyDown={(e) => {
                                     if (e.key === "Enter" && !e.shiftKey) {
                                         e.preventDefault();
@@ -153,10 +174,10 @@ export default function MemoDashboard({farmId, houseId}) {
                                     }
                                 }}
                             />
-                            <Button type="submit" variant="success">
+                            <Button type="submit" variant="success" style={{flex: "0 0 auto"}}>
                                 추가
                             </Button>
-                        </InputGroup>
+                        </div>
                     </Form>
                 </Card>
 

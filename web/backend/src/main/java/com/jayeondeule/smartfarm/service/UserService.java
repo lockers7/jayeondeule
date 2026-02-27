@@ -1,10 +1,7 @@
 package com.jayeondeule.smartfarm.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.jayeondeule.smartfarm.dto.auth.LoginDTO;
-import com.jayeondeule.smartfarm.dto.memo.FarmHouseCropsDTO;
 import com.jayeondeule.smartfarm.dto.user.*;
-import com.jayeondeule.smartfarm.entity.memo.FarmHouseCrops;
 import com.jayeondeule.smartfarm.entity.user.User;
 import com.jayeondeule.smartfarm.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -14,10 +11,6 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor

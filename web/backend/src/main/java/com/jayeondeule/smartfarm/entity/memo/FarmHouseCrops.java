@@ -25,6 +25,7 @@ public class FarmHouseCrops {
     @Column(columnDefinition = "TIMESTAMP(6) WITHOUT TIME ZONE")
     private LocalDateTime recdDttm = LocalDateTime.now(); // 기록일자
 
+    @Setter
     @Column
     private int cropStat;
 

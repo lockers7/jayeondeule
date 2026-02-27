@@ -40,11 +40,7 @@ def _sanitize_for_json(value):
         return value.to_pydatetime().strftime("%Y-%m-%d %H:%M:%S")
     if isinstance(value, dict):
         return {k: _sanitize_for_json(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_sanitize_for_json(v) for v in value]
-    if isinstance(value, tuple):
-        return [_sanitize_for_json(v) for v in value]
-    if isinstance(value, set):
+    if isinstance(value, (list, tuple, set)):
         return [_sanitize_for_json(v) for v in value]
     return value
 
@@ -112,18 +108,13 @@ def restore_metadata_from_chroma(metadata: dict) -> dict:
     if not isinstance(metadata, dict):
         return {}
 
+    json_flags = {key[:-8] for key, value in metadata.items()
+                  if key.endswith('_is_json') and value is True}
+
     restored_metadata = {}
-    json_flags = {}
-
-    for key, value in metadata.items():
-        if key.endswith('_is_json') and value is True:
-            original_key = key[:-8]
-            json_flags[original_key] = True
-
     for key, value in metadata.items():
         if key.endswith('_is_json'):
             continue
-
         if key in json_flags:
             try:
                 restored_metadata[key] = json.loads(value)

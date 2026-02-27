@@ -26,8 +26,8 @@ DEFAULT_LOG_FORMAT = '[%(asctime)s] [%(levelname)s] [%(name)s] -> %(message)s'
 DEFAULT_DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 
 # 로그 파일 패턴
-DEFAULT_LOG_FILE_PATTERN = 'llm_%Y_%m_%d.log'
-WEB_LOG_FILE_PATTERN = 'web_%Y_%m_%d.log'
+DEFAULT_LOG_FILE_PATTERN = 'llm_%Y-%m-%d.log'
+WEB_LOG_FILE_PATTERN = 'web_%Y-%m-%d.log'
 
 # 로그 레벨
 LOG_LEVELS = {
@@ -69,6 +69,15 @@ class DailyRotatingFileHandler(logging.FileHandler):
     def _get_log_filename(self):
         return datetime.now().strftime(self.filename_pattern)
 
+    # 파일 열기 (root/일반 유저 혼재 환경에서 권한 충돌 방지)
+    def _open(self):
+        stream = super()._open()
+        try:
+            os.chmod(self.baseFilename, 0o666)
+        except OSError:
+            pass
+        return stream
+
     # 로그 레코드 출력 (날짜 변경시 새 파일로 전환)
     def emit(self, record):
         now = datetime.now()
@@ -89,137 +98,78 @@ class DailyRotatingFileHandler(logging.FileHandler):
 # 프로젝트 내 모든 파일별 로그 생성
 # ============================================================
 
-def setup_logger(name=None):
-    # .env 또는 환경변수의 최신 LOG_LEVEL을 직접 읽음 (캐시된 settings 우회)
+def _setup_logger_impl(cache_key, logger_name, file_pattern, error_label):
+    """로거 초기화 공통 로직."""
     log_level_str = (os.getenv("LOG_LEVEL") or settings.logging.level or "INFO").strip().upper()
     log_level = getattr(logging, log_level_str, logging.INFO)
-
-    if name in _loggers_initialized:
-        logger = logging.getLogger(name)
-        # 환경변수 변경 시 기존 로거의 레벨도 동기화
-        if logger.level != log_level:
-            logger.setLevel(log_level)
-            for h in logger.handlers:
-                h.setLevel(log_level)
-        return logger
-
-    log_path = settings.logging.path or "logs"
-    log_dir = log_path
-
-    try:
-        os.makedirs(log_dir, exist_ok=True)
-    except OSError as e:
-        print(f"로그 디렉토리 '{log_dir}' 생성 중 오류: {e}", file=sys.stderr)
-
-    log_filename_pattern = os.path.join(log_dir, "llm_%Y_%m_%d.log")
-
-    logger = logging.getLogger(name)
-    logger.setLevel(log_level)
-
-    if logger.handlers:
-        for handler in logger.handlers[:]:
-            logger.removeHandler(handler)
-
-    try:
-        file_handler = DailyRotatingFileHandler(
-            log_filename_pattern,
-            encoding='utf-8'
-        )
-        file_handler.setLevel(log_level)
-
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(log_level)
-
-        formatter = logging.Formatter(DEFAULT_LOG_FORMAT)
-        file_handler.setFormatter(formatter)
-        console_handler.setFormatter(formatter)
-
-        logger.addHandler(file_handler)
-        logger.addHandler(console_handler)
-    except Exception as e:
-        print(f"로그 핸들러 설정 중 오류: {e}", file=sys.stderr)
-        console_handler = logging.StreamHandler()
-        formatter = logging.Formatter(DEFAULT_LOG_FORMAT)
-        console_handler.setFormatter(formatter)
-        logger.addHandler(console_handler)
-
-    if name:
-        logger.propagate = False
-
-    _loggers_initialized[name] = True
-
-    return logger
-
-
-# ============================================================
-# WEB LOGGER SETUP FUNCTION
-# 웹 요청/응답 전용 로거 (web_YYYY_MM_DD.log에 기록)
-# ============================================================
-
-def setup_web_logger(name=None):
-    log_level_str = (os.getenv("LOG_LEVEL") or settings.logging.level or "INFO").strip().upper()
-    log_level = getattr(logging, log_level_str, logging.INFO)
-
-    cache_key = f"_web_{name}"
 
     if cache_key in _loggers_initialized:
-        logger = logging.getLogger(cache_key)
+        logger = logging.getLogger(logger_name)
         if logger.level != log_level:
             logger.setLevel(log_level)
             for h in logger.handlers:
                 h.setLevel(log_level)
         return logger
 
-    log_path = settings.logging.path or "logs"
-    log_dir = log_path
-
+    log_dir = settings.logging.path or "logs"
     try:
         os.makedirs(log_dir, exist_ok=True)
     except OSError as e:
         print(f"로그 디렉토리 '{log_dir}' 생성 중 오류: {e}", file=sys.stderr)
 
-    log_filename_pattern = os.path.join(log_dir, "web_%Y_%m_%d.log")
-
-    logger = logging.getLogger(cache_key)
+    logger = logging.getLogger(logger_name)
     logger.setLevel(log_level)
 
-    if logger.handlers:
-        for handler in logger.handlers[:]:
-            logger.removeHandler(handler)
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
 
     try:
-        file_handler = DailyRotatingFileHandler(
-            log_filename_pattern,
-            encoding='utf-8'
-        )
+        file_handler = DailyRotatingFileHandler(os.path.join(log_dir, file_pattern), encoding='utf-8')
         file_handler.setLevel(log_level)
-
         console_handler = logging.StreamHandler()
         console_handler.setLevel(log_level)
-
         formatter = logging.Formatter(DEFAULT_LOG_FORMAT)
         file_handler.setFormatter(formatter)
         console_handler.setFormatter(formatter)
-
         logger.addHandler(file_handler)
         logger.addHandler(console_handler)
     except Exception as e:
-        print(f"웹 로그 핸들러 설정 중 오류: {e}", file=sys.stderr)
+        print(f"{error_label} 핸들러 설정 중 오류: {e}", file=sys.stderr)
         console_handler = logging.StreamHandler()
-        formatter = logging.Formatter(DEFAULT_LOG_FORMAT)
-        console_handler.setFormatter(formatter)
+        console_handler.setFormatter(logging.Formatter(DEFAULT_LOG_FORMAT))
         logger.addHandler(console_handler)
 
     logger.propagate = False
     _loggers_initialized[cache_key] = True
-
     return logger
+
+
+def setup_logger(name=None):
+    return _setup_logger_impl(name, name, "llm_%Y-%m-%d.log", "로그")
+
+
+def setup_web_logger(name=None):
+    cache_key = f"_web_{name}"
+    return _setup_logger_impl(cache_key, cache_key, "web_%Y-%m-%d.log", "웹 로그")
 
 
 # ============================================================
 # LOG CLEANUP FUNCTIONS
 # 로그 정리 함수 (보관 기간: 100일)
 # ============================================================
+
+def _write_temp_and_replace(filepath, lines):
+    """임시 파일에 쓴 후 원본 교체 (안전한 파일 쓰기)."""
+    dir_name = os.path.dirname(filepath)
+    filename = os.path.basename(filepath)
+    with tempfile.NamedTemporaryFile(
+        mode='w', encoding='utf-8', dir=dir_name,
+        prefix=f".{filename}.", suffix='.tmp', delete=False
+    ) as tmp:
+        tmp.writelines(lines)
+        tmp_path = tmp.name
+    os.replace(tmp_path, filepath)
+
 
 def delete_old_daily_logs(log_dir, days=LOG_RETENTION_DAYS):
     """llm_*.log, web_*.log 중 지정일 이전 파일 삭제"""
@@ -230,9 +180,9 @@ def delete_old_daily_logs(log_dir, days=LOG_RETENTION_DAYS):
         for log_file in glob.glob(os.path.join(log_dir, pattern)):
             try:
                 basename = os.path.basename(log_file)
-                # llm_2026_02_14.log → 2026_02_14 또는 web_2026_02_14.log → 2026_02_14
+                # llm_2026-02-14.log → 2026-02-14 또는 web_2026-02-14.log → 2026-02-14
                 date_part = basename.split("_", 1)[1].replace(".log", "")
-                log_date = datetime.strptime(date_part, "%Y_%m_%d")
+                log_date = datetime.strptime(date_part, "%Y-%m-%d")
                 if log_date < cutoff:
                     os.remove(log_file)
                     deleted_count += 1
@@ -294,15 +244,7 @@ def trim_old_log_entries(log_dir, days=LOG_RETENTION_DAYS):
 
             if keep_from > 0:
                 kept_lines = lines[keep_from:]
-                # 안전한 쓰기: 임시 파일에 쓴 후 교체
-                dir_name = os.path.dirname(filepath)
-                with tempfile.NamedTemporaryFile(
-                    mode='w', encoding='utf-8', dir=dir_name,
-                    prefix=f".{filename}.", suffix='.tmp', delete=False
-                ) as tmp:
-                    tmp.writelines(kept_lines)
-                    tmp_path = tmp.name
-                os.replace(tmp_path, filepath)
+                _write_temp_and_replace(filepath, kept_lines)
                 removed = keep_from
                 trimmed_count += removed
                 print(f"[로그정리] {filename}: {removed}줄 삭제 ({days}일 이전)")
@@ -331,14 +273,7 @@ def trim_large_plain_logs(log_dir, max_lines=MAX_PLAIN_LOG_LINES):
 
             # 최근 max_lines 줄만 유지
             kept_lines = lines[-max_lines:]
-            dir_name = os.path.dirname(filepath)
-            with tempfile.NamedTemporaryFile(
-                mode='w', encoding='utf-8', dir=dir_name,
-                prefix=f".{filename}.", suffix='.tmp', delete=False
-            ) as tmp:
-                tmp.writelines(kept_lines)
-                tmp_path = tmp.name
-            os.replace(tmp_path, filepath)
+            _write_temp_and_replace(filepath, kept_lines)
             removed = len(lines) - max_lines
             trimmed_count += removed
             print(f"[로그정리] {filename}: {removed}줄 삭제 (최대 {max_lines}줄 유지)")

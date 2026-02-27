@@ -9,18 +9,13 @@ import com.jayeondeule.smartfarm.repository.FarmHouseRepository;
 import com.jayeondeule.smartfarm.repository.SensorRecordingRepository;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
-import org.springframework.cglib.core.Local;
 import org.springframework.stereotype.Service;
 
-import java.math.BigDecimal;
 import java.sql.Timestamp;
-import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -34,7 +29,7 @@ public class SensorService {
         mapper.registerModule(new JavaTimeModule());
     }
 
-    //start~end까지의 sensor데이터 조회
+    // start~end까지의 sensor데이터 조회
     public List<SensorDataDTO> getSensorHistory(long farmId, long houseId, LocalDateTime start, LocalDateTime end) {
         long maxCount = 500;
         List<Object[]> raw = sensorRecordingRepository.findAveragedDownsampled(farmId, houseId, start, end, maxCount);
@@ -57,13 +52,13 @@ public class SensorService {
         Map<Long, SensorDataDTO> result = new HashMap<>();
 
         houseList.forEach(item -> {
-            SensorRecording latestRecord = sensorRecordingRepository.findTopByFarmIdAndHousIdOrderByRecdDttmDesc(farmId, item.getHousId());
+            SensorRecording latestRecord = sensorRecordingRepository.findTopByFarmIdAndHousIdOrderByRecdDttmDesc(farmId,
+                    item.getHousId());
 
-            if(latestRecord != null) {
+            if (latestRecord != null) {
                 result.put(
                         item.getHousId(),
-                        mapper.convertValue(latestRecord, SensorDataDTO.class)
-                );
+                        mapper.convertValue(latestRecord, SensorDataDTO.class));
             }
         });
 

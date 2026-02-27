@@ -12,14 +12,25 @@ from agri_ai_core.config import SENSOR_FIELD_MAPPING, RELAY_FIELD_MAPPING
 from agri_ai_core.src.utils.validators import clean_sensor_value, parse_boolean
 
 
+def _merge_relay_stats(data_item, relay_data):
+    """relay_stats JSON을 파싱하여 relay_data에 병합 (공통 헬퍼)"""
+    if "relay_stats" not in data_item:
+        return
+    try:
+        raw = data_item["relay_stats"]
+        stats = raw if isinstance(raw, dict) else (json.loads(raw) if raw else {})
+        for key, value in stats.items():
+            if key in RELAY_FIELD_MAPPING and key not in relay_data:
+                relay_data[key] = parse_boolean(value)
+    except Exception:
+        pass
+
+
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 데이터 항목에서 센서와 릴레이 정보를 한번에 추출하는 공통 함수
 # --->
-# 데이터 항목에서 센서와 릴레이 정보를 추출
-# Args:
-# data_item: 원본 데이터 딕셔너리
-# Returns:
-# dict: {"sensor_data": {...}, "relay_data": {...}}
+# Args: data_item: 원본 데이터 딕셔너리
+# Returns: dict: {"sensor_data": {...}, "relay_data": {...}}
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def convert_sensor_relay_data(data_item):
     result = {
@@ -27,58 +38,29 @@ def convert_sensor_relay_data(data_item):
         "relay_data": {}
     }
 
-    for sensor_key, sensor_info in SENSOR_FIELD_MAPPING.items():
+    for sensor_key in SENSOR_FIELD_MAPPING:
         if sensor_key in data_item:
             result["sensor_data"][sensor_key] = clean_sensor_value(data_item.get(sensor_key))
 
-    for relay_key in RELAY_FIELD_MAPPING.keys():
+    for relay_key in RELAY_FIELD_MAPPING:
         if relay_key in data_item:
             result["relay_data"][relay_key] = parse_boolean(data_item.get(relay_key))
 
-    if "relay_stats" in data_item:
-        try:
-            relay_stats_str = data_item["relay_stats"]
-            if isinstance(relay_stats_str, dict):
-                relay_stats = relay_stats_str
-            elif relay_stats_str:
-                relay_stats = json.loads(relay_stats_str)
-            else:
-                relay_stats = {}
-
-            for stats_key, value in relay_stats.items():
-                if stats_key in RELAY_FIELD_MAPPING and stats_key not in result["relay_data"]:
-                    result["relay_data"][stats_key] = parse_boolean(value)
-        except Exception:
-            pass
-
+    _merge_relay_stats(data_item, result["relay_data"])
     return result
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 데이터 항목에서 릴레이 관련 정보 추출
 # --->
-# 데이터 항목에서 릴레이 관련 정보 추출
-# Args:
-# data_item: 원본 데이터 딕셔너리
-# Returns:
-# dict: 릴레이 데이터
+# Args: data_item: 원본 데이터 딕셔너리
+# Returns: dict: 릴레이 데이터
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def extract_relay_data(data_item):
     relay_data = {}
-    source_relay_keys = [k for k in RELAY_FIELD_MAPPING.keys() if not k.startswith('relay_')]
-
-    for key in source_relay_keys:
-        if key in data_item:
+    for key in RELAY_FIELD_MAPPING:
+        if not key.startswith('relay_') and key in data_item:
             relay_data[key] = parse_boolean(data_item[key])
 
-    if "relay_stats" in data_item:
-        try:
-            relay_stats = json.loads(data_item["relay_stats"]) if isinstance(data_item["relay_stats"], str) else data_item["relay_stats"]
-
-            for stats_key, value in relay_stats.items():
-                if stats_key in RELAY_FIELD_MAPPING and stats_key not in relay_data:
-                    relay_data[stats_key] = parse_boolean(value)
-        except Exception:
-            pass
-
+    _merge_relay_stats(data_item, relay_data)
     return relay_data

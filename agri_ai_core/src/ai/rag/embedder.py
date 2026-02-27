@@ -20,8 +20,7 @@ from typing import Any, Optional
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.ai.mcp_client import mcp_http_request
-from agri_ai_core.config import settings
-from agri_ai_core.config import EMBEDDING_MODEL_NAME
+from agri_ai_core.config import settings, EMBEDDING_MODEL_NAME, get_ollama_url
 
 logger = setup_logger(__name__)
 
@@ -30,8 +29,18 @@ logger = setup_logger(__name__)
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 _embedding_cache = OrderedDict()
 _EMBEDDING_CACHE_MAX = 256
-_EMBEDDING_SERVICE_DISABLED = False
-_EMBEDDING_FAILURE_REASON = None
+_embed_state = {"disabled": False, "reason": None}
+
+
+def _disable_embedding(reason):
+    """임베딩 서비스 비활성화 (global 없이 상태 변경)"""
+    _embed_state["disabled"] = True
+    _embed_state["reason"] = reason
+    _embed_state["disabled_ts"] = time.time()
+
+# 헬스체크 TTL 캐시
+_health_cache = {"ok": False, "ts": 0.0}
+_HEALTH_TTL = 60  # 초
 
 
 def _mcp_get_status(url: str, timeout: int = 5) -> Optional[int]:
@@ -63,18 +72,6 @@ def _extract_embedding_from_payload(data: Any):
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 환경설정 혹은 환경변수에서 Ollama URL을 반환
-# --->
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def _get_ollama_url() -> str:
-    return (
-        getattr(settings.model, "ollama_url", None)
-        or os.getenv("OLLAMA_URL")
-        or "http://localhost:11434"
-    )
-
-
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 설정된 임베딩 차원(없으면 기본 768)을 반환
 # --->
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -90,12 +87,21 @@ def _get_expected_dim() -> int:
 # bool: 서버 상태 정상 여부
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def check_ollama_health():
-    ollama_url = _get_ollama_url()
+    now = time.time()
+    if now - _health_cache["ts"] < _HEALTH_TTL:
+        return _health_cache["ok"]
+
+    ollama_url = get_ollama_url()
     version_status = _mcp_get_status(ollama_url + "/api/version", timeout=5)
     if version_status != 200:
+        _health_cache["ok"] = False
+        _health_cache["ts"] = now
         return False
     tags_status = _mcp_get_status(ollama_url + "/api/tags", timeout=5)
-    return tags_status == 200
+    result = tags_status == 200
+    _health_cache["ok"] = result
+    _health_cache["ts"] = now
+    return result
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -146,45 +152,58 @@ def generate_dummy_embedding(text):
 # list: 임베딩 벡터 또는 None
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def embed_text(text, timeout=60, max_retries=5):
-    global _EMBEDDING_SERVICE_DISABLED, _EMBEDDING_FAILURE_REASON
+    _t_embed_start = time.time()
 
     use_dummy = getattr(settings.model, 'use_dummy_embedding', False)
     if use_dummy:
-        _EMBEDDING_SERVICE_DISABLED = True
-        _EMBEDDING_FAILURE_REASON = "config_force_dummy"
+        _disable_embedding("config_force_dummy")
         return generate_dummy_embedding(text)
 
     if not text or not isinstance(text, str):
         logger.warning("[embed_text] 빈 텍스트 또는 잘못된 입력")
         return None
 
-    if _EMBEDDING_SERVICE_DISABLED:
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"[embed_text] 임베딩 서비스 비활성화 상태 → 더미 임베딩 사용 (사유: {_EMBEDDING_FAILURE_REASON})")
-        return generate_dummy_embedding(text)
+    if _embed_state["disabled"]:
+        # 5분마다 Ollama 복구 여부 확인하여 자동 재활성화
+        if time.time() - _embed_state.get("disabled_ts", 0) > 300:
+            if check_ollama_health():
+                logger.info(f"[embed_text] Ollama 복구 감지 → 임베딩 서비스 재활성화 (이전 사유: {_embed_state['reason']})")
+                _embed_state["disabled"] = False
+                _embed_state["reason"] = None
+            else:
+                _embed_state["disabled_ts"] = time.time()
+                return generate_dummy_embedding(text)
+        else:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"[embed_text] 임베딩 서비스 비활성화 상태 → 더미 임베딩 사용 (사유: {_embed_state['reason']})")
+            return generate_dummy_embedding(text)
 
     original_length = len(text)
     if len(text) > 4000:
         text = text[:4000] + "..."
         logger.debug(f"[embed_text] 텍스트 길이 제한 적용: {original_length} -> {len(text)} 문자")
 
-    cache_key = text
+    cache_key = hashlib.sha256(text.encode("utf-8")).hexdigest()
     cached = _embedding_cache.get(cache_key)
     if cached is not None:
         logger.debug("[embed_text] 캐시된 임베딩 사용")
         _embedding_cache.move_to_end(cache_key)
         return cached
 
+    _t_health = time.time()
     if not check_ollama_health():
-        logger.debug("[embed_text] Ollama 서버 상태 불량 - 더미 임베딩 생성")
-        _EMBEDDING_SERVICE_DISABLED = True
-        _EMBEDDING_FAILURE_REASON = "ollama_health_check_failed"
+        _health_ms = (time.time() - _t_health) * 1000
+        logger.debug(f"[embed_text] Ollama 서버 상태 불량 - 더미 임베딩 생성 (헬스체크={_health_ms:.0f}ms)")
+        _disable_embedding("ollama_health_check_failed")
         return generate_dummy_embedding(text)
+    _health_ms = (time.time() - _t_health) * 1000
+    if _health_ms > 100:
+        logger.debug(f"[PERF:임베딩] 헬스체크={_health_ms:.0f}ms")
 
     dynamic_timeout = get_dynamic_timeout(len(text), timeout)
     logger.debug(f"[embed_text] 동적 타임아웃 설정: {dynamic_timeout}초 (텍스트 길이: {len(text)})")
 
-    ollama_url = _get_ollama_url()
+    ollama_url = get_ollama_url()
     embedding_model = (
         getattr(settings.model, "embedding_model", None)
         or os.getenv("EMBEDDING_MODEL_NAME")
@@ -194,10 +213,10 @@ def embed_text(text, timeout=60, max_retries=5):
 
     logger.debug(f"embedding_model = {embedding_model}")
 
+    # 신규 API: /api/embed + "input" 필드
     payload = {
         "model": embedding_model,
         "input": text,
-        "stream": False
     }
 
     last_error = None
@@ -207,18 +226,30 @@ def embed_text(text, timeout=60, max_retries=5):
             start_time = time.time()
             status_code, data, error_text = mcp_http_request(
                 method="POST",
-                url=ollama_url + "/api/embeddings",
+                url=ollama_url + "/api/embed",
                 json_body=payload,
                 timeout=int(dynamic_timeout),
             )
             elapsed_time = time.time() - start_time
             logger.debug(f"[embed_text] MCP 요청 완료 (시도 {attempt + 1}/{max_retries}): {elapsed_time:.2f}초")
 
-            if status_code in (400, 404, 422):
-                if not _EMBEDDING_SERVICE_DISABLED:
+            # /api/embed 미지원 시 구 엔드포인트로 폴백
+            if status_code == 404:
+                logger.info("[embed_text] /api/embed 미지원 → /api/embeddings 폴백")
+                fallback_payload = {"model": embedding_model, "prompt": text}
+                status_code, data, error_text = mcp_http_request(
+                    method="POST",
+                    url=ollama_url + "/api/embeddings",
+                    json_body=fallback_payload,
+                    timeout=int(dynamic_timeout),
+                )
+                elapsed_time = time.time() - start_time
+                logger.debug(f"[embed_text] 폴백 요청 완료: status={status_code}, {elapsed_time:.2f}초")
+
+            if status_code in (400, 422):
+                if not _embed_state["disabled"]:
                     logger.debug(f"[embed_text] 임베딩 엔드포인트 {status_code} 응답 → 더미 임베딩 전환")
-                _EMBEDDING_SERVICE_DISABLED = True
-                _EMBEDDING_FAILURE_REASON = f"http_status_{status_code}"
+                _disable_embedding(f"http_status_{status_code}")
                 return generate_dummy_embedding(text)
 
             if status_code >= 500 or status_code == 0:
@@ -234,8 +265,8 @@ def embed_text(text, timeout=60, max_retries=5):
 
             if embedding and isinstance(embedding, list) and len(embedding) > 0:
                 if len(embedding) == expected_dim:
-                    logger.debug(f"[embed_text] 임베딩 성공 - 크기: {len(embedding)}, 소요시간: {elapsed_time:.2f}초")
-                    # 간단한 LRU 캐시 유지
+                    _embed_total_ms = (time.time() - _t_embed_start) * 1000
+                    logger.debug(f"[PERF:임베딩] 성공: 총={_embed_total_ms:.0f}ms, API={elapsed_time:.2f}s, 모델={embedding_model}, 차원={len(embedding)}")
                     _embedding_cache[cache_key] = embedding
                     _embedding_cache.move_to_end(cache_key)
                     if len(_embedding_cache) > _EMBEDDING_CACHE_MAX:
@@ -246,7 +277,8 @@ def embed_text(text, timeout=60, max_retries=5):
                     last_error = f"차원 불일치: {len(embedding)} != {expected_dim}"
                     continue
             else:
-                logger.debug(f"[embed_text] 임베딩 응답이 비어있음/스키마 불일치: {str(data)[:160]} → 더미 폴백")
+                _embed_total_ms = (time.time() - _t_embed_start) * 1000
+                logger.debug(f"[PERF:임베딩] 빈응답→더미폴백: 총={_embed_total_ms:.0f}ms, 응답={str(data)[:120]}")
                 return generate_dummy_embedding(text)
 
         except Exception as e:
@@ -259,11 +291,24 @@ def embed_text(text, timeout=60, max_retries=5):
                 time.sleep(wait_time)
                 continue
 
-    _EMBEDDING_SERVICE_DISABLED = True
-    _EMBEDDING_FAILURE_REASON = last_error
-    logger.debug(f"[embed_text] 모든 재시도 실패 ({max_retries}회) → 더미 임베딩 반환")
-    logger.debug(f"[embed_text] 마지막 오류: {last_error}")
+    _disable_embedding(last_error)
+    _embed_total_ms = (time.time() - _t_embed_start) * 1000
+    logger.debug(f"[PERF:임베딩] 재시도실패→더미: 총={_embed_total_ms:.0f}ms, 시도={max_retries}회, 오류={last_error}")
 
     return generate_dummy_embedding(text)
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 임베딩 서비스 상태 초기화
+# --->
+# 외부에서 호출하여 임베딩 서비스를 재활성화
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def reset_embedding_service():
+    _embed_state["disabled"] = False
+    _embed_state["reason"] = None
+    _embedding_cache.clear()
+    _health_cache["ok"] = False
+    _health_cache["ts"] = 0.0
+    logger.info("[embed_text] 임베딩 서비스 상태 초기화 완료")
 
 

@@ -1,10 +1,7 @@
 package com.jayeondeule.smartfarm.dto.house;
 
-import com.jayeondeule.smartfarm.entity.farm.Farm;
 import lombok.Getter;
 import lombok.Setter;
-
-import java.time.LocalDateTime;
 
 //재배사 등록 DTO
 @Getter

@@ -5,6 +5,7 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 
@@ -41,4 +42,18 @@ public class LightIrrigationSetting {
     @Setter
     @Column(nullable = false)
     private LocalTime fnshTime; // 관수, 조명 종료 시간
+
+    @Setter
+    @Column(length = 20)
+    private String excsType = "daily"; // 실행 유형: daily, interval, weekdays
+
+    @Setter
+    private Integer excsItvl; // N일마다 실행 간격
+
+    @Setter
+    private LocalDate excsStrtDate; // 주기 시작일
+
+    @Setter
+    @Column(length = 50)
+    private String excsWkdy; // 실행 요일 (1,3,5 = 월/수/금)
 }

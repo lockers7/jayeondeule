@@ -129,18 +129,22 @@ SENSOR_M_SETTING = {
 }
 
 #---------------------------------------------------------------------------------------------------------------
-# 조명, 관수밸브 시간 셋팅 
+# 조명, 관수 시간 셋팅 
 #--------------------
 # farm_water_light_setting -> LIGHT_IRRIGATION_S_SETTING
 #---------------------------------------------------------------------------------------------------------------
 LIGHT_IRRIGATION_S_SETTING = {
-    "farm_id"            : 0,                #=   
+    "farm_id"            : 0,                #=
     "hous_id"            : 0,                #+   재배사 ID
     "setn_dttm"          : '',               #C   appl_date
     "dlte_yn"            : True,             #C   deeleted
     "unit_type"          : '',               #C   type
     "strt_time"          : '',               #C   fr_time (HH:MM:SS)
     "fnsh_time"          : '',               #C   to_time (HH:MM:SS)
+    "excs_type"          : 'daily',          #+   실행유형: daily, interval, weekdays
+    "excs_itvl"          : None,             #+   N일마다 실행 간격
+    "excs_strt_date"     : None,             #+   주기 시작일
+    "excs_wkdy"          : None,             #+   실행 요일 (1,3,5 = 월/수/금)
 }
 
 #---------------------------------------------------------------------------------------------------------------

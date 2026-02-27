@@ -8,10 +8,11 @@
 # process_attached_files: 첨부 파일들을 처리하고 학습
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import os
+import traceback
 from datetime import datetime
 
 from agri_ai_core.logs import setup_logger
-from agri_ai_core.src.chroma.collections import optimal_collection, document_collection
+from agri_ai_core.src.chroma.collections import farm_knowledge_collection, document_collection
 from agri_ai_core.src.chroma.operations import upsert_collection_data
 from agri_ai_core.src.ai.rag.chunker import store_document_with_chunks
 
@@ -129,6 +130,9 @@ def detect_document_type(document_content):
 # dict: 처리 결과
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def llm_document_process(file_path=None, text_content=None, farm_id=None):
+    import time as _time
+    _t_doc_start = _time.time()
+
     result = {
         "success": False,
         "chunks_stored": 0,
@@ -155,10 +159,15 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None):
             # 파일 기본 정보 수집
             filename = os.path.basename(file_path)
             file_size = os.path.getsize(file_path)
+            file_ext = os.path.splitext(filename)[1].lower()
 
-            # 파일 읽기
-            with open(file_path, 'r', encoding='utf-8') as f:
-                document_content = f.read()
+            # 파일 읽기 (PDF는 바이너리이므로 별도 처리)
+            if file_ext == '.pdf':
+                from agri_ai_core.src.ai.file_processor import read_pdf_file
+                document_content = read_pdf_file(file_path)
+            else:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    document_content = f.read()
 
             logger.debug(f"문서 로드 완료: {filename}, 크기: {file_size/1024:.2f}KB")
 
@@ -212,7 +221,7 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None):
             logger.debug(f"생육 최적 집계 데이터 생성 -> {doc_id}")
             upsert_collection_data(
                 "update_optimal_collection",
-                optimal_collection(),
+                farm_knowledge_collection(),
                 doc_id,
                 "최종 생성 시간",
                 optimal_metadata
@@ -236,12 +245,16 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None):
         result["success"] = True
         result["message"] = f"문서 처리 및 저장 완료: {filename}"
 
+        _doc_elapsed = _time.time() - _t_doc_start
         logger.debug(f"문서 처리 완료: {filename}")
+        logger.debug(
+            f"[PERF:문서학습] 문서처리={_doc_elapsed:.1f}s, "
+            f"파일={filename}, 청크={result['chunks_stored']}개"
+        )
         return result
 
     except Exception as e:
         logger.error(f"문서 처리 중 오류: {str(e)}")
-        import traceback
         logger.error(traceback.format_exc())
         result["error"] = str(e)
         return result
@@ -277,8 +290,8 @@ def process_attached_files(file_paths, farm_id):
 
             # 지원하는 파일 형식 확인
             file_ext = os.path.splitext(filename)[1].lower()
-            if file_ext not in ['.txt', '.md', '.csv', '.json']:
-                msg = f"파일 '{filename}'은 지원하지 않는 형식입니다. txt, md, csv, json 파일만 처리 가능합니다."
+            if file_ext not in ['.txt', '.md', '.csv', '.json', '.pdf']:
+                msg = f"파일 '{filename}'은 지원하지 않는 형식입니다. txt, md, csv, json, pdf 파일만 처리 가능합니다."
                 logger.warning(msg)
                 failed_files.append({"filename": filename, "error": "지원하지 않는 파일 형식"})
                 results_summary.append(msg)
@@ -294,13 +307,7 @@ def process_attached_files(file_paths, farm_id):
                 doc_type = result.get("document_type", "general")
                 structured = result.get("structured_data_stored", False)
 
-                # 문서 유형 한글 변환
-                doc_type_labels = {
-                    "crop_info": "작물 정보",
-                    "disease_info": "병해충 정보",
-                    "general": "일반 문서",
-                }
-                doc_type_label = doc_type_labels.get(doc_type, doc_type)
+                doc_type_label = DOC_TYPE_LABELS.get(doc_type, doc_type)
 
                 msg = f"✓ '{filename}' → {chunks_count}개 청크 저장"
                 msg += f" | 문서유형: {doc_type_label}"
@@ -323,7 +330,6 @@ def process_attached_files(file_paths, farm_id):
         except Exception as e:
             msg = f"파일 '{filename}' 처리 중 예외 발생: {str(e)}"
             logger.error(msg)
-            import traceback
             logger.error(traceback.format_exc())
             failed_files.append({"filename": filename, "error": str(e)})
             results_summary.append(msg)

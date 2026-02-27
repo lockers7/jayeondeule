@@ -1,10 +1,5 @@
 package com.jayeondeule.smartfarm.dto.setting;
 
-import com.jayeondeule.smartfarm.entity.farm.Farm;
-import com.jayeondeule.smartfarm.entity.house.FarmHouse;
-import jakarta.persistence.Column;
-import jakarta.persistence.JoinColumn;
-import jakarta.persistence.ManyToOne;
 import lombok.Getter;
 import lombok.Setter;
 

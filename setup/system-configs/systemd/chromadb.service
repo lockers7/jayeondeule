@@ -1,0 +1,29 @@
+[Unit]
+Description=ChromaDB Vector Database
+After=network.target
+Before=agriAiCore.service
+
+[Service]
+Type=simple
+User=jayeondeule
+Group=jayeondeule
+WorkingDirectory=/workspace/jayeondeule
+
+ExecStart=/workspace/jayeondeule/venv/bin/chroma run --path /workspace/jayeondeule/chromadb/database --host 0.0.0.0 --port 8000
+
+Environment=IS_PERSISTENT=TRUE
+Environment=ALLOW_RESET=TRUE
+
+Restart=always
+RestartSec=5
+
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=chromadb
+
+[Install]
+WantedBy=multi-user.target

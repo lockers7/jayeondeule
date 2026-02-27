@@ -16,9 +16,9 @@
 # flatten: 기능 설명 필요
 # flatten_field: 기능 설명 필요
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+import os
 import time
 import traceback
-import pandas as pd
 
 from decimal import Decimal
 from datetime import datetime
@@ -49,6 +49,28 @@ def _http_post(url: str, payload: dict, timeout: int = 30):
         json_body=payload,
         timeout=timeout,
     )
+
+
+def _is_true(value) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+_AUTO_EMBED_ON_UPSERT = _is_true(os.getenv("AUTO_EMBED_ON_UPSERT", "true"))
+
+
+def _build_embedding_from_text(text):
+    if not _AUTO_EMBED_ON_UPSERT:
+        return None
+    if not text:
+        return None
+    try:
+        from agri_ai_core.src.ai.rag.embedder import embed_text
+        embedding = embed_text(str(text))
+        if isinstance(embedding, list) and len(embedding) == _embedding_dim():
+            return embedding
+    except Exception as e:
+        logger.debug(f"[임베딩] 자동 임베딩 생성 실패: {e}")
+    return None
 
 
 #
@@ -254,7 +276,8 @@ def upsert_collection_data(calledby, collection, doc_id, document, metadata):
                     logger.error(f"[{calledby}] 기존 문서 삭제 실패 - doc_id={doc_id}, error: {delete_result['error']}")
                     return "failed"
 
-            result = add_document(collection_name, doc_id, text=document, metadata=metadata)
+            embedding = _build_embedding_from_text(document)
+            result = add_document(collection_name, doc_id, text=document, metadata=metadata, embedding=embedding)
             if isinstance(result, dict) and not result.get("error"):
                 return "added" if not exists else "updated"
             else:
@@ -279,7 +302,8 @@ def upsert_collection_data(calledby, collection, doc_id, document, metadata):
             valid_docs.append({
                 "doc_id": doc_id[i],
                 "text": document[i],
-                "metadata": meta
+                "metadata": meta,
+                "embedding": _build_embedding_from_text(document[i]),
             })
         return upsert_documents_with_embedding(collection_name, valid_docs)
 
@@ -314,10 +338,12 @@ def upsert_documents_with_embedding(collection_name, docs):
 
         metadata = prepare_metadata_for_chroma(raw_metadata)
 
-        embedding = doc.get("embedding") or [0.0] * _embedding_dim()
+        embedding = doc.get("embedding")
+        if not embedding:
+            embedding = _build_embedding_from_text(text)
         if not isinstance(embedding, list) or len(embedding) != _embedding_dim():
-            logger.warning(f"[upsert_documents_with_embedding] 임베딩 형식 오류: {doc_id}")
-            continue
+            logger.warning(f"[upsert_documents_with_embedding] 임베딩 형식 오류 -> 제로벡터 사용: {doc_id}")
+            embedding = [0.0] * _embedding_dim()
 
         ids.append(doc_id)
         texts.append(text)
@@ -388,6 +414,14 @@ def query_documents(collection_name, query_embeddings=None, n_results=5, where=N
         if where_document:
             payload["where_document"] = _sanitize_for_json(where_document)
 
+        def _flatten(result_dict, field_name):
+            value = result_dict.get(field_name)
+            if isinstance(value, list) and len(value) == 1 and isinstance(value[0], list):
+                return value[0]
+            return value or []
+
+        _RETRY_EMPTY = {"matches": [], "ids": [], "documents": [], "metadatas": [], "distances": []}
+
         for retry in range(3):
             try:
                 status_code, result, text = _http_post(url, payload, timeout=30)
@@ -397,28 +431,19 @@ def query_documents(collection_name, query_embeddings=None, n_results=5, where=N
                         time.sleep(1.5 ** retry)
                         continue
 
-                    def flatten_field(field_name):
-                        value = result.get(field_name)
-                        if isinstance(value, list) and len(value) == 1 and isinstance(value[0], list):
-                            return value[0]
-                        return value or []
-
-                    metadatas = flatten_field("metadatas")
-                    restored_metadatas = []
-                    for metadata in metadatas:
-                        if isinstance(metadata, dict):
-                            restored_metadatas.append(restore_metadata_from_chroma(metadata))
-                        else:
-                            restored_metadatas.append(metadata)
+                    restored_metadatas = [
+                        restore_metadata_from_chroma(m) if isinstance(m, dict) else m
+                        for m in _flatten(result, "metadatas")
+                    ]
                     result["metadatas"] = restored_metadatas
 
-                    documents = flatten_field("documents")
+                    documents = _flatten(result, "documents")
                     result["documents"] = documents
 
-                    ids = flatten_field("ids")
+                    ids = _flatten(result, "ids")
                     result["ids"] = ids
 
-                    distances = flatten_field("distances")
+                    distances = _flatten(result, "distances")
                     result["distances"] = distances
 
                     matches = []
@@ -444,7 +469,7 @@ def query_documents(collection_name, query_embeddings=None, n_results=5, where=N
                 time.sleep(1.5 ** retry)
 
         logger.warning("[query_documents] 최대 재시도 초과")
-        return {"matches": [], "ids": [], "documents": [], "metadatas": [], "distances": []}
+        return dict(_RETRY_EMPTY)
 
     except Exception as e:
         logger.error(f"[query_documents] 예외 발생: {e}")

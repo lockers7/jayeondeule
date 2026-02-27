@@ -1,8 +1,13 @@
-import React from "react";
+import React, {useState} from "react";
 import {Button, Form, Spinner} from "react-bootstrap";
+import VoiceMicButton from "./voice/VoiceMicButton.jsx";
 import "./ChatInput.css";
 
+const DEFAULT_PLACEHOLDER = "메시지를 입력하세요... (Shift+Enter: 줄바꿈, Enter: 전송)";
+
 export default function ChatInput({value, onChange, onSend, isLoading, farmName}) {
+    const [placeholder, setPlaceholder] = useState(DEFAULT_PLACEHOLDER);
+
     const handleKeyDown = (e) => {
         if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
@@ -21,17 +26,19 @@ export default function ChatInput({value, onChange, onSend, isLoading, farmName}
                 <Form.Control
                     as="textarea"
                     rows={3}
-                    placeholder="메시지를 입력하세요... (Shift+Enter: 줄바꿈, Enter: 전송)"
+                    placeholder={placeholder}
                     value={value}
                     onChange={(e) => onChange(e.target.value)}
                     onKeyDown={handleKeyDown}
                     disabled={isLoading}
                     style={{resize: "none", flex: 1, border: "2px solid #28a745"}}
                 />
-                <div style={{display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end"}}>
+                <div style={{display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", gap: "4px"}}>
+                    {/* 자전거 애니메이션 숨김
                     <div style={{height: "32px", display: "flex", alignItems: "flex-end", justifyContent: "center"}}>
                         {isLoading && <span className="chat-running-bicycle">🚴</span>}
                     </div>
+                    */}
                     <Button
                         variant="success"
                         onClick={onSend}
@@ -40,6 +47,20 @@ export default function ChatInput({value, onChange, onSend, isLoading, farmName}
                     >
                         {isLoading ? <Spinner animation="border" size="sm"/> : "전송"}
                     </Button>
+                    <VoiceMicButton
+                        onTranscribed={(text) => {
+                            onChange(text);
+                            onSend(text);
+                        }}
+                        onStatusChange={(status) => {
+                            if (status === "recording") {
+                                setPlaceholder("🎤 질문을 말씀하세요!");
+                            } else {
+                                setPlaceholder(DEFAULT_PLACEHOLDER);
+                            }
+                        }}
+                        disabled={isLoading}
+                    />
                 </div>
             </div>
         </div>

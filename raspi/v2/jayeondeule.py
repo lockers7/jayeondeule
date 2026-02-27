@@ -28,9 +28,6 @@ farm_id  = os.getenv('FARM_ID')
 house_id = cfg.is_myHouseId() # os.getenv('FARM_HOUSE_ID')
 db       = None
 
-chiller_start_time = None  # 칠러가 True로 변경된 시작 시간
-CHILLER_MAX_RUNTIME = 40 * 60  # 40분 (초 단위)
-
 #---------------------------------------------------------
 # 시스템 service restart 
 #---------------------------------------------------------
@@ -67,40 +64,6 @@ try:
 except Exception as e:
     logger.error(f" 센서 연결 상태 확인 중 오류 발생: {str(e)}")
 logger.info(f" 센스 클래스 초기화 및 각 센서 연결 초기화 완료 !!!")
-
-
-#----------------------------------------------
-# 칠러 보호 기능 - 40분 연속 가동 시 강제 OFF
-#----------------------------------------------
-def check_chiller_protection():
-    global chiller_start_time
-    
-    current_chiller_status = getattr(gpio.relay_status, f'relay_{gpio_config.CHILLER_GPIO+1}st_flag', False)
-    
-    if current_chiller_status:
-        current_time = datetime.now()
-        
-        if chiller_start_time is None:
-            chiller_start_time = current_time
-            logger.info(f"칠러 가동 시작: {chiller_start_time}")
-        else:
-            runtime_seconds = (current_time - chiller_start_time).total_seconds()
-            
-            if runtime_seconds >= CHILLER_MAX_RUNTIME:
-                logger.warning(f"칠러 40분 연속 가동으로 인한 강제 OFF - 가동시간: {runtime_seconds/60:.1f}분")
-                gpio.relay_control(gpio_config.CHILLER_GPIO, False)
-                chiller_start_time = None
-                return True
-            else:
-                remaining_seconds = CHILLER_MAX_RUNTIME - runtime_seconds
-                if int(runtime_seconds) % 300 == 0: 
-                    logger.info(f"칠러 연속 가동 중 - 경과시간: {runtime_seconds/60:.1f}분, 남은시간: {remaining_seconds/60:.1f}분")
-    else:
-        if chiller_start_time is not None:
-            runtime_seconds = (datetime.now() - chiller_start_time).total_seconds()
-            logger.info(f"칠러 가동 종료 - 총 가동시간: {runtime_seconds/60:.1f}분")
-            chiller_start_time = None
-    return False
 
 #------------------------
 # 센서값 데이터 형식 정의
@@ -203,10 +166,6 @@ def main_loop():
                 for i in range(base_relay_len):
                     single_relay_status = getattr(base_relay_status, f'relay_{i+1}st_flag')
                     gpio.relay_control(i, single_relay_status)
-
-                chiller_forced_off = check_chiller_protection()
-                if chiller_forced_off:
-                    setattr(gpio.relay_status, f'relay_{gpio_config.CHILLER_GPIO+1}st_flag', False)
 
                 db.set_base_relay_status(gpio.relay_status, auto_record_data.recd_dttm)
 

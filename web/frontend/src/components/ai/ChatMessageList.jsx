@@ -28,7 +28,16 @@ export default function ChatMessageList({messages}) {
                 </div>
             ) : (
                 messages.map((msg, index) => (
-                    <ChatBubble key={index} role={msg.role} content={msg.content}/>
+                    <ChatBubble
+                        key={index}
+                        role={msg.role}
+                        content={msg.content}
+                        sources={msg.sources}
+                        toolsUsed={msg.toolsUsed}
+                        responseType={msg.responseType}
+                        elapsedSec={msg.elapsedSec}
+                        timestamp={msg.timestamp}
+                    />
                 ))
             )}
             <div ref={bottomRef}/>

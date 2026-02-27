@@ -53,6 +53,7 @@ export default function LatestSensorMonitor({latestSensorData, houses, setSelect
                         <thead>
                         <tr>
                             <th>재배사</th>
+                            <th>생육단계</th>
                             <th>운용방식</th>
                             <th>실내 온도</th>
                             <th>실외 온도</th>

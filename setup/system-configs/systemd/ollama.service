@@ -1,0 +1,17 @@
+[Unit]
+Description=Ollama Service
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/ollama serve
+User=jayeondeule
+Group=jayeondeule
+Restart=always
+RestartSec=3
+Environment="PATH=/home/jayeondeule/.local/bin:/home/jayeondeule/.cargo/bin:/home/jayeondeule/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"
+Environment="OLLAMA_NUM_GPU=999"
+Environment="CUDA_VISIBLE_DEVICES=0"
+Environment="OLLAMA_MODELS=/workspace/jayeondeule/.ollama/models"
+
+[Install]
+WantedBy=default.target

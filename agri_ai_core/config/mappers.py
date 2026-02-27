@@ -1,0 +1,164 @@
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 매핑 모듈
+# 센서/릴레이 한글↔영문 매핑, 필드 매핑, 검색 함수
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# 센서 매핑 (한글 -> 영문 키)
+SENSOR_MAPPING = {
+    "내부온도": "indoor_temperature_value",
+    "내부습도": "indoor_humidity_value",
+    "외부온도": "outdoor_temperature_value",
+    "외부습도": "outdoor_humidity_value",
+    "co2": "co2_concentration_value",
+    "수온": "water_temperature_value",
+    "광량": "light_level_value",
+    "수위": "water_level_value"
+}
+
+# 릴레이 매핑 (한글 -> 영문 키)
+RELAY_MAPPING = {
+    "물가열기": "water_heater_flag",
+    "분사펌프": "fog_occurs_flag",
+    "배수밸브": "drainage_motor_flag",
+    "흡기팬": "intake_fan_flag",
+    "배기팬": "exhaust_fan_flag",
+    "조명토글": "lighting_flag",
+    "관수밸브": "irrigation_flag",
+    "열풍기": "indoor_heater_flag",
+    "순환댐퍼": "air_circulation_valve_flag",
+    "흡기댐퍼": "air_intake_valve_flag",
+    "배기댐퍼": "air_exhaust_valve_flag"
+}
+
+# 센서 필드 매핑 - 키: 센서 필드명, 값: (한글명, 단위)
+SENSOR_FIELD_MAPPING = {
+    "indoor_temperature_value": ("내부온도", "℃"),
+    "indoor_humidity_value": ("내부습도", "%"),
+    "outdoor_temperature_value": ("외부온도", "℃"),
+    "outdoor_humidity_value": ("외부습도", "%"),
+    "co2_concentration_value": ("co2", "ppm"),
+    "water_temperature_value": ("수온", "℃"),
+    "light_level_value": ("광량", ""),
+    "water_level_value": ("수위", ""),
+    "is_manual": ("수동설정여부", ""),
+}
+
+# 릴레이 필드 매핑 - 키: 릴레이 필드명, 값: (UI표시이름, 간단설명, 상세기능설명)
+RELAY_FIELD_MAPPING = {
+    'water_heater_flag': ('물가열기 상태(릴레이1)', '물가열기', '습도를 위해서 내부에 분사되는 물의 온도 조절을 통해 내부온도를 올리는 장치'),
+    'fog_occurs_flag': ('분사펌프 상태(릴레이2)', '분사펌프', '가동시 재배사 내부로에 포그가 흡입되어 습도를 올리는 장치'),
+    'drainage_motor_flag': ('배수밸브 상태(릴레이3)', '배수밸브', '시스템 내부에 있는 물을 외부로 배출하는데 사용되는 장치'),
+    'intake_fan_flag': ('흡기팬 상태(릴레이5)', '흡기팬', '재배사 내부로 공기를 흡입하는 장치'),
+    'exhaust_fan_flag': ('배기팬 상태(릴레이6)', '배기팬', '재배사 내부 공기를 외부로 배출 장치'),
+    'lighting_flag': ('조명토글 상태(릴레이7)', '조명토글', '재배사 내부 밝기를 조정하는 장치'),
+    'irrigation_flag': ('관수밸브 상태(릴레이8)', '관수밸브', '하루에 재배사의 버섯배지에 물을 분사하는 장치'),
+    'indoor_heater_flag': ('열풍기 상태(릴레이9)', '열풍기', '내부공기를 올리고자 할때 사용하는 장치'),
+    'air_circulation_valve_flag': ('순환댐퍼 상태(릴레이10)', '순환댐퍼', '내부공기의 흐름을 제어하는 장치'),
+    'air_intake_valve_flag': ('흡기댐퍼 상태(릴레이11)', '흡기댐퍼', '외부공기를 내부로 흡입시키는 장치'),
+    'air_exhaust_valve_flag': ('배기댐퍼 상태(릴레이14)', '배기댐퍼', '내부공기를 외부로 배출시키는 장치'),
+    'indoor_heater2_flag': ('열풍댐퍼 상태(릴레이15)', '열풍댐퍼', '내부공기를 올리고자 할때 사용하는 추가 장치'),
+
+    'relay_1st_flag': ('물가열기 상태(릴레이1)', '물가열기', 'true: 수온 상승'),
+    'relay_2st_flag': ('분사펌프 상태(릴레이2)', '분사펌프', 'true: 습도 상승'),
+    'relay_3st_flag': ('배수밸브 상태(릴레이3)', '배수밸브', 'tuue: 배수를 통한 수온을 평균 지하수 온도로 유지'),
+    'relay_5st_flag': ('흡기팬 상태(릴레이5)', '흡기팬', 'true: 외부 공기를 내부로 흡입하는 환풍기 가동'),
+    'relay_6st_flag': ('배기팬 상태(릴레이6)', '배기팬', 'true: 내부 공기를 외부로 배출하는 환풍기 가동'),
+    'relay_7st_flag': ('조명토글 상태(릴레이7)', '조명토글', 'true: 조염 켜짐'),
+    'relay_8st_flag': ('관수밸브 상태(릴레이8)', '관수밸브', 'true: 관수밸브 함'),
+    'relay_9st_flag': ('열풍기 상태(릴레이9)', '열풍기', 'true: 내부온도 상승'),
+    'relay_10st_flag': ('순환댐퍼 상태(릴레이10)', '순환댐퍼', 'true: 내부공기 순환 밸브 열림'),
+    'relay_11st_flag': ('흡기댐퍼 상태(릴레이11)', '흡기댐퍼', 'true: 외부공기를 내부로 흡입하는 밸브 열림'),
+    'relay_14st_flag': ('배기댐퍼 상태(릴레이14)', '배기댐퍼', 'true: 내부공기를 외부로 배출하는 밸브 열림'),
+    'relay_15st_flag': ('열풍댐퍼 상태(릴레이15)', '열풍댐퍼', 'true: 히터열기를 재배사로 배출하는 밸브 열림')
+}
+
+# E버전 릴레이 필드 매핑 (house_id=2 전용)
+RELAY_FIELD_MAPPING_E = {
+    'water_heater_flag': ('물가열기 상태(릴레이1)', '물가열기', '습도를 위해서 내부에 분사되는 물의 온도 조절을 통해 내부온도를 올리는 장치'),
+    'fog_occurs_flag': ('분사펌프 상태(릴레이2)', '분사펌프', '가동시 재배사 내부로에 포그가 흡입되어 습도를 올리는 장치'),
+    'radiator_flag': ('라디에터 상태(릴레이4)', '라디에터', '수온을 순환하는 장치로 재배사로 흡인되는 공기를 수온도로 유지하는 장치'),
+    'irrigation_flag': ('관수밸브 상태(릴레이6)', '관수밸브', '하루에 재배사의 버섯배지에 물을 분사하는 장치'),
+    'intake_fan_flag': ('흡기팬 상태(릴레이7)', '흡기팬', '재배사 내부로 공기를 흡입하는 장치'),
+    'exhaust_fan_flag': ('배기팬 상태(릴레이8)', '배기팬', '재배사 내부 공기를 외부로 배출 장치'),
+    'air_circulation_valve_flag': ('순환댐퍼 상태(릴레이9)', '순환댐퍼', '내부공기의 흐름을 제어하는 장치'),
+    'air_intake_valve_flag': ('흡기댐퍼 상태(릴레이10)', '흡기댐퍼', '외부공기를 내부로 흡입시키는 장치'),
+    'air_exhaust_valve_flag': ('배기댐퍼 상태(릴레이11)', '배기댐퍼', '내부공기를 외부로 배출시키는 장치'),
+    'drainage_motor_flag': ('배수밸브 상태(릴레이12)', '배수밸브', '시스템 내부에 있는 물을 외부로 배출하는데 사용되는 장치'),
+    'indoor_heater_flag': ('열풍기 상태(릴레이13)', '열풍기', '내부공기를 올리고자 할때 사용하는 장치'),
+    'indoor_heater2_flag': ('열풍댐퍼 상태(릴레이14)', '열풍댐퍼', '내부공기를 올리고자 할때 사용하는 추가 장치'),
+
+    'relay_1st_flag': ('물가열기 상태(릴레이1)', '물가열기', 'true: 수온 상승'),
+    'relay_2st_flag': ('분사펌프 상태(릴레이2)', '분사펌프', 'true: 습도 상승'),
+    'relay_3st_flag': ('라디에터 상태(릴레이3)', '라디에터', 'true: 수온 상승'),
+    'relay_5st_flag': ('조명토글 상태(릴레이5)', '조명토글', 'true: 조염 켜짐'),
+    'relay_6st_flag': ('관수밸브 상태(릴레이6)', '관수밸브', 'true: 관수밸브 함'),
+    'relay_7st_flag': ('흡기팬 상태(릴레이7)', '흡기팬', 'true: 외부 공기를 내부로 흡입하는 환풍기 가동'),
+    'relay_8st_flag': ('배기팬 상태(릴레이8)', '배기팬', 'true: 내부 공기를 외부로 배출하는 환풍기 가동'),
+    'relay_9st_flag': ('순환댐퍼 상태(릴레이9)', '순환댐퍼', 'true: 내부공기 순환 밸브 열림'),
+    'relay_10st_flag': ('흡기댐퍼 상태(릴레이10)', '흡기댐퍼', 'true: 외부공기를 내부로 흡입하는 밸브 열림'),
+    'relay_11st_flag': ('배기댐퍼 상태(릴레이11)', '배기댐퍼', 'true: 내부공기를 외부로 배출하는 밸브 열림'),
+    'relay_12st_flag': ('배수밸브 상태(릴레이12)', '배수밸브', 'tuue: 배수를 통한 수온을 평균 지하수 온도로 유지'),
+    'relay_13st_flag': ('열풍기 상태(릴레이13)', '열풍기', 'true: 내부온도 상승'),
+    'relay_14st_flag': ('열풍댐퍼 상태(릴레이14)', '열풍댐퍼', 'true: 히터열기를 재배사로 배출하는 밸브 열림')
+}
+
+
+def get_sensor_name(key):
+    if key in SENSOR_FIELD_MAPPING:
+        return SENSOR_FIELD_MAPPING[key][0]
+    return key
+
+
+def get_relay_name(relay_key, house_id=None, default=None):
+    mapping = get_relay_mapping(house_id)
+    entry = mapping.get(relay_key)
+
+    if isinstance(entry, (list, tuple)) and entry:
+        if len(entry) > 1 and entry[1]:
+            return entry[1]
+        return entry[0]
+
+    return default or relay_key
+
+
+def get_sensor_field_mapping():
+    return SENSOR_FIELD_MAPPING
+
+
+def get_relay_field_mapping(house_id=None):
+    return get_relay_mapping(house_id=house_id)
+
+
+def get_relay_mapping(house_id=None):
+    if house_id == 2:
+        return RELAY_FIELD_MAPPING_E
+    return RELAY_FIELD_MAPPING
+
+
+_RETURN_INDEX = {'function_detail': 0, 'function_name': 1, 'function_content': 2}
+
+
+def search_relay_function(search_item, search_type, search_value, return_type):
+    mapping = {'rfm': RELAY_FIELD_MAPPING, 'rfm_e': RELAY_FIELD_MAPPING_E}.get(search_item)
+    if not mapping:
+        return None
+
+    # 키 검색
+    if search_type == 'relay_name':
+        found_key = search_value if search_value in mapping else None
+    elif search_type == 'function_name':
+        found_key = next((k for k, v in mapping.items() if len(v) > 1 and v[1] == search_value), None)
+    else:
+        return None
+
+    if not found_key:
+        return None
+
+    if return_type in ('english_name', 'relay_name'):
+        return found_key
+
+    idx = _RETURN_INDEX.get(return_type)
+    if idx is not None:
+        val = mapping[found_key]
+        return val[idx] if len(val) > idx else None
+    return None

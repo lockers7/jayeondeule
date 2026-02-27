@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jayeondeule.smartfarm.dto.relay.RelayDTO;
 import com.jayeondeule.smartfarm.dto.relay.RelayInsertDTO;
 import com.jayeondeule.smartfarm.entity.relay.RelayRecording;
-import com.jayeondeule.smartfarm.entity.relay.RelayRecordingId;
 import com.jayeondeule.smartfarm.repository.RelayRecordingRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;

@@ -111,40 +111,7 @@ export default function RelayDashboard({farmId, house, setSelectedHouse}) {
 
     return (
         <div>
-            <Row className="mt-4 d-flex justify-content-center">
-                <Col xs="auto" key={house.housId} className="mb-3">
-                    <Card className={`text-center shadow-sm ${modeCardBorder()}`}>
-                        <Card.Body className="position-relative">
-                            <div style={{position: "absolute", top: "0.2rem", right: "0.35rem", zIndex: 10}}>
-                                <OverlayTrigger
-                                    placement="top"
-                                    overlay={
-                                        <Tooltip id={`tooltip-info`}>
-                                            인공지능: AI가 릴레이를 자동 제어합니다.<br/>
-                                            알고리즘: 센서 기반 알고리즘이 자동 제어합니다.<br/>
-                                            수동제어: 개별 릴레이를 직접 제어할 수 있습니다.
-                                        </Tooltip>
-                                    }
-                                >
-                                    <InfoCircle size={16}/>
-                                </OverlayTrigger>
-                            </div>
-                            <Card.Title className="mb-2">운용방식</Card.Title>
-                            <Form.Select
-                                value={getOperationMode()}
-                                onChange={handleModeChange}
-                                disabled={toggleModeMutation.isPending}
-                                style={{padding: "4px 2.75rem 4px 8px", width: "fit-content", margin: "0 auto"}}
-                            >
-                                <option value="ai">인공지능</option>
-                                <option value="algorithm">알고리즘</option>
-                                <option value="manual">수동제어</option>
-                            </Form.Select>
-                        </Card.Body>
-                    </Card>
-                </Col>
-            </Row>
-            <hr/>
+            {/* 운용방식 카드 숨김 — 상단 그리드에서 선택 */}
             <Row>
                 {relayLabels.map((item) => (
                     <RelayCard

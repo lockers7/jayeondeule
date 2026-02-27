@@ -11,6 +11,7 @@
 # create_collection: 컬렉션 생성
 # ensure_required_collections_exist: 필수 컬렉션 존재 확인 및 생성
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+import time
 from datetime import datetime
 
 from agri_ai_core.logs import setup_logger
@@ -23,6 +24,8 @@ from agri_ai_core.src.chroma.config import (
     DATABASE,
     CHROMA_API_BASE,
     _COLLECTION_ID_MAP,
+    _COLLECTION_ID_TIMESTAMPS,
+    _COLLECTION_CACHE_TTL,
 )
 
 logger = setup_logger(__name__)
@@ -82,30 +85,36 @@ def heartbeat():
 # Returns:
 # str: 컬렉션 ID 또는 None
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def _is_valid_uuid(value):
+    """UUID 형식인지 확인 (하이픈 포함 36자 또는 하이픈 포함 문자열)"""
+    return isinstance(value, str) and ("-" in value or len(value) == 36)
+
+
+def _refresh_collection_ids():
+    """list_collections()를 호출하여 모든 컬렉션 ID를 캐시에 갱신"""
+    now = time.time()
+    collections = list_collections().get("collections", [])
+    for col in collections:
+        _COLLECTION_ID_MAP[col["name"]] = col["id"]
+        _COLLECTION_ID_TIMESTAMPS[col["name"]] = now
+
+
 def get_collection_id_from_name(collection_name):
+    cached = _COLLECTION_ID_MAP.get(collection_name)
+    ts = _COLLECTION_ID_TIMESTAMPS.get(collection_name, 0)
+    now = time.time()
+
+    # UUID가 유효하고 TTL 이내면 바로 반환 (heartbeat 스킵)
+    if cached and _is_valid_uuid(cached) and (now - ts < _COLLECTION_CACHE_TTL):
+        return cached
+
+    # TTL 만료 또는 캐시 미스 → heartbeat + refresh
     status = heartbeat()
     if "error" in status:
         logger.error("ChromaDB 연결 실패. 캐시 초기화 불가")
         return None
 
-    cached = _COLLECTION_ID_MAP.get(collection_name)
-    if cached:
-        if isinstance(cached, str) and ("-" in cached or len(cached) == 36):
-            return cached
-        try:
-            collections = list_collections().get("collections", [])
-            for col in collections:
-                _COLLECTION_ID_MAP[col["name"]] = col["id"]
-            refreshed = _COLLECTION_ID_MAP.get(collection_name)
-            if refreshed:
-                return refreshed
-        except Exception:
-            pass
-
-    collections = list_collections().get("collections", [])
-    for col in collections:
-        _COLLECTION_ID_MAP[col["name"]] = col["id"]
-
+    _refresh_collection_ids()
     return _COLLECTION_ID_MAP.get(collection_name)
 
 
@@ -165,16 +174,20 @@ def list_collections():
         if status_code != 200:
             return {"error": f"컬렉션 목록 조회 실패: {status_code} {text}"}
 
+        now = time.time()
+
         if isinstance(collections_json, list):
             for collection in collections_json:
                 if isinstance(collection, dict) and "name" in collection and "id" in collection:
                     _COLLECTION_ID_MAP[collection["name"]] = collection["id"]
+                    _COLLECTION_ID_TIMESTAMPS[collection["name"]] = now
             return {"collections": collections_json}
 
         if isinstance(collections_json, dict) and "collections" in collections_json:
             for collection in collections_json.get("collections", []):
                 if isinstance(collection, dict) and "name" in collection and "id" in collection:
                     _COLLECTION_ID_MAP[collection["name"]] = collection["id"]
+                    _COLLECTION_ID_TIMESTAMPS[collection["name"]] = now
             return {"collections": collections_json.get("collections", [])}
 
         return {"collections": []}
@@ -249,16 +262,10 @@ def create_collection(collection_name=None, metadata=None):
 def ensure_required_collections_exist():
     try:
         names = [
-            settings.collections.farm or '',
-            settings.collections.source or '',
-            settings.collections.stats or '',
-            settings.collections.optimal or '',
-            settings.collections.learned or '',
-            settings.collections.setting or '',
-            settings.collections.docs_learned or '',
-            settings.collections.last_learned or '',
-            settings.collections.self_learned or '',
-            settings.collections.pattern_learned or '',
+            settings.collections.farm_knowledge or '',
+            settings.collections.document or '',
+            settings.collections.conversation or '',
+            settings.collections.web_knowledge or '',
         ]
         for name in [n for n in names if n]:
             result = create_collection(name)

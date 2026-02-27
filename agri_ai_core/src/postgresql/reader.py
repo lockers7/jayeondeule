@@ -21,212 +21,60 @@ logger = setup_logger(__name__)
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 농장-재배사 목록 조회
-# 모든 농장-재배사 목록 조회
-#
-# Returns:
-#     list: 농장-재배사 목록
+# DB 조회 공통 래퍼 (fetch_all / fetch_one 통합)
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def _db_query(query, vals=(), *, fetch="all", error_msg="DB 조회", default=None):
+    with db_session() as database:
+        try:
+            if fetch == "one":
+                return database.fetch_one(query=query, vals=vals)
+            return database.fetch_all(query=query, vals=vals, as_dict=True)
+        except Exception as e:
+            logger.warning(f"{error_msg}: {e}")
+            return default
+
+
 def read_farm_house_list():
-    with db_session() as database:
-        try:
-            farmhouses = database.fetch_all(query=dbQry.GET_FARM_HOUSE_LIST, vals=(), as_dict=True)
-            return farmhouses
-        except Exception as e:
-            import traceback
-            logger.error(f"농장-재배사 목록 조회 오류: {str(e)}")
-            logger.error(f"스택 트레이스: {traceback.format_exc()}")
-            return []
+    return _db_query(dbQry.GET_FARM_HOUSE_LIST, error_msg="농장-재배사 목록 조회", default=[])
 
 
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# Units 데이터 조회
-# 특정 농장/재배사의 Units 데이터 조회
-#
-# Args:
-#     farm_id: 농장 ID
-#     house_id: 재배사 ID
-#
-# Returns:
-#     list: Units 데이터 목록
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def read_units_data(farm_id, house_id):
-    with db_session() as database:
-        try:
-            units = database.fetch_all(
-                query=dbQry.GET_UNITS_VALUE,
-                vals=(farm_id, int(house_id)),
-                as_dict=True
-            )
-            return units
-        except Exception as e:
-            logger.warning(f"농장 {farm_id}, 재배사 {house_id}의 Units 데이터 조회 오류: {str(e)}")
-            return []
+    return _db_query(dbQry.GET_UNITS_VALUE, (farm_id, int(house_id)),
+                     error_msg=f"Units 조회 farm={farm_id} house={house_id}", default=[])
 
 
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# Crops 데이터 조회
-# 특정 농장/재배사의 Crops 데이터 조회
-#
-# Args:
-#     farm_id: 농장 ID
-#     house_id: 재배사 ID
-#
-# Returns:
-#     list: Crops 데이터 목록
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def read_crops_data(farm_id, house_id):
-    with db_session() as database:
-        try:
-            crops = database.fetch_all(
-                query=dbQry.GET_CROPS_VALUE,
-                vals=(farm_id, int(house_id)),
-                as_dict=True
-            )
-            return crops
-        except Exception as e:
-            logger.warning(f"농장 {farm_id}, 재배사 {house_id}의 Crops 데이터 조회 오류: {str(e)}")
-            return []
+    return _db_query(dbQry.GET_CROPS_VALUE, (farm_id, int(house_id)),
+                     error_msg=f"Crops 조회 farm={farm_id} house={house_id}", default=[])
 
 
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 현재 생육단계 조회
-# FARMHOUSE_M_INFO.crop_lvel + CODE_M_INFO(crop_lvel) JOIN으로 생육단계명 반환
-#
-# Args:
-#     farm_id: 농장 ID
-#     house_id: 재배사 ID
-#
-# Returns:
-#     str: 생육단계 문자열 (발아기/생육기/수확기/휴지기) 또는 None
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def read_current_growth_stage(farm_id, house_id):
-    with db_session() as database:
-        try:
-            result = database.fetch_one(
-                query=dbQry.GET_CURRENT_CROP_LVEL,
-                vals=(farm_id, int(house_id))
-            )
-            if result:
-                return result.get("생육단계")
-            return None
-        except Exception as e:
-            logger.warning(f"농장 {farm_id}, 재배사 {house_id}의 생육단계 조회 오류: {str(e)}")
-            return None
+    result = _db_query(dbQry.GET_CURRENT_CROP_LVEL, (farm_id, int(house_id)),
+                       fetch="one", error_msg=f"생육단계 조회 farm={farm_id} house={house_id}")
+    return result.get("생육단계") if result else None
 
 
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 농장 정보 조회
-# 모든 농장 상세 정보 조회
-#
-# Returns:
-#     list: 농장 정보 목록
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def read_farm_info():
-    with db_session() as database:
-        try:
-            farms = database.fetch_all(query=dbQry.GET_FARM_INFO_LIST, vals=(), as_dict=True)
-            return farms
-        except Exception as e:
-            logger.error(f"농장 정보 조회 오류: {str(e)}")
-            return []
+    return _db_query(dbQry.GET_FARM_INFO_LIST, error_msg="농장 정보 조회", default=[])
 
 
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 최적 조건 조회
-# 특정 농장/재배사의 최적 환경 조건 조회
-#
-# Args:
-#     farm_id: 농장 ID
-#     house_id: 재배사 ID
-#
-# Returns:
-#     dict: 최적 조건 또는 None
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def read_optimal_condition(farm_id, house_id):
-    with db_session() as database:
-        try:
-            condition = database.fetch_one(
-                query=dbQry.GET_OPTIMAL_CONDITION,
-                vals=(farm_id, house_id)
-            )
-            return condition
-        except Exception as e:
-            logger.warning(f"농장 {farm_id}, 재배사 {house_id}의 최적 조건 조회 오류: {str(e)}")
-            return None
+    return _db_query(dbQry.GET_OPTIMAL_CONDITION, (farm_id, house_id),
+                     fetch="one", error_msg=f"최적조건 조회 farm={farm_id} house={house_id}")
 
 
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 현재 센서 정보 조회
-# 특정 농장/재배사의 현재 센서 정보 조회
-#
-# Args:
-#     farm_id: 농장 ID
-#     house_id: 재배사 ID
-#
-# Returns:
-#     dict: 현재 센서 정보 또는 None
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def read_current_sensor_info(farm_id, house_id):
-    with db_session() as database:
-        try:
-            sensor = database.fetch_one(
-                query=dbQry.GET_NOW_UNIT_INFO,
-                vals=(farm_id, house_id)
-            )
-            return sensor
-        except Exception as e:
-            logger.warning(f"농장 {farm_id}, 재배사 {house_id}의 현재 센서 정보 조회 오류: {str(e)}")
-            return None
+    return _db_query(dbQry.GET_NOW_UNIT_INFO, (farm_id, house_id),
+                     fetch="one", error_msg=f"센서정보 조회 farm={farm_id} house={house_id}")
 
 
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 릴레이 정보 조회
-# 특정 농장/재배사의 최신 릴레이 정보 조회
-#
-# Args:
-#     farm_id: 농장 ID
-#     house_id: 재배사 ID
-#
-# Returns:
-#     dict: 릴레이 정보 또는 None
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def read_latest_relay_info(farm_id, house_id):
-    with db_session() as database:
-        try:
-            relay = database.fetch_one(
-                query=dbQry.GET_LATEST_RELAY_INFO,
-                vals=(farm_id, house_id)
-            )
-            return relay
-        except Exception as e:
-            logger.warning(f"농장 {farm_id}, 재배사 {house_id}의 릴레이 정보 조회 오류: {str(e)}")
-            return None
+    return _db_query(dbQry.GET_LATEST_RELAY_INFO, (farm_id, house_id),
+                     fetch="one", error_msg=f"릴레이정보 조회 farm={farm_id} house={house_id}")
 
 
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 조명/관수밸브 설정 조회
-# 특정 농장/재배사의 조명/관수밸브 설정 조회
-#
-# Args:
-#     farm_id: 농장 ID
-#     house_id: 재배사 ID
-#     unit_type: 장치 유형 ('light' 또는 'irrigation')
-#
-# Returns:
-#     list: 설정 목록
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def read_light_irrigation_settings(farm_id, house_id, unit_type):
-    with db_session() as database:
-        try:
-            settings = database.fetch_all(
-                query=dbQry.GET_LIGHT_IRRIGATION,
-                vals=(farm_id, house_id, unit_type.lower()),
-                as_dict=True
-            )
-            return settings
-        except Exception as e:
-            logger.warning(f"농장 {farm_id}, 재배사 {house_id}의 {unit_type} 설정 조회 오류: {str(e)}")
-            return []
+    return _db_query(dbQry.GET_LIGHT_IRRIGATION, (farm_id, house_id, unit_type.lower()),
+                     error_msg=f"{unit_type} 설정 조회 farm={farm_id} house={house_id}", default=[])
 
 

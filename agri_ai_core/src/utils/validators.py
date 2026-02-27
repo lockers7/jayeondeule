@@ -37,7 +37,7 @@ def clean_sensor_value(value):
                 return round(float(match.group()), 2)
 
         return round(float(value), 2)
-    except Exception:
+    except (ValueError, TypeError):
         return 0.0
 
 

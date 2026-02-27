@@ -27,9 +27,9 @@ from datetime import datetime
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.config import STATS_INTERVAL_MINUTES, RELAY_KEYS
-from agri_ai_core.src.chroma.collections import job_status_collection
+from agri_ai_core.src.postgresql.connection import db_session
+from agri_ai_core.src.postgresql import queries as dbQry
 from agri_ai_core.src.utils import clean_sensor_value
-from agri_ai_core.src.chroma.operations import upsert_collection_data
 
 logger = setup_logger(__name__)
 
@@ -240,8 +240,34 @@ def collect_optimal_data(units_data, top_crops, current_hour):
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 온도 조건 분석
+# 센서 통계 공통 헬퍼
 # --->
+# 센서 데이터에서 percentile/mean 통계를 추출하여 optimal_conditions에 반영
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def _apply_stats(values, target_dict):
+    """값 리스트에 대해 25%, 75% 백분위 및 평균을 계산하여 target_dict에 적용."""
+    if values:
+        target_dict["min"] = round(np.percentile(values, 25), 1)
+        target_dict["max"] = round(np.percentile(values, 75), 1)
+        target_dict["optimal"] = round(np.mean(values), 1)
+
+
+def _collect_sensor_values(sensor_data, field_key):
+    """센서 데이터에서 특정 필드의 값 리스트를 추출 (0 제외)."""
+    return [entry["values"].get(field_key, 0) for entry in sensor_data
+            if entry.get("values", {}).get(field_key)]
+
+
+def _collect_day_night_values(sensor_data, field_key):
+    """센서 데이터에서 주간/야간 분리하여 값 리스트 추출."""
+    day = [entry["values"].get(field_key, 0) for entry in sensor_data
+           if entry["is_daytime"] and entry.get("values", {}).get(field_key)]
+    night = [entry["values"].get(field_key, 0) for entry in sensor_data
+             if not entry["is_daytime"] and entry.get("values", {}).get(field_key)]
+    return day, night
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 온도 조건 분석
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def analyze_temperature_conditions(sensor_data, optimal_conditions):
@@ -261,84 +287,41 @@ def analyze_temperature_conditions(sensor_data, optimal_conditions):
             else:
                 night_temps.append(temp_value)
 
-    if day_temps:
-        optimal_conditions["temperature"]["day"]["min"] = round(np.percentile(day_temps, 25), 1)
-        optimal_conditions["temperature"]["day"]["max"] = round(np.percentile(day_temps, 75), 1)
-        optimal_conditions["temperature"]["day"]["optimal"] = round(np.mean(day_temps), 1)
-
-    if night_temps:
-        optimal_conditions["temperature"]["night"]["min"] = round(np.percentile(night_temps, 25), 1)
-        optimal_conditions["temperature"]["night"]["max"] = round(np.percentile(night_temps, 75), 1)
-        optimal_conditions["temperature"]["night"]["optimal"] = round(np.mean(night_temps), 1)
+    _apply_stats(day_temps, optimal_conditions["temperature"]["day"])
+    _apply_stats(night_temps, optimal_conditions["temperature"]["night"])
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 습도 조건 분석
-# --->
 # 습도 조건 분석
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def analyze_humidity_conditions(sensor_data, optimal_conditions):
-    day_humidity = [entry["values"].get("indoor_humidity_value", 0)
-                    for entry in sensor_data if entry["is_daytime"]
-                    and entry["values"].get("indoor_humidity_value")]
-    night_humidity = [entry["values"].get("indoor_humidity_value", 0)
-                      for entry in sensor_data if not entry["is_daytime"]
-                      and entry["values"].get("indoor_humidity_value")]
-
-    if day_humidity:
-        optimal_conditions["humidity"]["day"]["min"] = round(np.percentile(day_humidity, 25), 1)
-        optimal_conditions["humidity"]["day"]["max"] = round(np.percentile(day_humidity, 75), 1)
-        optimal_conditions["humidity"]["day"]["optimal"] = round(np.mean(day_humidity), 1)
-
-    if night_humidity:
-        optimal_conditions["humidity"]["night"]["min"] = round(np.percentile(night_humidity, 25), 1)
-        optimal_conditions["humidity"]["night"]["max"] = round(np.percentile(night_humidity, 75), 1)
-        optimal_conditions["humidity"]["night"]["optimal"] = round(np.mean(night_humidity), 1)
+    day_humidity, night_humidity = _collect_day_night_values(sensor_data, "indoor_humidity_value")
+    _apply_stats(day_humidity, optimal_conditions["humidity"]["day"])
+    _apply_stats(night_humidity, optimal_conditions["humidity"]["night"])
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# CO2 조건 분석
-# --->
 # CO2 조건 분석
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def analyze_co2_conditions(sensor_data, optimal_conditions):
-    co2_concentration_values = [entry["values"].get("co2_concentration_value", 0)
-                                for entry in sensor_data
-                                if entry["values"].get("co2_concentration_value")]
-    if co2_concentration_values:
-        optimal_conditions["co2"]["min"] = round(np.percentile(co2_concentration_values, 25), 1)
-        optimal_conditions["co2"]["max"] = round(np.percentile(co2_concentration_values, 75), 1)
-        optimal_conditions["co2"]["optimal"] = round(np.mean(co2_concentration_values), 1)
+    values = _collect_sensor_values(sensor_data, "co2_concentration_value")
+    _apply_stats(values, optimal_conditions["co2"])
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 수온 조건 분석
-# --->
 # 수온 조건 분석
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def analyze_water_temperature_conditions(sensor_data, optimal_conditions):
-    water_temps = [entry["values"].get("water_temperature_value", 0)
-                   for entry in sensor_data
-                   if entry["values"].get("water_temperature_value")]
-    if water_temps:
-        optimal_conditions["water_temperature"]["min"] = round(np.percentile(water_temps, 25), 1)
-        optimal_conditions["water_temperature"]["max"] = round(np.percentile(water_temps, 75), 1)
-        optimal_conditions["water_temperature"]["optimal"] = round(np.mean(water_temps), 1)
+    values = _collect_sensor_values(sensor_data, "water_temperature_value")
+    _apply_stats(values, optimal_conditions["water_temperature"])
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 광량 조건 분석
-# --->
 # 광량 조건 분석
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def analyze_light_level_conditions(sensor_data, optimal_conditions):
-    light_levels = [entry["values"].get("light_level_value", 0)
-                    for entry in sensor_data
-                    if entry["values"].get("light_level_value")]
-    if light_levels:
-        optimal_conditions["light_level"]["min"] = round(np.percentile(light_levels, 25), 1)
-        optimal_conditions["light_level"]["max"] = round(np.percentile(light_levels, 75), 1)
-        optimal_conditions["light_level"]["optimal"] = round(np.mean(light_levels), 1)
+    values = _collect_sensor_values(sensor_data, "light_level_value")
+    _apply_stats(values, optimal_conditions["light_level"])
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -535,18 +518,15 @@ def process_stats_and_optimal_data():
         stats_time_str = stats_timestamp.strftime("%Y-%m-%d %H:%M:00")
         logger.debug(f"{interval_min}분 단위 집계 시간: {stats_time_str}")
 
-        # 마지막 실행 시간 기록
+        # 마지막 실행 시간 기록 (PostgreSQL)
         try:
-            last_run_id = "last_learned_datetime"
             current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            result = upsert_collection_data(
-                "process_stats_and_optimal_data",
-                job_status_collection(),
-                last_run_id,
-                f"마지막실행일시: {current_datetime}",
-                {"last_run": current_datetime}
-            )
-            logger.debug(f"마지막 실행 시간 기록 {result}: {current_datetime}")
+            with db_session() as database:
+                database.execute_query(
+                    dbQry.UPSERT_AI_LEARNING_STATUS,
+                    ("last_learned_datetime", current_datetime)
+                )
+            logger.debug(f"마지막 실행 시간 기록 완료: {current_datetime}")
         except Exception as e:
             logger.error(f"마지막 실행 시간 기록 중 오류: {e}")
 

@@ -24,12 +24,17 @@ export default function LoginPage() {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        setErrorMessage("");
         try {
             const res = await loginUser(loginInfo);
             dispatch(loginSuccess(res.data));
             navigate("/");
         } catch (err) {
-            setErrorMessage(err.response.data.message);
+            if (err.response && err.response.data && err.response.data.message) {
+                setErrorMessage(err.response.data.message);
+            } else {
+                setErrorMessage("로그인에 실패했습니다. 아이디와 비밀번호를 확인해주세요.");
+            }
         }
     };
 

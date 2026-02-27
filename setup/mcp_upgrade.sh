@@ -107,6 +107,8 @@ check_versions() {
 
         if [ "$LOCAL_HASH" = "$REMOTE_HASH" ]; then
             log_info "    상태:  최신 상태"
+        elif git merge-base --is-ancestor "$REMOTE_HASH" HEAD 2>/dev/null; then
+            log_info "    상태:  최신 상태 (로컬 커스텀 커밋 포함)"
         else
             log_warn "    상태:  업데이트 가능"
         fi

@@ -18,6 +18,8 @@ from agri_ai_core.src.postgresql.reader import read_latest_relay_info
 
 logger = setup_logger(__name__)
 
+RELAY_COUNT = 16
+
 
 def _get_alias_mapping(house_id):
     if int(house_id) == 2:
@@ -74,7 +76,7 @@ _RELAY_DESC_E = {
 def format_relay_detail(house_id, relay_values):
     desc_map = _RELAY_DESC_E if int(house_id) == 2 else _RELAY_DESC_STANDARD
     parts = []
-    for i in range(1, 17):
+    for i in range(1, RELAY_COUNT + 1):
         key = f"relay_{i}st_flag"
         value = relay_values.get(key, False)
         eng, kor = desc_map.get(key, (key, ''))
@@ -88,7 +90,7 @@ def log_relay_detail(farm_id, house_id):
     if not current:
         return
     desc_map = _RELAY_DESC_E if int(house_id) == 2 else _RELAY_DESC_STANDARD
-    for i in range(1, 17):
+    for i in range(1, RELAY_COUNT + 1):
         key = f"relay_{i}st_flag"
         value = bool(current.get(key, False))
         eng, kor = desc_map.get(key, (key, ''))
@@ -121,11 +123,11 @@ def set_relay_value(farm_id, house_id, relay_settings, raw_mode=False):
             if current:
                 relay_values = {
                     f"relay_{i}st_flag": bool(current.get(f"relay_{i}st_flag", False))
-                    for i in range(1, 17)
+                    for i in range(1, RELAY_COUNT + 1)
                 }
             else:
                 # DB에 상태가 없으면 기본값 사용
-                relay_values = {f"relay_{i}st_flag": False for i in range(1, 17)}
+                relay_values = {f"relay_{i}st_flag": False for i in range(1, RELAY_COUNT + 1)}
 
             # house_id별 alias 매핑 적용
             alias_mapping = _get_alias_mapping(house_id)

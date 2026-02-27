@@ -1,5 +1,5 @@
 import React, {useEffect, useState} from "react";
-import {Card, Form, Row, Col, Button, InputGroup} from "react-bootstrap";
+import {Card, Form, Row, Col, Button, InputGroup, Badge} from "react-bootstrap";
 import {Dash} from "react-bootstrap-icons";
 import {deleteSetting, getSettings, insertSettings, patchSetting} from "../../utils/settingUtil.js";
 import AlertModal from "../common/AlertModal.jsx";
@@ -8,20 +8,25 @@ const compactInput = { maxWidth: "100px" };
 const labelStyle  = { minWidth: "110px", fontWeight: "bold", marginBottom: 0, whiteSpace: "nowrap" };
 const greenCard   = { backgroundColor: "#fff", border: "2px solid #28a745" };
 
+const WEEKDAYS = [
+    {value: "1", label: "월"},
+    {value: "2", label: "화"},
+    {value: "3", label: "수"},
+    {value: "4", label: "목"},
+    {value: "5", label: "금"},
+    {value: "6", label: "토"},
+    {value: "7", label: "일"},
+];
+
 export default function SensorSettingDashboard({farmId, selectedHouse}) {
     const [show, setShow] = useState(false);
-
     const [deleteTarget, setDeleteTarget] = useState({});
 
     const [sensorSetting, setSensorSetting] = useState({
-        tprtMin: "",
-        tprtMax: "",
-        watrTprtMin: "",
-        watrTprtMax: "",
-        hmdtMin: "",
-        hmdtMax: "",
-        co2Min: "",
-        co2Max: "",
+        tprtMin: "", tprtMax: "",
+        watrTprtMin: "", watrTprtMax: "",
+        hmdtMin: "", hmdtMax: "",
+        co2Min: "", co2Max: "",
     });
 
     const [lightSchedules, setLightSchedules] = useState([]);
@@ -35,8 +40,34 @@ export default function SensorSettingDashboard({farmId, selectedHouse}) {
         patchSetting(farmId, selectedHouse, newSchedules[index]);
     };
 
+    const handleExcsTypeChange = (index, type, newExcsType) => {
+        const newSchedules = type === "LIGHT" ? [...lightSchedules] : [...waterSchedules];
+        newSchedules[index].excsType = newExcsType;
+        if (newExcsType === "daily") {
+            newSchedules[index].excsItvl = null;
+            newSchedules[index].excsStrtDate = null;
+            newSchedules[index].excsWkdy = null;
+        } else if (newExcsType === "interval") {
+            newSchedules[index].excsWkdy = null;
+        } else if (newExcsType === "weekdays") {
+            newSchedules[index].excsItvl = null;
+            newSchedules[index].excsStrtDate = null;
+        }
+        type === "LIGHT" ? setLightSchedules(newSchedules) : setWaterSchedules(newSchedules);
+        patchSetting(farmId, selectedHouse, newSchedules[index]);
+    };
+
+    const handleWeekdayToggle = (index, type, dayValue) => {
+        const schedules = type === "LIGHT" ? lightSchedules : waterSchedules;
+        const current = schedules[index].excsWkdy ? schedules[index].excsWkdy.split(",") : [];
+        const updated = current.includes(dayValue)
+            ? current.filter(d => d !== dayValue)
+            : [...current, dayValue].sort();
+        handleScheduleChange(index, type, "excsWkdy", updated.length > 0 ? updated.join(",") : null);
+    };
+
     const addSchedule = (type) => {
-        const newSchedule = {strtTime: "00:00", fnshTime: "00:00", dlteYn: false, unitType: type};
+        const newSchedule = {strtTime: "00:00", fnshTime: "00:00", dlteYn: false, unitType: type, excsType: "daily", excsItvl: null, excsStrtDate: null, excsWkdy: null};
         if (type === "LIGHT") {
             setLightSchedules([...lightSchedules, newSchedule]);
         } else {
@@ -75,14 +106,10 @@ export default function SensorSettingDashboard({farmId, selectedHouse}) {
             setSensorSetting(newSensorSetting);
         } else {
             setSensorSetting({
-                tprtMin: "",
-                tprtMax: "",
-                watrTprtMin: "",
-                watrTprtMax: "",
-                hmdtMin: "",
-                hmdtMax: "",
-                co2Min: "",
-                co2Max: "",
+                tprtMin: "", tprtMax: "",
+                watrTprtMin: "", watrTprtMax: "",
+                hmdtMin: "", hmdtMax: "",
+                co2Min: "", co2Max: "",
             });
         }
 
@@ -94,7 +121,11 @@ export default function SensorSettingDashboard({farmId, selectedHouse}) {
                 fnshTime: item.fnshTime,
                 dlteYn: item.dlteYn,
                 setnDttm: item.setnDttm,
-                unitType: item.unitType
+                unitType: item.unitType,
+                excsType: item.excsType || "daily",
+                excsItvl: item.excsItvl,
+                excsStrtDate: item.excsStrtDate,
+                excsWkdy: item.excsWkdy,
             };
 
             if (item.unitType === "LIGHT") {
@@ -105,11 +136,90 @@ export default function SensorSettingDashboard({farmId, selectedHouse}) {
         });
     });
 
+    const renderScheduleItem = (schedule, idx, type) => {
+        const excsType = schedule.excsType || "daily";
+        const selectedWkdy = schedule.excsWkdy ? schedule.excsWkdy.split(",") : [];
+
+        return (
+            <Card key={idx} className="mb-2 p-2" style={{border: "1px solid #dee2e6", backgroundColor: "#fafffe"}}>
+                {/* 시간 + 토글 + 삭제 */}
+                <div className="d-flex align-items-center justify-content-center mb-1">
+                    <InputGroup style={{ maxWidth: "360px" }}>
+                        <Form.Control type="time" value={schedule.strtTime}
+                                      onChange={(e) => handleScheduleChange(idx, type, "strtTime", e.target.value)}/>
+                        <InputGroup.Text>~</InputGroup.Text>
+                        <Form.Control type="time" value={schedule.fnshTime}
+                                      onChange={(e) => handleScheduleChange(idx, type, "fnshTime", e.target.value)}/>
+                        <InputGroup.Text>
+                            <Form.Check
+                                type="switch"
+                                checked={!schedule.dlteYn}
+                                onClick={() => handleScheduleChange(idx, type, 'dlteYn', !schedule.dlteYn)}
+                                disabled={!(schedule.strtTime && schedule.fnshTime)}
+                            />
+                        </InputGroup.Text>
+                        <Button
+                            style={{ maxWidth: "20px", display: "flex", alignItems: "center", justifyContent: "center", padding: "0" }}
+                            variant="danger"
+                            onClick={() => { setShow(true); setDeleteTarget({id: idx, type}); }}
+                        >
+                            <Dash/>
+                        </Button>
+                    </InputGroup>
+                </div>
+
+                {/* 실행 유형 선택 */}
+                <div className="d-flex align-items-center justify-content-center gap-2 mb-1" style={{fontSize: "0.85rem"}}>
+                    <Form.Check inline type="radio" name={`excsType-${type}-${idx}`} id={`daily-${type}-${idx}`}
+                        label="매일" checked={excsType === "daily"}
+                        onChange={() => handleExcsTypeChange(idx, type, "daily")}/>
+                    <Form.Check inline type="radio" name={`excsType-${type}-${idx}`} id={`interval-${type}-${idx}`}
+                        label="N일마다" checked={excsType === "interval"}
+                        onChange={() => handleExcsTypeChange(idx, type, "interval")}/>
+                    <Form.Check inline type="radio" name={`excsType-${type}-${idx}`} id={`weekdays-${type}-${idx}`}
+                        label="요일선택" checked={excsType === "weekdays"}
+                        onChange={() => handleExcsTypeChange(idx, type, "weekdays")}/>
+                </div>
+
+                {/* interval 옵션: 간격 + 시작일 */}
+                {excsType === "interval" && (
+                    <div className="d-flex align-items-center justify-content-center gap-2 mb-1" style={{fontSize: "0.85rem"}}>
+                        <Form.Control type="number" min="1" style={{maxWidth: "60px", padding: "2px 6px"}}
+                            value={schedule.excsItvl || ""}
+                            onChange={(e) => handleScheduleChange(idx, type, "excsItvl", e.target.value ? parseInt(e.target.value) : null)}
+                        />
+                        <span>일마다</span>
+                        <Form.Control type="date" style={{maxWidth: "150px", padding: "2px 6px"}}
+                            value={schedule.excsStrtDate || ""}
+                            onChange={(e) => handleScheduleChange(idx, type, "excsStrtDate", e.target.value || null)}
+                        />
+                        <span style={{whiteSpace: "nowrap"}}>부터</span>
+                    </div>
+                )}
+
+                {/* weekdays 옵션: 요일 체크 */}
+                {excsType === "weekdays" && (
+                    <div className="d-flex align-items-center justify-content-center gap-1 mb-1">
+                        {WEEKDAYS.map(day => (
+                            <Badge key={day.value} pill
+                                bg={selectedWkdy.includes(day.value) ? "success" : "secondary"}
+                                style={{cursor: "pointer", fontSize: "0.8rem", padding: "5px 8px"}}
+                                onClick={() => handleWeekdayToggle(idx, type, day.value)}
+                            >
+                                {day.label}
+                            </Badge>
+                        ))}
+                    </div>
+                )}
+            </Card>
+        );
+    };
+
     return (
         <div className="p-3">
             <Card className="mb-3 p-3" style={greenCard}>
                 <div className="d-flex align-items-center justify-content-center mb-2">
-                    <span style={labelStyle}>온도(℃)</span>
+                    <span style={labelStyle}>온도(&#8451;)</span>
                     <InputGroup style={{ maxWidth: "260px" }}>
                         <Form.Control style={compactInput} value={sensorSetting && sensorSetting.tprtMin}
                             onChange={(e) => handleSensorSettingChange("tprtMin", e.target.value)}
@@ -121,7 +231,7 @@ export default function SensorSettingDashboard({farmId, selectedHouse}) {
                     </InputGroup>
                 </div>
                 <div className="d-flex align-items-center justify-content-center mb-2">
-                    <span style={labelStyle}>수온(℃)</span>
+                    <span style={labelStyle}>수온(&#8451;)</span>
                     <InputGroup style={{ maxWidth: "260px" }}>
                         <Form.Control style={compactInput} value={sensorSetting && sensorSetting.watrTprtMin}
                             onChange={(e) => handleSensorSettingChange("watrTprtMin", e.target.value)}
@@ -145,7 +255,7 @@ export default function SensorSettingDashboard({farmId, selectedHouse}) {
                     </InputGroup>
                 </div>
                 <div className="d-flex align-items-center justify-content-center mb-2">
-                    <span style={labelStyle}>CO₂(ppm)</span>
+                    <span style={labelStyle}>CO&#8322;(ppm)</span>
                     <InputGroup style={{ maxWidth: "260px" }}>
                         <Form.Control style={compactInput} value={sensorSetting && sensorSetting.co2Min}
                             onChange={(e) => handleSensorSettingChange("co2Min", e.target.value)}
@@ -162,33 +272,8 @@ export default function SensorSettingDashboard({farmId, selectedHouse}) {
                 <Col md={6} className="mb-3">
                     <Card className="p-3 h-100" style={greenCard}>
                         <h5 className="text-center">조명 시간 설정</h5>
-                        {lightSchedules.map((schedule, idx) => (
-                            <div key={idx} className="d-flex align-items-center justify-content-center mb-2">
-                                <InputGroup style={{ maxWidth: "360px" }}>
-                                    <Form.Control type="time" value={schedule.strtTime}
-                                                  onChange={(e) => handleScheduleChange(idx, "LIGHT", "strtTime", e.target.value)}/>
-                                    <InputGroup.Text>~</InputGroup.Text>
-                                    <Form.Control type="time" value={schedule.fnshTime}
-                                                  onChange={(e) => handleScheduleChange(idx, "LIGHT", "fnshTime", e.target.value)}/>
-                                    <InputGroup.Text>
-                                        <Form.Check
-                                            type="switch"
-                                            checked={!schedule.dlteYn}
-                                            onClick={() => handleScheduleChange(idx, 'LIGHT', 'dlteYn', !schedule.dlteYn)}
-                                            disabled={!(schedule.strtTime && schedule.fnshTime)}
-                                        />
-                                    </InputGroup.Text>
-                                    <Button
-                                        style={{ maxWidth: "20px", display: "flex", alignItems: "center", justifyContent: "center", padding: "0" }}
-                                        variant="danger"
-                                        onClick={() => { setShow(true); setDeleteTarget({id: idx, type: 'LIGHT'}); }}
-                                    >
-                                        <Dash/>
-                                    </Button>
-                                </InputGroup>
-                            </div>
-                        ))}
-                        <div className="text-center">
+                        {lightSchedules.map((schedule, idx) => renderScheduleItem(schedule, idx, "LIGHT"))}
+                        <div className="text-center mt-2">
                             <Button variant="success" size="sm" onClick={() => addSchedule("LIGHT")}>+ 시간 추가</Button>
                         </div>
                     </Card>
@@ -196,33 +281,8 @@ export default function SensorSettingDashboard({farmId, selectedHouse}) {
                 <Col md={6} className="mb-3">
                     <Card className="p-3 h-100" style={greenCard}>
                         <h5 className="text-center">관수 시간 설정</h5>
-                        {waterSchedules.map((schedule, idx) => (
-                            <div key={idx} className="d-flex align-items-center justify-content-center mb-2">
-                                <InputGroup style={{ maxWidth: "360px" }}>
-                                    <Form.Control type="time" value={schedule.strtTime}
-                                                  onChange={(e) => handleScheduleChange(idx, "WATER", "strtTime", e.target.value)}/>
-                                    <InputGroup.Text>~</InputGroup.Text>
-                                    <Form.Control type="time" value={schedule.fnshTime}
-                                                  onChange={(e) => handleScheduleChange(idx, "WATER", "fnshTime", e.target.value)}/>
-                                    <InputGroup.Text>
-                                        <Form.Check
-                                            type="switch"
-                                            checked={!schedule.dlteYn}
-                                            onClick={() => handleScheduleChange(idx, 'WATER', 'dlteYn', !schedule.dlteYn)}
-                                            disabled={!(schedule.strtTime && schedule.fnshTime)}
-                                        />
-                                    </InputGroup.Text>
-                                    <Button
-                                        style={{ maxWidth: "20px", display: "flex", alignItems: "center", justifyContent: "center", padding: "0" }}
-                                        variant="danger"
-                                        onClick={() => { setShow(true); setDeleteTarget({id: idx, type: 'WATER'}); }}
-                                    >
-                                        <Dash/>
-                                    </Button>
-                                </InputGroup>
-                            </div>
-                        ))}
-                        <div className="text-center">
+                        {waterSchedules.map((schedule, idx) => renderScheduleItem(schedule, idx, "WATER"))}
+                        <div className="text-center mt-2">
                             <Button variant="success" size="sm" onClick={() => addSchedule("WATER")}>+ 시간 추가</Button>
                         </div>
                     </Card>

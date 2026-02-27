@@ -8,7 +8,6 @@ import com.jayeondeule.smartfarm.dto.house.FarmHousePatchDTO;
 import com.jayeondeule.smartfarm.entity.house.FarmHouse;
 import com.jayeondeule.smartfarm.entity.house.FarmHouseId;
 import com.jayeondeule.smartfarm.repository.FarmHouseRepository;
-import com.jayeondeule.smartfarm.repository.FarmRepository;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -68,6 +67,7 @@ public class HouseService {
             target.setSnsrRfrsItvl(modifiedInfo.getSnsrRfrsItvl());
             target.setMnulCtrlFlag(modifiedInfo.isMnulCtrlFlag());
             target.setCtrlType(modifiedInfo.getCtrlType());
+            target.setCropLvel(modifiedInfo.getCropLvel());
 
             farmHouseRepository.save(target);
         }

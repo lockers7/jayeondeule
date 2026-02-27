@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+import threading
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Dict, Any, List, Optional
@@ -13,6 +14,9 @@ from typing import Dict, Any, List, Optional
 from agri_ai_core.logs import setup_logger
 
 logger = setup_logger(__name__)
+_WEB_SEARCH_RESULT_LIMIT = max(3, int(os.getenv("WEB_SEARCH_RESULT_LIMIT", "8")))
+_WEB_SEARCH_AUTO_FETCH_MAX = max(1, int(os.getenv("WEB_SEARCH_AUTO_FETCH_MAX", "3")))
+_WEB_SEARCH_CONTENT_MAX_CHARS = max(500, int(os.getenv("WEB_SEARCH_CONTENT_MAX_CHARS", "2000")))
 
 
 # ============================================================
@@ -48,10 +52,10 @@ def _search_via_naver_api(query: str, display: int = 10) -> Optional[List[Dict[s
     results = []
     seen_urls = set()
 
-    # 블로그 + 웹문서 2개 카테고리 검색
+    # 블로그 + 뉴스 2개 카테고리 검색
     categories = [
         ("blog", f"https://openapi.naver.com/v1/search/blog.json?query={urllib.parse.quote(query)}&display={display}&sort=sim"),
-        ("web", f"https://openapi.naver.com/v1/search/webkeyword.json?query={urllib.parse.quote(query)}&display={display}&sort=sim"),
+        ("news", f"https://openapi.naver.com/v1/search/news.json?query={urllib.parse.quote(query)}&display={display}&sort=sim"),
     ]
 
     for cat_name, url in categories:
@@ -157,7 +161,7 @@ def _search_via_brave_api(query: str, count: int = 10) -> Optional[List[Dict[str
         return None
 
 
-def _search_via_searxng(query: str, count: int = 15) -> Optional[List[Dict[str, Any]]]:
+def _search_via_searxng(query: str, count: Optional[int] = None) -> Optional[List[Dict[str, Any]]]:
     """
     SearXNG 자체 호스팅 메타 검색 엔진을 통한 검색
     무료, API 키 불필요, 다중 검색엔진 (Google/Naver/Bing/DuckDuckGo) 통합
@@ -166,6 +170,8 @@ def _search_via_searxng(query: str, count: int = 15) -> Optional[List[Dict[str, 
     searxng_url = os.getenv("SEARXNG_URL", "").strip()
     if not searxng_url:
         return None
+    if count is None:
+        count = _WEB_SEARCH_RESULT_LIMIT
 
     import urllib.request
     import urllib.parse
@@ -220,7 +226,7 @@ def _search_via_searxng(query: str, count: int = 15) -> Optional[List[Dict[str, 
         return None
 
 
-def _search_via_api(query: str) -> Optional[Dict[str, Any]]:
+def _search_via_api(query: str, count: Optional[int] = None) -> Optional[Dict[str, Any]]:
     """
     API 검색 통합 라우터
     우선순위: SearXNG(무료) → Naver/Brave(API키) → None(MCP fallback)
@@ -229,18 +235,22 @@ def _search_via_api(query: str) -> Optional[Dict[str, Any]]:
     t_start = time.time()
     is_korean = _is_korean_query(query)
 
+    target_count = max(3, int(count or _WEB_SEARCH_RESULT_LIMIT))
+    naver_display = min(10, target_count)
+    brave_count = min(20, target_count)
+
     # SearXNG: 무료, API 키 불필요 → 항상 최우선 시도
-    search_order = [("searxng", lambda: _search_via_searxng(query))]
+    search_order = [("searxng", lambda: _search_via_searxng(query, count=target_count))]
 
     if is_korean:
         search_order.extend([
-            ("naver", lambda: _search_via_naver_api(query)),
-            ("brave", lambda: _search_via_brave_api(query)),
+            ("naver", lambda: _search_via_naver_api(query, display=naver_display)),
+            ("brave", lambda: _search_via_brave_api(query, count=brave_count)),
         ])
     else:
         search_order.extend([
-            ("brave", lambda: _search_via_brave_api(query)),
-            ("naver", lambda: _search_via_naver_api(query)),
+            ("brave", lambda: _search_via_brave_api(query, count=brave_count)),
+            ("naver", lambda: _search_via_naver_api(query, display=naver_display)),
         ])
 
     from agri_ai_core.src.ai.stats_collector import get_stats_collector
@@ -290,23 +300,84 @@ def _json_default(value: Any) -> Any:
 #       n_results: 결과 개수
 # Returns: dict: 검색 결과
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def search_farm_knowledge(query: str, n_results: int = 3) -> Dict[str, Any]:
+
+
+def search_farm_knowledge(
+    query: str,
+    n_results: int = 3,
+    farm_id: str = None,
+    house_id: str = None,
+) -> Dict[str, Any]:
     t_start = time.time()
-    logger.info(f"[VectorDB검색] 시작 query=\"{(query or '')[:80]}\" n_results={n_results}")
+    logger.info(
+        f"[VectorDB검색] 시작 query=\"{(query or '')[:80]}\" "
+        f"n_results={n_results} farm_id={farm_id} house_id={house_id}"
+    )
     try:
         from agri_ai_core.src.ai.rag.embedder import embed_text
-        from agri_ai_core.src.chroma.collections import document_collection
+        from agri_ai_core.src.chroma.collections import document_collection, farm_knowledge_collection, web_knowledge_collection
         from agri_ai_core.src.chroma.operations import query_documents
 
-        collection_name = document_collection()
-        if not collection_name:
-            logger.warning("[VectorDB검색] 컬렉션 연결 실패")
-            return {
-                "success": False,
-                "error": "지식 데이터베이스에 연결할 수 없습니다.",
-                "results": []
-            }
-        logger.info(f"[VectorDB검색] 컬렉션={collection_name}")
+        def _parse_positive_int(value, default):
+            try:
+                parsed = int(value)
+                return parsed if parsed > 0 else default
+            except Exception:
+                return default
+
+        def _parse_positive_float(value, default):
+            try:
+                parsed = float(value)
+                return parsed if parsed > 0 else default
+            except Exception:
+                return default
+
+        max_results = _parse_positive_int(n_results, 3)
+        def _parse_optional_int(value):
+            if value in (None, ""):
+                return None
+            try:
+                return int(str(value))
+            except Exception:
+                return None
+
+        def _to_chroma_where(where_dict):
+            """다중 키 where 딕셔너리를 ChromaDB $and 형식으로 변환"""
+            if not where_dict:
+                return None
+            if len(where_dict) == 1:
+                k, v = next(iter(where_dict.items()))
+                return {k: {"$eq": v}} if not isinstance(v, dict) else where_dict
+            conditions = []
+            for k, v in where_dict.items():
+                if isinstance(v, dict):
+                    conditions.append({k: v})
+                else:
+                    conditions.append({k: {"$eq": v}})
+            return {"$and": conditions}
+
+        source_where_candidates = []
+        source_where_str = {}
+        if farm_id is not None:
+            source_where_str["farm_id"] = str(farm_id)
+        if house_id is not None:
+            source_where_str["house_id"] = str(house_id)
+        if source_where_str:
+            source_where_candidates.append(_to_chroma_where(source_where_str))
+
+        source_where_int = {}
+        farm_id_int = _parse_optional_int(farm_id)
+        house_id_int = _parse_optional_int(house_id)
+        if farm_id_int is not None:
+            source_where_int["farm_id"] = farm_id_int
+        if house_id_int is not None:
+            source_where_int["house_id"] = house_id_int
+        chroma_int = _to_chroma_where(source_where_int)
+        if chroma_int and chroma_int not in source_where_candidates:
+            source_where_candidates.append(chroma_int)
+
+        if not source_where_candidates:
+            source_where_candidates = [None]
 
         t_embed = time.time()
         query_embedding = embed_text(query)
@@ -319,54 +390,163 @@ def search_farm_knowledge(query: str, n_results: int = 3) -> Dict[str, Any]:
                 "results": [],
             }
         logger.info(f"[VectorDB검색] 임베딩 생성 완료 ({embed_elapsed:.1f}s) dim={len(query_embedding)}")
+        logger.debug(f"[PERF:대화] VectorDB검색-임베딩={embed_elapsed * 1000:.0f}ms")
 
-        t_query = time.time()
-        results = query_documents(
-            collection_name=collection_name,
-            query_embeddings=[query_embedding],
-            n_results=max(1, int(n_results or 3)),
-        )
-        query_elapsed = time.time() - t_query
-
-        if "error" in results:
-            logger.warning(f"[VectorDB검색] 쿼리 실패 ({query_elapsed:.1f}s): {results['error']}")
-            return {"success": False, "error": results["error"], "results": []}
-
-        documents = results.get('documents', []) or []
-        metadatas = results.get('metadatas', []) or []
-        distances = results.get('distances', []) or []
-
-        # distance 필터링: 관련성 낮은 결과 제거
-        # bge-m3 임베딩(노름 ~3.0) 기준: 유사=0~10, 관련=10~20, 무관=20+
-        MAX_DISTANCE = 22.0
-        formatted_results = []
-        skipped_count = 0
-        for idx, (doc, meta) in enumerate(zip(documents, metadatas)):
-            dist = distances[idx] if idx < len(distances) else None
-            if dist is not None and dist > MAX_DISTANCE:
-                skipped_count += 1
-                continue
-            formatted_results.append({
-                "content": doc[:500],
-                "metadata": meta,
-                "distance": dist,
+        collection_plans = []
+        doc_collection_name = document_collection()
+        if doc_collection_name:
+            collection_plans.append({
+                "label": "document",
+                "name": doc_collection_name,
+                "where": None,
+                "max_distance": _parse_positive_float(os.getenv("DOC_VECTOR_MAX_DISTANCE", "22.0"), 22.0),
             })
 
-        total_elapsed = time.time() - t_start
-        skip_info = f" (distance>{MAX_DISTANCE} 제외={skipped_count}건)" if skipped_count else ""
-        logger.info(
-            f"[VectorDB검색] 완료 {len(formatted_results)}건{skip_info} "
-            f"(쿼리={query_elapsed:.1f}s, 총={total_elapsed:.1f}s)"
+        farm_knowledge_name = farm_knowledge_collection()
+        if farm_knowledge_name:
+            for where in source_where_candidates:
+                collection_plans.append({
+                    "label": "farm_knowledge",
+                    "name": farm_knowledge_name,
+                    "where": where,
+                    "max_distance": _parse_positive_float(os.getenv("SOURCE_VECTOR_MAX_DISTANCE", "24.0"), 24.0),
+                })
+
+        web_knowledge_name = web_knowledge_collection()
+        if web_knowledge_name:
+            collection_plans.append({
+                "label": "web_knowledge",
+                "name": web_knowledge_name,
+                "where": None,
+                "max_distance": _parse_positive_float(os.getenv("WEB_VECTOR_MAX_DISTANCE", "20.0"), 20.0),
+            })
+
+        if not collection_plans:
+            logger.warning("[VectorDB검색] 사용 가능한 컬렉션이 없습니다.")
+            return {
+                "success": False,
+                "error": "지식 데이터베이스 컬렉션을 찾을 수 없습니다.",
+                "results": [],
+            }
+
+        formatted_results = []
+        skipped_count = 0
+        per_collection_count = max(6, max_results * 3)
+        query_total_elapsed = 0.0
+
+        for plan in collection_plans:
+            t_query = time.time()
+            results = query_documents(
+                collection_name=plan["name"],
+                query_embeddings=[query_embedding],
+                n_results=per_collection_count,
+                where=plan["where"],
+            )
+            query_elapsed = time.time() - t_query
+            query_total_elapsed += query_elapsed
+
+            if "error" in results:
+                logger.warning(
+                    f"[VectorDB검색] {plan['label']} 쿼리 실패 ({query_elapsed:.1f}s): {results['error']}"
+                )
+                continue
+
+            documents = results.get("documents", []) or []
+            metadatas = results.get("metadatas", []) or []
+            distances = results.get("distances", []) or []
+
+            for idx, (doc, meta) in enumerate(zip(documents, metadatas)):
+                dist = distances[idx] if idx < len(distances) else None
+                if dist is not None and dist > plan["max_distance"]:
+                    skipped_count += 1
+                    continue
+
+                # TTL 페널티: farm_knowledge의 90일+ 오래된 데이터에 distance 페널티 부여
+                if dist is not None and plan["label"] == "farm_knowledge" and isinstance(meta, dict):
+                    record_dt = meta.get("record_datetime")
+                    if record_dt and isinstance(record_dt, str):
+                        try:
+                            rec_date = datetime.strptime(record_dt[:10], "%Y-%m-%d")
+                            age_days = (datetime.now() - rec_date).days
+                            if age_days > 90:
+                                # 90일 초과 시 10일마다 distance에 0.5 페널티 부여
+                                penalty = ((age_days - 90) / 10) * 0.5
+                                dist = dist + penalty
+                        except (ValueError, TypeError):
+                            pass
+
+                formatted_results.append({
+                    "content": str(doc or "")[:700],
+                    "metadata": meta if isinstance(meta, dict) else {},
+                    "distance": dist,
+                    "collection": plan["label"],
+                })
+
+        # 거리 기준 정렬 + 중복 제거 (벡터 유사도 검색만 사용, 관련성 판단은 Reranker(LLM)에 위임)
+        formatted_results.sort(
+            key=lambda item: (
+                item.get("distance") is None,
+                item.get("distance") if item.get("distance") is not None else float("inf"),
+            )
         )
-        for idx, fr in enumerate(formatted_results, start=1):
+        deduped_results = []
+        seen_keys = set()
+        for item in formatted_results:
+            metadata = item.get("metadata") or {}
+            key = (
+                metadata.get("doc_id"),
+                metadata.get("record_datetime"),
+                item.get("content", "")[:120],
+            )
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            deduped_results.append(item)
+
+        # LLM 기반 Reranker 적용 (관련성 판단을 LLM에 위임, 무관한 결과 필터링)
+        try:
+            from agri_ai_core.src.ai.rag.reranker import rerank_results
+            deduped_results = rerank_results(query, deduped_results, top_k=max_results)
+        except Exception as e:
+            logger.warning(f"[VectorDB검색] Reranker 임포트/호출 실패: {e} → 빈 결과 반환")
+            deduped_results = []
+
+        total_elapsed = time.time() - t_start
+        skip_info = f" (거리필터 제외={skipped_count}건)" if skipped_count else ""
+        logger.info(
+            f"[VectorDB검색] 완료 {len(deduped_results)}건{skip_info} "
+            f"(쿼리합={query_total_elapsed:.1f}s, 총={total_elapsed:.1f}s)"
+        )
+        for idx, fr in enumerate(deduped_results, start=1):
             dist_str = f"{fr['distance']:.4f}" if fr['distance'] is not None else "-"
-            logger.info(f"[VectorDB검색] 결과[{idx}] distance={dist_str} content_len={len(fr.get('content',''))}자")
+            logger.info(
+                f"[VectorDB검색] 결과[{idx}] collection={fr.get('collection')} "
+                f"distance={dist_str} content_len={len(fr.get('content',''))}자"
+            )
+
+        # 검색 품질 메트릭 로깅
+        try:
+            import hashlib as _hl
+            query_hash = _hl.md5(query.encode()).hexdigest()[:8]
+            distances = [r.get("distance") for r in deduped_results if r.get("distance") is not None]
+            avg_dist = sum(distances) / len(distances) if distances else 0
+            collections_used = list(set(r.get("collection", "") for r in deduped_results))
+            logger.info(
+                f"[검색품질] hash={query_hash} "
+                f"요청={max_results}건 반환={len(deduped_results)}건 "
+                f"평균distance={avg_dist:.4f} "
+                f"임베딩={embed_elapsed:.2f}s 쿼리합={query_total_elapsed:.1f}s 총={total_elapsed:.1f}s "
+                f"컬렉션={collections_used}"
+            )
+        except Exception:
+            pass
 
         return {
             "success": True,
             "query": query,
-            "count": len(formatted_results),
-            "results": formatted_results
+            "count": len(deduped_results),
+            "data_retrieved_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "results": deduped_results,
         }
 
     except Exception as e:
@@ -387,23 +567,16 @@ def search_farm_knowledge(query: str, n_results: int = 3) -> Dict[str, Any]:
 #       data_type: 데이터 유형 (sensor/relay/all)
 # Returns: dict: 실시간 데이터
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def get_farm_realtime_data(house_id: str, farm_id: str = None, data_type: str = "all") -> Dict[str, Any]:
+def get_farm_realtime_data(house_id: str = None, farm_id: str = None, data_type: str = "all") -> Dict[str, Any]:
     t_start = time.time()
     logger.info(f"[PostgreSQL조회] 시작 farm_id={farm_id} house_id={house_id} data_type={data_type}")
     try:
         from agri_ai_core.src.postgresql.connection import db_session
-        from agri_ai_core.src.postgresql.queries import GET_ONE_FARM
+        from agri_ai_core.src.postgresql.queries import GET_ONE_FARM, GET_ONE_HOUSE
         from agri_ai_core.src.postgresql.reader import (
             read_current_sensor_info,
             read_latest_relay_info,
         )
-
-        if not house_id:
-            return {
-                "success": False,
-                "error": "house_id는 필수입니다.",
-                "house_id": house_id
-            }
 
         target_farm_id = farm_id
         if not target_farm_id:
@@ -421,16 +594,38 @@ def get_farm_realtime_data(house_id: str, farm_id: str = None, data_type: str = 
                 "house_id": house_id
             }
 
+        target_house_id = house_id
+        if not target_house_id:
+            t_house = time.time()
+            with db_session() as database:
+                house = database.fetch_one(GET_ONE_HOUSE, vals=(target_farm_id,))
+                if house and house.get("hous_id") is not None:
+                    target_house_id = str(house.get("hous_id"))
+            logger.info(
+                f"[PostgreSQL조회] house_id 자동조회={target_house_id} ({time.time() - t_house:.1f}s)"
+            )
+
+        if not target_house_id:
+            return {
+                "success": False,
+                "error": "house_id를 확인할 수 없습니다.",
+                "farm_id": str(target_farm_id),
+                "house_id": house_id,
+            }
+
+        now = datetime.now()
         result = {
             "success": True,
             "farm_id": str(target_farm_id),
-            "house_id": house_id,
-            "timestamp": datetime.now().isoformat(),
+            "house_id": str(target_house_id),
+            "timestamp": now.isoformat(),
+            "data_retrieved_at": now.strftime("%Y-%m-%d %H:%M"),
+            "auto_selected": bool(not house_id),
         }
 
         if data_type in ["sensor", "all"]:
             t_sensor = time.time()
-            sensor = read_current_sensor_info(target_farm_id, house_id)
+            sensor = read_current_sensor_info(target_farm_id, target_house_id)
             sensor_elapsed = time.time() - t_sensor
             result["sensor"] = sensor or {}
             sensor_keys = list((sensor or {}).keys())[:8]
@@ -438,7 +633,7 @@ def get_farm_realtime_data(house_id: str, farm_id: str = None, data_type: str = 
 
         if data_type in ["relay", "all"]:
             t_relay = time.time()
-            relay = read_latest_relay_info(target_farm_id, house_id)
+            relay = read_latest_relay_info(target_farm_id, target_house_id)
             relay_elapsed = time.time() - t_relay
             result["relay"] = relay or {}
             relay_keys = list((relay or {}).keys())[:8]
@@ -452,7 +647,10 @@ def get_farm_realtime_data(house_id: str, farm_id: str = None, data_type: str = 
             logger.warning("[PostgreSQL조회] 조회된 실시간 데이터 없음")
 
         total_elapsed = time.time() - t_start
-        logger.info(f"[PostgreSQL조회] 완료 ({total_elapsed:.1f}s) farm={target_farm_id} house={house_id}")
+        logger.info(
+            f"[PostgreSQL조회] 완료 ({total_elapsed:.1f}s) "
+            f"farm={target_farm_id} house={target_house_id}"
+        )
         return result
 
     except Exception as e:
@@ -486,8 +684,8 @@ def _auto_fetch_urls(results: list, max_fetch: int = 3) -> None:
         content_result = _direct_fetch_url(url, timeout=10)
         if content_result.get("success"):
             text = _strip_html(content_result.get("text", ""))
-            if len(text) > 4000:
-                text = text[:4000]
+            if len(text) > _WEB_SEARCH_CONTENT_MAX_CHARS:
+                text = text[:_WEB_SEARCH_CONTENT_MAX_CHARS]
             item["page_content"] = text
             return True
         return False
@@ -509,33 +707,57 @@ def _auto_fetch_urls(results: list, max_fetch: int = 3) -> None:
 # Args: query: 검색 키워드
 # Returns: dict: 검색 결과 (page_content 포함)
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def search_web(query: str) -> Dict[str, Any]:
+def search_web(
+    query: str,
+    n_results: Optional[int] = None,
+    auto_fetch_max: Optional[int] = None,
+) -> Dict[str, Any]:
     t_start = time.time()
     logger.info(f"[웹검색] 시작 query=\"{(query or '')[:100]}\"")
 
     result = None
+    search_limit = _WEB_SEARCH_RESULT_LIMIT
+    fetch_limit = _WEB_SEARCH_AUTO_FETCH_MAX
+
+    try:
+        if n_results is not None:
+            search_limit = max(3, min(20, int(n_results)))
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        if auto_fetch_max is not None:
+            fetch_limit = max(1, min(5, int(auto_fetch_max)))
+    except (TypeError, ValueError):
+        pass
 
     # 1단계: API 검색 시도 (Naver/Brave - API 키가 있을 때만)
     try:
-        api_result = _search_via_api(query)
+        _t_api = time.time()
+        api_result = _search_via_api(query, count=search_limit)
+        _api_ms = (time.time() - _t_api) * 1000
         if api_result and api_result.get("success") and api_result.get("results"):
             result = api_result
             provider = api_result.get("search_provider", "api")
             logger.info(f"[웹검색] API 검색 성공 (provider={provider})")
+        logger.debug(f"[PERF:대화] 웹검색-API단계={_api_ms:.0f}ms (provider={api_result.get('search_provider', 'none') if api_result else 'fail'})")
     except Exception as e:
         logger.warning(f"[웹검색] API 검색 예외: {e}")
 
     # 2단계: API 실패 시 MCP 스크래핑 fallback
     if not result or not result.get("results"):
         try:
+            _t_mcp = time.time()
             from agri_ai_core.src.ai.mcp_client import search_web as mcp_search
-            mcp_result = mcp_search(query, max_results=8)
+            mcp_result = mcp_search(query, max_results=search_limit)
+            _mcp_ms = (time.time() - _t_mcp) * 1000
             if mcp_result.get("success") and mcp_result.get("results"):
                 result = mcp_result
                 result["search_provider"] = "mcp_scraping"
                 logger.info(f"[웹검색] MCP 스크래핑 fallback 성공")
             elif not result:
                 result = mcp_result
+            logger.debug(f"[PERF:대화] 웹검색-MCP스크래핑={_mcp_ms:.0f}ms")
         except Exception as e:
             logger.warning(f"[웹검색] MCP 스크래핑 fallback 실패: {e}")
             if not result:
@@ -552,7 +774,7 @@ def search_web(query: str) -> Dict[str, Any]:
                 logger.info(f"[웹검색] 결과[{idx}] title={item.get('title','')[:50]} url={item.get('url','')[:80]}")
 
         # 상위 URL 본문 자동 읽기 (병렬)
-        _auto_fetch_urls(result.get("results", []), max_fetch=5)
+        _auto_fetch_urls(result.get("results", []), max_fetch=fetch_limit)
 
         fetched = sum(1 for r in result.get("results", []) if r.get("page_content"))
         total_elapsed = time.time() - t_start
@@ -567,7 +789,84 @@ def search_web(query: str) -> Dict[str, Any]:
             "단답형이나 URL만 나열하는 것은 금지합니다."
         )
 
+        # web_knowledge 캐싱: 검색 결과를 VectorDB에 저장 (백그라운드)
+        try:
+            threading.Thread(
+                target=_cache_web_results_to_vectordb,
+                args=(query, result.get("results", [])),
+                daemon=True,
+                name="web-knowledge-cache",
+            ).start()
+        except Exception as cache_err:
+            logger.debug(f"[웹검색] web_knowledge 캐싱 실패: {cache_err}")
+
     return result
+
+
+def _cache_web_results_to_vectordb(query: str, results: list) -> None:
+    """웹 검색 결과를 web_knowledge 컬렉션에 임베딩 저장 (URL 해시 기반 중복 방지)"""
+    import hashlib
+    from agri_ai_core.src.ai.rag.embedder import embed_text
+    from agri_ai_core.src.chroma.collections import web_knowledge_collection
+    from agri_ai_core.src.chroma.operations import upsert_documents_with_embedding
+
+    collection_name = web_knowledge_collection()
+    if not collection_name:
+        return
+
+    ids_batch = []
+    docs_batch = []
+    embeddings_batch = []
+    metadatas_batch = []
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    for item in results[:5]:
+        if not isinstance(item, dict):
+            continue
+        url = item.get("url", "")
+        title = item.get("title", "")
+        description = item.get("description", "")
+        page_content = item.get("page_content", "")
+
+        if not url or not (title or description):
+            continue
+
+        # URL 해시 기반 doc_id (중복 방지)
+        url_hash = hashlib.md5(url.encode()).hexdigest()[:12]
+        doc_id = f"web_{url_hash}"
+
+        # 임베딩 대상 텍스트: title + description + page_content 앞부분
+        embed_source = f"{title} {description}"
+        if page_content:
+            embed_source += f" {page_content[:500]}"
+
+        embedding = embed_text(embed_source)
+        if not embedding:
+            continue
+
+        ids_batch.append(doc_id)
+        docs_batch.append(embed_source[:1500])
+        embeddings_batch.append(embedding)
+        metadatas_batch.append({
+            "url": url[:500],
+            "title": title[:200],
+            "description": description[:500],
+            "query": query[:200],
+            "data_kind": "web_knowledge",
+            "record_datetime": now_str,
+        })
+
+    if ids_batch:
+        docs = []
+        for i, doc_id in enumerate(ids_batch):
+            docs.append({
+                "doc_id": doc_id,
+                "text": docs_batch[i],
+                "metadata": metadatas_batch[i],
+                "embedding": embeddings_batch[i],
+            })
+        upsert_documents_with_embedding(collection_name, docs)
+        logger.info(f"[웹검색] web_knowledge 캐싱 완료: {len(ids_batch)}건")
 
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -677,7 +976,9 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
         if tool_name == "search_farm_knowledge":
             result = search_farm_knowledge(
                 query=tool_args.get("query"),
-                n_results=tool_args.get("n_results", 3)
+                n_results=tool_args.get("n_results", 3),
+                farm_id=tool_args.get("farm_id"),
+                house_id=tool_args.get("house_id"),
             )
 
         elif tool_name == "get_farm_realtime_data":
@@ -689,7 +990,9 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
 
         elif tool_name == "search_web":
             result = search_web(
-                query=tool_args.get("query")
+                query=tool_args.get("query"),
+                n_results=tool_args.get("n_results"),
+                auto_fetch_max=tool_args.get("auto_fetch_max"),
             )
 
         elif tool_name == "fetch_url_content":

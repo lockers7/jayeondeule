@@ -89,6 +89,10 @@ public class SettingService {
             data.setDlteYn(modifiedInfo.isDlteYn());
             data.setStrtTime(modifiedInfo.getStrtTime());
             data.setFnshTime(modifiedInfo.getFnshTime());
+            data.setExcsType(modifiedInfo.getExcsType());
+            data.setExcsItvl(modifiedInfo.getExcsItvl());
+            data.setExcsStrtDate(modifiedInfo.getExcsStrtDate());
+            data.setExcsWkdy(modifiedInfo.getExcsWkdy());
 
             lightIrrigationSettingRepository.save(data);
         }

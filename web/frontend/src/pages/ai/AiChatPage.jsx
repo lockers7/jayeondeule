@@ -3,7 +3,16 @@ import {Button, Spinner, Container} from "react-bootstrap";
 import ChatSidebar from "../../components/ai/ChatSidebar.jsx";
 import ChatMessageList from "../../components/ai/ChatMessageList.jsx";
 import ChatInput from "../../components/ai/ChatInput.jsx";
-import {sendQuery, ragPerform, ragSave} from "../../utils/aiChatUtil.js";
+import {streamQuery, ragPerform, ragSave} from "../../utils/aiChatUtil.js";
+
+const SESSION_STORAGE_KEY = "ai_chat_session_id";
+
+function generateSessionId() {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID();
+    }
+    return `sess_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
 
 export default function AiChatPage() {
     const [messages, setMessages] = useState([]);
@@ -14,7 +23,29 @@ export default function AiChatPage() {
     const [selectedHouse, setSelectedHouse] = useState(null);
     const fileInputRef = useRef(null);
     const contentRef = useRef(null);
+    const abortControllerRef = useRef(null);
     const [buttonsLeft, setButtonsLeft] = useState(0);
+    const [sessionId, setSessionId] = useState(() => {
+        const stored = localStorage.getItem(SESSION_STORAGE_KEY);
+        if (stored && stored.trim()) return stored;
+        const created = generateSessionId();
+        localStorage.setItem(SESSION_STORAGE_KEY, created);
+        return created;
+    });
+
+    useEffect(() => {
+        if (sessionId) {
+            localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+        }
+    }, [sessionId]);
+
+    useEffect(() => {
+        return () => {
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+            }
+        };
+    }, []);
 
     const updateButtonPosition = useCallback(() => {
         if (contentRef.current) {
@@ -29,36 +60,100 @@ export default function AiChatPage() {
         return () => window.removeEventListener("resize", updateButtonPosition);
     }, [updateButtonPosition]);
 
-    const handleSend = async () => {
-        const query = currentInput.trim();
+    const handleSend = (directText) => {
+        const query = (directText || currentInput).trim();
         if (!query || isLoading) return;
 
-        setMessages((prev) => [...prev, {role: "user", content: query}]);
+        setMessages((prev) => [...prev, {role: "user", content: query, timestamp: new Date()}]);
         setCurrentInput("");
         setIsLoading(true);
 
-        try {
-            const res = await sendQuery(
-                query,
-                selectedFarm ? String(selectedFarm.farmId) : null,
-                selectedHouse ? String(selectedHouse.housId) : null,
-                selectedFarm?.farmName || null,
-                selectedHouse?.housName || null,
-            );
+        // 어시스턴트 메시지 플레이스홀더 추가
+        setMessages((prev) => [...prev, {role: "assistant", content: ""}]);
 
-            const data = res.data;
-            setMessages((prev) => [
-                ...prev,
-                {role: "assistant", content: data.success ? data.response : `오류: ${data.response}`},
-            ]);
-        } catch (err) {
-            setMessages((prev) => [
-                ...prev,
-                {role: "assistant", content: `응답 생성 중 오류가 발생했습니다: ${err.message}`},
-            ]);
-        } finally {
-            setIsLoading(false);
-        }
+        let tokenStarted = false;
+
+        const controller = streamQuery(
+            query,
+            selectedFarm ? String(selectedFarm.farmId) : null,
+            selectedHouse ? String(selectedHouse.housId) : null,
+            selectedFarm?.farmName || null,
+            selectedHouse?.housName || null,
+            sessionId,
+            {
+                onStatus: (text) => {
+                    if (!tokenStarted) {
+                        setMessages((prev) => {
+                            const updated = [...prev];
+                            updated[updated.length - 1] = {
+                                ...updated[updated.length - 1],
+                                content: text,
+                            };
+                            return updated;
+                        });
+                    }
+                },
+                onToken: (text) => {
+                    if (!tokenStarted) {
+                        tokenStarted = true;
+                        setMessages((prev) => {
+                            const updated = [...prev];
+                            updated[updated.length - 1] = {
+                                ...updated[updated.length - 1],
+                                content: text,
+                            };
+                            return updated;
+                        });
+                    } else {
+                        setMessages((prev) => {
+                            const updated = [...prev];
+                            const last = updated[updated.length - 1];
+                            updated[updated.length - 1] = {
+                                ...last,
+                                content: last.content + text,
+                            };
+                            return updated;
+                        });
+                    }
+                },
+                onDone: (data) => {
+                    const nextSessionId = data.session_id || sessionId;
+                    setSessionId(nextSessionId);
+                    setMessages((prev) => {
+                        const updated = [...prev];
+                        const last = updated[updated.length - 1];
+                        updated[updated.length - 1] = {
+                            ...last,
+                            content: tokenStarted ? last.content : "",
+                            sources: Array.isArray(data.sources) ? data.sources : [],
+                            toolsUsed: Array.isArray(data.tools_used) ? data.tools_used : [],
+                            responseType: data.response_type || "general",
+                            elapsedSec: data.elapsed_sec ?? null,
+                            sessionId: nextSessionId,
+                            timestamp: new Date(),
+                        };
+                        return updated;
+                    });
+                    setIsLoading(false);
+                    abortControllerRef.current = null;
+                },
+                onError: (errMsg) => {
+                    setMessages((prev) => {
+                        const updated = [...prev];
+                        updated[updated.length - 1] = {
+                            ...updated[updated.length - 1],
+                            content: `응답 생성 중 오류가 발생했습니다: ${errMsg}`,
+                            timestamp: new Date(),
+                        };
+                        return updated;
+                    });
+                    setIsLoading(false);
+                    abortControllerRef.current = null;
+                },
+            },
+        );
+
+        abortControllerRef.current = controller;
     };
 
     const handleRagPerform = () => {
@@ -78,12 +173,12 @@ export default function AiChatPage() {
             const data = res.data;
             setMessages((prev) => [
                 ...prev,
-                {role: "assistant", content: data.success ? data.message : `RAG 수행 오류: ${data.message}`},
+                {role: "assistant", content: data.success ? data.message : `RAG 수행 오류: ${data.message}`, timestamp: new Date()},
             ]);
         } catch (err) {
             setMessages((prev) => [
                 ...prev,
-                {role: "assistant", content: `RAG 수행 중 오류가 발생했습니다: ${err.message}`},
+                {role: "assistant", content: `RAG 수행 중 오류가 발생했습니다: ${err.message}`, timestamp: new Date()},
             ]);
         } finally {
             setRagLoading("");
@@ -95,15 +190,19 @@ export default function AiChatPage() {
         if (messages.length === 0) {
             setMessages((prev) => [
                 ...prev,
-                {role: "assistant", content: "저장할 대화 내용이 없습니다."},
+                {role: "assistant", content: "저장할 대화 내용이 없습니다.", timestamp: new Date()},
             ]);
             return;
         }
 
         setRagLoading("save");
         try {
+            const compactMessages = messages.map((msg) => ({
+                role: msg.role,
+                content: msg.content,
+            }));
             const res = await ragSave(
-                messages,
+                compactMessages,
                 selectedFarm ? String(selectedFarm.farmId) : null,
                 selectedFarm?.farmName || null,
                 selectedHouse?.housName || null,
@@ -111,12 +210,12 @@ export default function AiChatPage() {
             const data = res.data;
             setMessages((prev) => [
                 ...prev,
-                {role: "assistant", content: data.success ? data.message : `RAG 저장 오류: ${data.message}`},
+                {role: "assistant", content: data.success ? data.message : `RAG 저장 오류: ${data.message}`, timestamp: new Date()},
             ]);
         } catch (err) {
             setMessages((prev) => [
                 ...prev,
-                {role: "assistant", content: `RAG 저장 중 오류가 발생했습니다: ${err.message}`},
+                {role: "assistant", content: `RAG 저장 중 오류가 발생했습니다: ${err.message}`, timestamp: new Date()},
             ]);
         } finally {
             setRagLoading("");
@@ -124,7 +223,15 @@ export default function AiChatPage() {
     };
 
     const handleClearMessages = () => {
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+        }
+        setIsLoading(false);
         setMessages([]);
+        const nextSessionId = generateSessionId();
+        setSessionId(nextSessionId);
+        localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);
     };
 
     return (
@@ -142,7 +249,7 @@ export default function AiChatPage() {
                     type="file"
                     ref={fileInputRef}
                     onChange={handleFileSelected}
-                    accept=".txt,.md,.csv,.json"
+                    accept=".txt,.md,.csv,.json,.pdf"
                     multiple
                     style={{display: "none"}}
                 />

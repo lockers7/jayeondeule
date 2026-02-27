@@ -1,7 +1,6 @@
 package com.jayeondeule.smartfarm.dto.user;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.jayeondeule.smartfarm.enums.user.AuthLvel;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
