@@ -1,3 +1,11 @@
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# PostgreSQL 연결 관리 모듈
+# psycopg2 커넥션 풀 기반 싱글톤 DB 핸들러와 컨텍스트 매니저를 제공하며,
+# 쿼리 실행, 트랜잭션 관리, 자동 재연결 등을 담당합니다.
+# --->
+# DatabaseHandler: PostgreSQL 연결 풀 및 쿼리 실행 싱글톤
+# db_session: 데이터베이스 세션 컨텍스트 매니저
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import os
 import re
 import threading
@@ -17,6 +25,7 @@ except Exception:
 from agri_ai_core.config import settings
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.ai.mcp_client import postgres_query
+from agri_ai_core.src.utils.validators import is_true
 
 logger = setup_logger(__name__)
 
@@ -24,11 +33,14 @@ logger = setup_logger(__name__)
 class DatabaseHandler:
 
     _instance = None
+    _instance_lock = threading.Lock()
 
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = super(DatabaseHandler, cls).__new__(cls)
-            cls._instance._initialized = False
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = super(DatabaseHandler, cls).__new__(cls)
+                    cls._instance._initialized = False
         return cls._instance
 
     def __init__(self):
@@ -47,16 +59,12 @@ class DatabaseHandler:
         self.logger = setup_logger(__name__)
 
         # MCP postgres는 명시적으로 켠 경우에만 사용한다.
-        self.use_mcp_postgres = self._is_true(os.getenv("USE_MCP_POSTGRES", "false"))
+        self.use_mcp_postgres = is_true(os.getenv("USE_MCP_POSTGRES", "false"))
         self.mcp_timeout_seconds = self._safe_positive_int(
             os.getenv("MCP_POSTGRES_TIMEOUT_SECONDS", "8"),
             default=8,
         )
         self._mcp_fallback_logged = False
-
-    @staticmethod
-    def _is_true(value: Any) -> bool:
-        return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
     @staticmethod
     def _safe_positive_int(value: Any, default: int) -> int:
@@ -122,9 +130,9 @@ class DatabaseHandler:
 
     # ------------------------------------------------------------------
     # 커넥션 풀 관리
+    # ThreadedConnectionPool을 지연 초기화 (스레드 안전)
     # ------------------------------------------------------------------
     def _ensure_pool(self):
-        """ThreadedConnectionPool을 지연 초기화 (스레드 안전)"""
         if self._pool is not None:
             return True
 
@@ -151,8 +159,10 @@ class DatabaseHandler:
                 self.logger.error(f"DB 커넥션 풀 초기화 실패: {e}")
                 return False
 
+    # ============================================================
+    # 풀에서 커넥션 획득
+    # ============================================================
     def _getconn(self):
-        """풀에서 커넥션 획득"""
         if not self._ensure_pool():
             return None
         try:
@@ -161,13 +171,19 @@ class DatabaseHandler:
             self.logger.error(f"풀에서 커넥션 획득 실패: {e}")
             return None
 
+    # ============================================================
+    # 풀에 커넥션 반환
+    # ============================================================
     def _putconn(self, conn):
-        """풀에 커넥션 반환"""
         if self._pool is not None and conn is not None:
             try:
                 self._pool.putconn(conn)
             except Exception as e:
                 self.logger.debug(f"풀에 커넥션 반환 중 오류: {e}")
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def connect(self):
         # MCP 우선 모드에서는 소켓 연결을 선행하지 않는다.
@@ -189,13 +205,12 @@ class DatabaseHandler:
         connected = self.connect()
         if not connected:
             raise Exception("Failed to connect to database")
-        try:
-            yield self
-        finally:
-            pass
+        yield self
 
+    # ============================================================
+    # 직접 DB 연결로 쿼리 실행 공통 래퍼.
+    # ============================================================
     def _run_direct(self, op_name, query, vals, error_default, cursor_factory=None, fetch_mode=None, commit=False):
-        """직접 DB 연결로 쿼리 실행 공통 래퍼."""
         conn = self._getconn()
         if conn is None:
             self.logger.error(f"DatabaseHandler.{op_name} -> direct DB fallback unavailable: query: [{query}], values: [{vals}]")

@@ -1,7 +1,34 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # MCP (Model Context Protocol) 클라이언트 모듈
 # 프로젝트의 MCP 서버(web-search, postgres 등)를 공통 방식으로 호출합니다.
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --->
+# _mark_server_unavailable: MCP 서버 비활성 상태로 표시
+# _get_runtime_disable_seconds: MCP 서버 비활성 경과 시간(초) 반환
+# _get_runtime_disabled_reason: MCP 서버 비활성 사유 반환
+# _mark_server_available: MCP 서버 활성 상태로 복원
+# _error_to_text: 에러 객체를 텍스트로 변환
+# _should_mark_unavailable: MCP 서버 비활성 전환 필요 여부 판단
+# _is_dns_resolution_error: DNS 해석 실패 여부 판단
+# _log_dns_diagnostics_once: DNS 진단 로그 1회 출력
+# _load_mcp_servers: `.vscode/mcp.json`에서 MCP 서버 설정을 로드.
+# _jsonrpc: JSON-RPC 2.0 요청 전송
+# _find_response: MCP 응답에서 결과 탐색
+# _extract_text_blocks: MCP 응답에서 텍스트 블록 추출
+# call_mcp_server_tool: MCP 서버 도구 호출 (JSON-RPC)
+# _coerce_json_and_text: JSON 문자열을 파싱하여 텍스트 변환
+# _direct_http_json_request: HTTP JSON 직접 요청
+# _parse_mcp_fetch_result: MCP fetch 결과 파싱
+# _parse_fetch_tool_names: fetch 도구명 목록 파싱
+# mcp_fetch_request: MCP fetch 도구로 URL 페이지 가져오기
+# mcp_fetch_json: MCP fetch 결과를 JSON으로 파싱
+# mcp_http_request: HTTP 요청 공통 래퍼 (직접/MCP 자동 선택)
+# _parse_markdown_table: 마크다운 테이블 파싱
+# _pick_postgres_tool_name: PostgreSQL MCP 도구명 선택
+# _call_postgres_tool: PostgreSQL MCP 도구 호출
+# postgres_query: MCP postgres 서버를 통해 SQL 실행 후 행 데이터를 정규화.
+# search_web: MCP web-search 서버를 통한 웹 검색.
+# get_current_weather: MCP web-search 기반 현재 날씨 조회.
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import json
 import os
 import subprocess
@@ -13,6 +40,7 @@ from urllib import error as urlerror
 from urllib import request as urlrequest
 
 from agri_ai_core.logs import setup_logger
+from agri_ai_core.src.utils.validators import is_true
 
 logger = setup_logger(__name__)
 
@@ -319,10 +347,6 @@ def _coerce_json_and_text(value: Any) -> Tuple[Optional[Any], str]:
     return None, text
 
 
-def _is_true(value: Any) -> bool:
-    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
 def _direct_http_json_request(
     method: str,
     url: str,
@@ -610,7 +634,7 @@ def mcp_http_request(
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 ) -> Tuple[int, Optional[Any], str]:
     # .env 미적용 환경에서도 지연/오류를 줄이기 위해 기본 비활성.
-    use_mcp_fetch = _is_true(os.getenv("USE_MCP_FETCH", "false"))
+    use_mcp_fetch = is_true(os.getenv("USE_MCP_FETCH", "false"))
     mcp_error_text = ""
     mcp_status_code = 500
 

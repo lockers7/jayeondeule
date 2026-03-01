@@ -1,19 +1,19 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 애플리케이션 초기화 모듈
 # 시작 시 ChromaDB 연결, 스케줄러 설정 등을 수행합니다.
 # --->
 # initialize_app: 애플리케이션 시작 초기화
 # shutdown_app: 애플리케이션 종료 처리
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import os
 import sys
 import time
 import logging
 import traceback
 
-from agri_ai_core.logs import setup_logger, cleanup_all_logs
+from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.chroma import heartbeat, ensure_required_collections_exist
-from agri_ai_core.src.control import setup_scheduler, start_scheduler, stop_scheduler, setup_default_jobs, control_all_schedules, control_all_manual
+from agri_ai_core.src.control import setup_scheduler, start_scheduler, stop_scheduler, setup_default_jobs, control_all_manual, control_all_ai
 
 logger = setup_logger(__name__)
 
@@ -164,12 +164,12 @@ def initialize_app():
 
             setup_scheduler()
             setup_default_jobs(
-                schedule_control_func=control_all_schedules,
                 manual_control_func=control_all_manual,
+                ai_control_func=control_all_ai,
                 growth_rag_func=run_growth_rag,
             )
             start_scheduler()
-            logger.info("[4/4] 스케줄러 시작됨 (%.1fs) - 릴레이제어 (1분) + 생육RAG (12:00/00:00)", time.time() - t0)
+            logger.info("[4/4] 스케줄러 시작됨 (%.1fs) - 수동/알고리즘 (10초) + AI (5분) + 생육RAG (12:00/00:00)", time.time() - t0)
         except Exception as e:
             logger.warning("[4/4] 스케줄러 설정 실패 (%.1fs): %s", time.time() - t0, e)
 

@@ -1,6 +1,14 @@
-"""faster-whisper 기반 STT 엔진 (CPU, int8, VAD 필터)"""
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# STT(음성→텍스트) 엔진 모듈
+# faster-whisper 기반 음성 인식 (CPU, int8 양자화, VAD 필터) 기능을 제공합니다.
+# --->
+# _get_model: Whisper STT 모델 로드 (싱글톤)
+# _webm_to_wav_bytes: WebM/Opus 바이트를 WAV 바이트로 변환 (PyAV 사용)
+# transcribe: 음성 바이트를 텍스트로 변환
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import io
 import tempfile
+import threading
 import av
 from faster_whisper import WhisperModel
 from agri_ai_core.logs import setup_logger
@@ -8,19 +16,24 @@ from agri_ai_core.logs import setup_logger
 logger = setup_logger(__name__)
 
 _model = None
+_model_lock = threading.Lock()
 
 
 def _get_model():
     global _model
     if _model is None:
-        logger.info("[STT] faster-whisper small 모델 로딩 (CPU, int8)...")
-        _model = WhisperModel("small", device="cpu", compute_type="int8")
-        logger.info("[STT] 모델 로딩 완료")
+        with _model_lock:
+            if _model is None:
+                logger.info("[STT] faster-whisper small 모델 로딩 (CPU, int8)...")
+                _model = WhisperModel("small", device="cpu", compute_type="int8")
+                logger.info("[STT] 모델 로딩 완료")
     return _model
 
 
+# ============================================================
+# WebM/Opus 바이트를 WAV 바이트로 변환 (PyAV 사용)
+# ============================================================
 def _webm_to_wav_bytes(audio_bytes: bytes) -> bytes:
-    """WebM/Opus 바이트를 WAV 바이트로 변환 (PyAV 사용)"""
     input_buf = io.BytesIO(audio_bytes)
     output_buf = io.BytesIO()
 
@@ -38,8 +51,10 @@ def _webm_to_wav_bytes(audio_bytes: bytes) -> bytes:
     return output_buf.getvalue()
 
 
+# ============================================================
+# 음성 바이트를 텍스트로 변환
+# ============================================================
 def transcribe(audio_bytes: bytes, content_type: str = "audio/webm") -> str:
-    """음성 바이트를 텍스트로 변환"""
     model = _get_model()
 
     # WebM이면 WAV로 변환

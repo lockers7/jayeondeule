@@ -47,6 +47,8 @@ public class SecurityConfig {
                                         .map(WhiteList::getPath)
                                         .toArray(String[]::new)
                                 ).permitAll()
+                                .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                                .requestMatchers("/api/setting/**").hasAnyRole("ADMIN", "FARM_ADMIN")
                                 .anyRequest().authenticated()
                 )
                 .sessionManagement(sessionManagement ->

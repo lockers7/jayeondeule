@@ -1,15 +1,17 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 릴레이 스케줄 제어 모듈
 # 시간대별 자동 제어 스케줄을 관리하고 실행하는 기능을 제공하며,
 # 설정된 조건에 따라 릴레이를 자동으로 제어합니다.
 # --->
+# _format_sensor_status: 센서값 포맷 문자열 생성 (임계값 비교 포함)
 # should_execute_interval: 주기 기반 실행 여부 확인
 # should_execute_weekdays: 요일 기반 실행 여부 확인
 # is_time_in_range: 현재 시간이 스케줄 시간 범위 내인지 확인
+# _handle_schedule_control: 조명 스케줄 제어
 # control_lighting_schedule: 조명 스케줄 제어
 # control_irrigation_schedule: 관수밸브 스케줄 제어
 # control_all_schedules: 모든 재배사 조명/관수밸브 스케줄 제어
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import traceback
 from datetime import datetime
 
@@ -18,7 +20,13 @@ from agri_ai_core.src.postgresql.connection import db_session
 from agri_ai_core.src.postgresql import queries as dbQry
 from agri_ai_core.src.postgresql.reader import read_light_irrigation_settings, read_current_sensor_info
 from agri_ai_core.src.control.relay_manager import set_relay_value, log_relay_detail
-from agri_ai_core.src.utils.sorting import sort_houses as _sort_houses
+from agri_ai_core.src.control.control_common import (
+    sort_houses as _sort_houses,
+    TEMP_LOW, TEMP_HIGH,
+    HUMIDITY_LOW, HUMIDITY_HIGH,
+    CO2_LOW, CO2_HIGH,
+    WATER_TEMP_CRITICAL_LOW, WATER_TEMP_CRITICAL_HIGH,
+)
 
 logger = setup_logger(__name__)
 
@@ -27,10 +35,10 @@ _WEEKDAY_NAMES = {1: '월', 2: '화', 3: '수', 4: '목', 5: '금', 6: '토', 7:
 
 # 센서 상태 포맷 (임계값 비교 포함)
 _SENSOR_THRESHOLDS = {
-    'indoor_temperature': ('내부온도', '℃', 27, 30),
-    'indoor_humidity':    ('내부습도', '%', 75, 85),
-    'co2':                ('CO2', 'ppm', 300, 1200),
-    'water_temperature':  ('수온', '℃', 35, 60),
+    'indoor_temperature': ('내부온도', '℃', TEMP_LOW, TEMP_HIGH),
+    'indoor_humidity':    ('내부습도', '%', HUMIDITY_LOW, HUMIDITY_HIGH),
+    'co2':                ('CO2', 'ppm', CO2_LOW, CO2_HIGH),
+    'water_temperature':  ('수온', '℃', WATER_TEMP_CRITICAL_LOW, WATER_TEMP_CRITICAL_HIGH),
 }
 
 
@@ -132,9 +140,9 @@ def is_time_in_range(current_time, start_time, finish_time):
 #
 # Returns:
 #     dict: 제어 결과
+# 조명/관수 공통 스케줄 제어 로직.
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def _handle_schedule_control(farm_id, house_id, setting_type, relay_flag_key, label, action_name):
-    """조명/관수 공통 스케줄 제어 로직."""
     try:
         settings = read_light_irrigation_settings(farm_id, house_id, setting_type)
 

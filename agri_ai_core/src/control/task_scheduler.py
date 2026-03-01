@@ -1,4 +1,4 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 작업 스케줄러 모듈
 # 주기적 작업, 예약 작업 등을 관리하고 실행하는 스케줄러를 제공하며,
 # 시스템의 자동화된 작업들을 조율합니다.
@@ -8,8 +8,10 @@
 # stop_scheduler: 스케줄러 중지
 # add_job: 작업 추가
 # remove_job: 작업 제거
+# _daily_log_cleanup: 기본 스케줄 작업 설정
+# _chunk_cleanup_job: 매일 03:00에 실행 — farm_knowledge 컬렉션에서 180일 이상 된 오래된 청크 삭제
 # setup_default_jobs: 기본 스케줄 작업 설정
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import traceback
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -214,9 +216,9 @@ def remove_job(job_id):
 #
 # Returns:
 #     bool: 성공 여부
+# 매일 00:00에 실행되는 로그 정리 작업
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def _daily_log_cleanup():
-    """매일 00:00에 실행되는 로그 정리 작업"""
     try:
         from agri_ai_core.logs import cleanup_all_logs
         cleanup_all_logs()
@@ -225,13 +227,14 @@ def _daily_log_cleanup():
         logger.error(f"[스케줄] 일일 로그 정리 실패: {e}")
 
 
+# ============================================================
+# 매일 03:00에 실행 — farm_knowledge 컬렉션에서 180일 이상 된 오래된 청크 삭제
+# ============================================================
 def _chunk_cleanup_job():
-    """매일 03:00에 실행 — farm_knowledge 컬렉션에서 180일 이상 된 오래된 청크 삭제"""
     try:
         from datetime import datetime, timedelta
         from agri_ai_core.src.chroma.collections import farm_knowledge_collection
-        from agri_ai_core.src.chroma.operations import get_documents
-        from agri_ai_core.src.chroma.client import get_collection
+        from agri_ai_core.src.chroma.operations import get_documents, delete_document
 
         collection_name = farm_knowledge_collection()
         if not collection_name:
@@ -259,30 +262,16 @@ def _chunk_cleanup_job():
                     delete_ids.append(doc_id)
 
         if delete_ids:
-            # ChromaDB REST API로 삭제
-            collection_info = get_collection(collection_name)
-            if "error" not in collection_info:
-                import json
-                from agri_ai_core.src.chroma.config import CHROMA_API_BASE
-                from agri_ai_core.src.ai.mcp_client import mcp_http_request
+            # chroma/operations.py의 delete_document 직접 활용 (MCP 직접 의존 제거)
+            _CHUNK_DELETE_BATCH_SIZE = 100
+            total_deleted = 0
+            for i in range(0, len(delete_ids), _CHUNK_DELETE_BATCH_SIZE):
+                batch = delete_ids[i:i + _CHUNK_DELETE_BATCH_SIZE]
+                result = delete_document(collection_name, batch)
+                if result.get("success"):
+                    total_deleted += len(batch)
 
-                collection_id = collection_info.get("id")
-                if collection_id:
-                    # 배치 단위로 삭제 (한번에 100개씩)
-                    total_deleted = 0
-                    for i in range(0, len(delete_ids), 100):
-                        batch = delete_ids[i:i + 100]
-                        url = f"{CHROMA_API_BASE}/collections/{collection_id}/delete"
-                        status, _, _ = mcp_http_request(
-                            method="POST",
-                            url=url,
-                            json_body={"ids": batch},
-                            timeout=30,
-                        )
-                        if status == 200:
-                            total_deleted += len(batch)
-
-                    logger.info(f"[스케줄] 청크 정리 완료 — {total_deleted}/{len(delete_ids)}건 삭제")
+            logger.info(f"[스케줄] 청크 정리 완료 — {total_deleted}/{len(delete_ids)}건 삭제")
         else:
             logger.info("[스케줄] 청크 정리 — 삭제 대상 없음")
 
@@ -292,8 +281,8 @@ def _chunk_cleanup_job():
 
 
 def setup_default_jobs(learning_func=None, stats_func=None,
-                       schedule_control_func=None, manual_control_func=None,
-                       growth_rag_func=None):
+                       manual_control_func=None,
+                       ai_control_func=None, growth_rag_func=None):
     try:
         # 학습 작업 (매일 지정 시간)
         if learning_func:
@@ -314,28 +303,26 @@ def setup_default_jobs(learning_func=None, stats_func=None,
                 minutes=STATS_INTERVAL_MINUTES
             )
 
-        # 릴레이 제어 통합 작업 (매 1분)
-        # schedule_control → manual_control 순차 실행 (로그 인터리빙 방지)
-        # 센서값은 3초 단위로 갱신되며, 2-phase 릴레이 제어는 재배사당 ~15초 소요
+        # 수동/알고리즘 환경제어 + AI 비상모니터링 (매 10초)
+        # 스케줄제어(조명/관수) + 수동/알고리즘 환경제어 + AI 비상제어
         # max_instances=1 설정으로 이전 실행 미완료 시 다음 실행 스킵
-        if schedule_control_func or manual_control_func:
-            def _combined_control_job():
-                if schedule_control_func:
-                    try:
-                        schedule_control_func()
-                    except Exception as e:
-                        logger.error(f"스케줄 제어 실행 오류: {e}")
-                if manual_control_func:
-                    try:
-                        manual_control_func()
-                    except Exception as e:
-                        logger.error(f"수동 환경제어 실행 오류: {e}")
-
+        if manual_control_func:
             add_job(
                 job_id="relay_control_job",
-                func=_combined_control_job,
+                func=manual_control_func,
                 trigger_type="interval",
-                minutes=1
+                seconds=10
+            )
+
+        # AI 인공지능 환경제어 (매 5분)
+        # AI 모드 재배사만 대상, LLM 정기 호출
+        # max_instances=1 설정으로 이전 실행 미완료 시 다음 실행 스킵
+        if ai_control_func:
+            add_job(
+                job_id="ai_control_job",
+                func=ai_control_func,
+                trigger_type="interval",
+                minutes=5
             )
 
         # 생육 RAG 작업 (일 2회: 12:00, 00:00)

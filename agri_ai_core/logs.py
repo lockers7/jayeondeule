@@ -1,8 +1,19 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # Unified Logging Module
 # 로그 설정 및 핸들러 관리
 # 원래 파일: log_utils/log_config.py + log_utils/log_handlers.py
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --->
+# DailyRotatingFileHandler: DAILY ROTATING FILE HANDLER
+# _setup_logger_impl: LOGGER SETUP FUNCTION
+# setup_logger: 모듈별 로거 생성 (파일+콘솔 핸들러)
+# setup_web_logger: 웹 검색 전용 로거 생성
+# setup_api_logger: API 전용 로거 생성 (api.log)
+# _write_temp_and_replace: LOG CLEANUP FUNCTIONS
+# delete_old_daily_logs: llm_*.log, web_*.log 중 지정일 이전 파일 삭제
+# trim_old_log_entries: 타임스탬프 기반으로 단일 로그 파일에서 오래된 항목 제거
+# trim_large_plain_logs: 타임스탬프 없는 로그 파일의 크기를 제한 (최근 줄만 유지)
+# cleanup_all_logs: 전체 로그 정리 (앱 시작 시 1회 호출)
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import os
 import re
 import sys
@@ -22,7 +33,7 @@ _loggers_initialized = {}
 # ============================================================
 
 # 로그 포맷
-DEFAULT_LOG_FORMAT = '[%(asctime)s] [%(levelname)s] [%(name)s] -> %(message)s'
+DEFAULT_LOG_FORMAT = '[%(asctime)s] [%(levelname)s] [%(name)-39s] -> %(message)s'
 DEFAULT_DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 
 # 로그 파일 패턴
@@ -73,7 +84,7 @@ class DailyRotatingFileHandler(logging.FileHandler):
     def _open(self):
         stream = super()._open()
         try:
-            os.chmod(self.baseFilename, 0o666)
+            os.chmod(self.baseFilename, 0o644)
         except OSError:
             pass
         return stream
@@ -96,12 +107,15 @@ class DailyRotatingFileHandler(logging.FileHandler):
 # LOGGER SETUP FUNCTION
 # 로그 설정 함수
 # 프로젝트 내 모든 파일별 로그 생성
+# 로거 초기화 공통 로직.
 # ============================================================
 
 def _setup_logger_impl(cache_key, logger_name, file_pattern, error_label):
-    """로거 초기화 공통 로직."""
     log_level_str = (os.getenv("LOG_LEVEL") or settings.logging.level or "INFO").strip().upper()
     log_level = getattr(logging, log_level_str, logging.INFO)
+    log_console_enabled = str(os.getenv("LOG_CONSOLE_ENABLED", "false")).strip().lower() in {
+        "1", "true", "yes", "on"
+    }
 
     if cache_key in _loggers_initialized:
         logger = logging.getLogger(logger_name)
@@ -126,13 +140,14 @@ def _setup_logger_impl(cache_key, logger_name, file_pattern, error_label):
     try:
         file_handler = DailyRotatingFileHandler(os.path.join(log_dir, file_pattern), encoding='utf-8')
         file_handler.setLevel(log_level)
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(log_level)
         formatter = logging.Formatter(DEFAULT_LOG_FORMAT)
         file_handler.setFormatter(formatter)
-        console_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
-        logger.addHandler(console_handler)
+        if log_console_enabled:
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(log_level)
+            console_handler.setFormatter(formatter)
+            logger.addHandler(console_handler)
     except Exception as e:
         print(f"{error_label} 핸들러 설정 중 오류: {e}", file=sys.stderr)
         console_handler = logging.StreamHandler()
@@ -153,13 +168,65 @@ def setup_web_logger(name=None):
     return _setup_logger_impl(cache_key, cache_key, "web_%Y-%m-%d.log", "웹 로그")
 
 
+def setup_api_logger(name=None):
+    """API 전용 로거 (api.log에 기록, Uvicorn 로그와 동일 파일)"""
+    cache_key = f"_api_{name}"
+    if cache_key in _loggers_initialized:
+        logger = logging.getLogger(cache_key)
+        return logger
+
+    log_level_str = (os.getenv("LOG_LEVEL") or settings.logging.level or "INFO").strip().upper()
+    log_level = getattr(logging, log_level_str, logging.INFO)
+    log_console_enabled = str(os.getenv("LOG_CONSOLE_ENABLED", "false")).strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+    log_dir = settings.logging.path or "logs"
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except OSError:
+        pass
+
+    logger = logging.getLogger(cache_key)
+    logger.setLevel(log_level)
+
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+
+    try:
+        api_log_path = os.path.join(log_dir, "api.log")
+        file_handler = logging.FileHandler(api_log_path, mode='a', encoding='utf-8')
+        file_handler.setLevel(log_level)
+        formatter = logging.Formatter(DEFAULT_LOG_FORMAT)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+        try:
+            os.chmod(api_log_path, 0o644)
+        except OSError:
+            pass
+        if log_console_enabled:
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(log_level)
+            console_handler.setFormatter(formatter)
+            logger.addHandler(console_handler)
+    except Exception as e:
+        print(f"API 로그 핸들러 설정 중 오류: {e}", file=sys.stderr)
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(logging.Formatter(DEFAULT_LOG_FORMAT))
+        logger.addHandler(console_handler)
+
+    logger.propagate = False
+    _loggers_initialized[cache_key] = True
+    return logger
+
+
 # ============================================================
 # LOG CLEANUP FUNCTIONS
 # 로그 정리 함수 (보관 기간: 100일)
+# 임시 파일에 쓴 후 원본 교체 (안전한 파일 쓰기).
 # ============================================================
 
 def _write_temp_and_replace(filepath, lines):
-    """임시 파일에 쓴 후 원본 교체 (안전한 파일 쓰기)."""
     dir_name = os.path.dirname(filepath)
     filename = os.path.basename(filepath)
     with tempfile.NamedTemporaryFile(
@@ -171,8 +238,10 @@ def _write_temp_and_replace(filepath, lines):
     os.replace(tmp_path, filepath)
 
 
+# ============================================================
+# llm_*.log, web_*.log 중 지정일 이전 파일 삭제
+# ============================================================
 def delete_old_daily_logs(log_dir, days=LOG_RETENTION_DAYS):
-    """llm_*.log, web_*.log 중 지정일 이전 파일 삭제"""
     cutoff = datetime.now() - timedelta(days=days)
     deleted_count = 0
 
@@ -193,8 +262,10 @@ def delete_old_daily_logs(log_dir, days=LOG_RETENTION_DAYS):
     return deleted_count
 
 
+# ============================================================
+# 타임스탬프 기반으로 단일 로그 파일에서 오래된 항목 제거
+# ============================================================
 def trim_old_log_entries(log_dir, days=LOG_RETENTION_DAYS):
-    """타임스탬프 기반으로 단일 로그 파일에서 오래된 항목 제거"""
     cutoff = datetime.now() - timedelta(days=days)
     cutoff_str = cutoff.strftime("%Y-%m-%d")
     target_files = ["scheduler.log", "api.log", "service.log"]
@@ -254,8 +325,10 @@ def trim_old_log_entries(log_dir, days=LOG_RETENTION_DAYS):
     return trimmed_count
 
 
+# ============================================================
+# 타임스탬프 없는 로그 파일의 크기를 제한 (최근 줄만 유지)
+# ============================================================
 def trim_large_plain_logs(log_dir, max_lines=MAX_PLAIN_LOG_LINES):
-    """타임스탬프 없는 로그 파일의 크기를 제한 (최근 줄만 유지)"""
     target_files = ["ollama.log", "react_build.log"]
     trimmed_count = 0
 
@@ -283,8 +356,10 @@ def trim_large_plain_logs(log_dir, max_lines=MAX_PLAIN_LOG_LINES):
     return trimmed_count
 
 
+# ============================================================
+# 전체 로그 정리 (앱 시작 시 1회 호출)
+# ============================================================
 def cleanup_all_logs():
-    """전체 로그 정리 (앱 시작 시 1회 호출)"""
     log_dir = settings.logging.path or "logs"
     if not os.path.isdir(log_dir):
         return
@@ -311,6 +386,7 @@ def cleanup_all_logs():
 __all__ = [
     "setup_logger",
     "setup_web_logger",
+    "setup_api_logger",
     "DailyRotatingFileHandler",
     "cleanup_all_logs",
     "delete_old_daily_logs",

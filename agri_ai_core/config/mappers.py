@@ -1,7 +1,9 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 매핑 모듈
 # 센서/릴레이 한글↔영문 매핑, 필드 매핑, 검색 함수
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --->
+# get_relay_mapping: 릴레이 전체 매핑 반환
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # 센서 매핑 (한글 -> 영문 키)
 SENSOR_MAPPING = {
@@ -27,7 +29,8 @@ RELAY_MAPPING = {
     "열풍기": "indoor_heater_flag",
     "순환댐퍼": "air_circulation_valve_flag",
     "흡기댐퍼": "air_intake_valve_flag",
-    "배기댐퍼": "air_exhaust_valve_flag"
+    "배기댐퍼": "air_exhaust_valve_flag",
+    "열풍댐퍼": "indoor_heater_valve_flag"
 }
 
 # 센서 필드 매핑 - 키: 센서 필드명, 값: (한글명, 단위)
@@ -56,7 +59,7 @@ RELAY_FIELD_MAPPING = {
     'air_circulation_valve_flag': ('순환댐퍼 상태(릴레이10)', '순환댐퍼', '내부공기의 흐름을 제어하는 장치'),
     'air_intake_valve_flag': ('흡기댐퍼 상태(릴레이11)', '흡기댐퍼', '외부공기를 내부로 흡입시키는 장치'),
     'air_exhaust_valve_flag': ('배기댐퍼 상태(릴레이14)', '배기댐퍼', '내부공기를 외부로 배출시키는 장치'),
-    'indoor_heater2_flag': ('열풍댐퍼 상태(릴레이15)', '열풍댐퍼', '내부공기를 올리고자 할때 사용하는 추가 장치'),
+    'indoor_heater_valve_flag': ('열풍댐퍼 상태(릴레이15)', '열풍댐퍼', '내부공기를 올리고자 할때 사용하는 추가 장치'),
 
     'relay_1st_flag': ('물가열기 상태(릴레이1)', '물가열기', 'true: 수온 상승'),
     'relay_2st_flag': ('분사펌프 상태(릴레이2)', '분사펌프', 'true: 습도 상승'),
@@ -85,7 +88,7 @@ RELAY_FIELD_MAPPING_E = {
     'air_exhaust_valve_flag': ('배기댐퍼 상태(릴레이11)', '배기댐퍼', '내부공기를 외부로 배출시키는 장치'),
     'drainage_motor_flag': ('배수밸브 상태(릴레이12)', '배수밸브', '시스템 내부에 있는 물을 외부로 배출하는데 사용되는 장치'),
     'indoor_heater_flag': ('열풍기 상태(릴레이13)', '열풍기', '내부공기를 올리고자 할때 사용하는 장치'),
-    'indoor_heater2_flag': ('열풍댐퍼 상태(릴레이14)', '열풍댐퍼', '내부공기를 올리고자 할때 사용하는 추가 장치'),
+    'indoor_heater_valve_flag': ('열풍댐퍼 상태(릴레이14)', '열풍댐퍼', '내부공기를 올리고자 할때 사용하는 추가 장치'),
 
     'relay_1st_flag': ('물가열기 상태(릴레이1)', '물가열기', 'true: 수온 상승'),
     'relay_2st_flag': ('분사펌프 상태(릴레이2)', '분사펌프', 'true: 습도 상승'),
@@ -103,62 +106,9 @@ RELAY_FIELD_MAPPING_E = {
 }
 
 
-def get_sensor_name(key):
-    if key in SENSOR_FIELD_MAPPING:
-        return SENSOR_FIELD_MAPPING[key][0]
-    return key
-
-
-def get_relay_name(relay_key, house_id=None, default=None):
-    mapping = get_relay_mapping(house_id)
-    entry = mapping.get(relay_key)
-
-    if isinstance(entry, (list, tuple)) and entry:
-        if len(entry) > 1 and entry[1]:
-            return entry[1]
-        return entry[0]
-
-    return default or relay_key
-
-
-def get_sensor_field_mapping():
-    return SENSOR_FIELD_MAPPING
-
-
-def get_relay_field_mapping(house_id=None):
-    return get_relay_mapping(house_id=house_id)
-
-
 def get_relay_mapping(house_id=None):
     if house_id == 2:
         return RELAY_FIELD_MAPPING_E
     return RELAY_FIELD_MAPPING
 
 
-_RETURN_INDEX = {'function_detail': 0, 'function_name': 1, 'function_content': 2}
-
-
-def search_relay_function(search_item, search_type, search_value, return_type):
-    mapping = {'rfm': RELAY_FIELD_MAPPING, 'rfm_e': RELAY_FIELD_MAPPING_E}.get(search_item)
-    if not mapping:
-        return None
-
-    # 키 검색
-    if search_type == 'relay_name':
-        found_key = search_value if search_value in mapping else None
-    elif search_type == 'function_name':
-        found_key = next((k for k, v in mapping.items() if len(v) > 1 and v[1] == search_value), None)
-    else:
-        return None
-
-    if not found_key:
-        return None
-
-    if return_type in ('english_name', 'relay_name'):
-        return found_key
-
-    idx = _RETURN_INDEX.get(return_type)
-    if idx is not None:
-        val = mapping[found_key]
-        return val[idx] if len(val) > idx else None
-    return None

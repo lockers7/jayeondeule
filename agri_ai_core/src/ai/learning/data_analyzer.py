@@ -1,4 +1,4 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 데이터 분석 모듈
 # 센서 데이터, 제어 이력 등을 통계 분석하여 패턴을 찾고,
 # 최적 제어 조건을 도출하기 위한 인사이트를 제공합니다.
@@ -9,6 +9,9 @@
 # initialize_time_patterns: 시간 패턴 초기화
 # select_top_crops: 최적 작물 선택
 # collect_optimal_data: 최적 환경 데이터 수집
+# _apply_stats: 센서 통계 공통 헬퍼
+# _collect_sensor_values: 센서 데이터에서 특정 필드의 값 리스트를 추출 (0 제외).
+# _collect_day_night_values: 센서 데이터에서 주간/야간 분리하여 값 리스트 추출.
 # analyze_temperature_conditions: 온도 조건 분석
 # analyze_humidity_conditions: 습도 조건 분석
 # analyze_co2_conditions: CO2 조건 분석
@@ -20,8 +23,8 @@
 # update_time_patterns_with_sensor_data: 센서 데이터로 시간 패턴 업데이트
 # analyze_relay_data_for_time_patterns: 릴레이 데이터 분석 및 시간 패턴 업데이트
 # analyze_farm_time_patterns: 농장별 시간 패턴 분석
-# process_stats_and_optimal_data: 통계 및 최적 환경 데이터 처리
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# update_learning_timestamp: AI 학습 마지막 실행 타임스탬프 기록
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import numpy as np
 from datetime import datetime
 
@@ -203,15 +206,14 @@ def collect_optimal_data(units_data, top_crops, current_hour):
             if not unit_datetime:
                 continue
 
-            try:
-                if isinstance(unit_datetime, str):
-                    unit_datetime = datetime.strptime(unit_datetime, "%Y-%m-%d %H:%M:%S")
-            except Exception:
+            if isinstance(unit_datetime, str):
                 try:
                     unit_datetime = datetime.strptime(unit_datetime, "%Y-%m-%d %H:%M:%S")
-                except Exception as e2:
-                    logger.debug(f"장치 데이터 날짜 변환 오류: {e2}")
+                except (ValueError, TypeError) as e:
+                    logger.debug(f"장치 데이터 날짜 변환 오류: {e}")
                     continue
+            elif not isinstance(unit_datetime, datetime):
+                continue
 
             unit_hour = unit_datetime.hour
             if unit_hour != current_hour:
@@ -243,23 +245,27 @@ def collect_optimal_data(units_data, top_crops, current_hour):
 # 센서 통계 공통 헬퍼
 # --->
 # 센서 데이터에서 percentile/mean 통계를 추출하여 optimal_conditions에 반영
+# 값 리스트에 대해 25%, 75% 백분위 및 평균을 계산하여 target_dict에 적용.
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def _apply_stats(values, target_dict):
-    """값 리스트에 대해 25%, 75% 백분위 및 평균을 계산하여 target_dict에 적용."""
     if values:
         target_dict["min"] = round(np.percentile(values, 25), 1)
         target_dict["max"] = round(np.percentile(values, 75), 1)
         target_dict["optimal"] = round(np.mean(values), 1)
 
 
+# ============================================================
+# 센서 데이터에서 특정 필드의 값 리스트를 추출 (0 제외).
+# ============================================================
 def _collect_sensor_values(sensor_data, field_key):
-    """센서 데이터에서 특정 필드의 값 리스트를 추출 (0 제외)."""
     return [entry["values"].get(field_key, 0) for entry in sensor_data
             if entry.get("values", {}).get(field_key)]
 
 
+# ============================================================
+# 센서 데이터에서 주간/야간 분리하여 값 리스트 추출.
+# ============================================================
 def _collect_day_night_values(sensor_data, field_key):
-    """센서 데이터에서 주간/야간 분리하여 값 리스트 추출."""
     day = [entry["values"].get(field_key, 0) for entry in sensor_data
            if entry["is_daytime"] and entry.get("values", {}).get(field_key)]
     night = [entry["values"].get(field_key, 0) for entry in sensor_data
@@ -495,13 +501,12 @@ def analyze_farm_time_patterns(data, hour):
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 통계 및 최적 환경 데이터 처리
+# AI 학습 마지막 실행 타임스탬프를 DB에 기록
 # --->
-# 통계 및 최적 환경 데이터 처리
 # Returns:
 # bool: 성공 여부
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def process_stats_and_optimal_data():
+def update_learning_timestamp():
     try:
         logger.debug("-" * 100)
         logger.debug("통계 및 최적 환경 데이터 처리 시작")
@@ -538,7 +543,7 @@ def process_stats_and_optimal_data():
         return True
 
     except Exception as e:
-        logger.error(f"process_stats_and_optimal_data 통계 및 최적 환경 데이터 처리 중 오류: {e}")
+        logger.error(f"update_learning_timestamp 학습 타임스탬프 기록 중 오류: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return False

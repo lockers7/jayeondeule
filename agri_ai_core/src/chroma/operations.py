@@ -1,30 +1,24 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # ChromaDB 데이터 작업 모듈
 # 벡터 임베딩 추가, 유사도 검색, 데이터 업데이트/삭제 등
 # 실제 데이터 작업을 수행하는 함수들을 제공합니다.
 # --->
-# prepare_metadata_for_chroma: 메타데이터를 ChromaDB 호환 형식으로 변환
-# clean_metadata: 메타데이터 정리 (prepare_metadata_for_chroma 별칭)
-# restore_metadata_from_chroma: ChromaDB에서 조회한 metadata를 원래 형태로 복원
-# generate_doc_id: 문서 ID 생성기
+# _http_post: ChromaDB REST API POST 요청
+# _build_embedding_from_text: 텍스트로부터 임베딩 벡터 생성
 # add_document: 문서 추가 (단일 문서)
 # get_documents: 문서 읽기 (복수 문서)
 # delete_document: 문서 삭제
 # upsert_collection_data: 문서 업서트 (있으면 업데이트, 없으면 추가)
 # upsert_documents_with_embedding: 복수 문서 업서트 (임베딩 포함)
 # query_documents: 벡터 검색
-# flatten: 기능 설명 필요
-# flatten_field: 기능 설명 필요
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import os
 import time
 import traceback
 
-from decimal import Decimal
-from datetime import datetime
-
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.ai.mcp_client import mcp_http_request
+from agri_ai_core.src.utils.validators import is_true
 from agri_ai_core.src.chroma.config import CHROMA_API_BASE
 from agri_ai_core.src.chroma.client import (
     get_collection_id_from_name,
@@ -36,7 +30,6 @@ from agri_ai_core.src.chroma.utils import (
     prepare_metadata_for_chroma,
     clean_metadata,
     restore_metadata_from_chroma,
-    generate_doc_id,
 )
 
 logger = setup_logger(__name__)
@@ -51,11 +44,7 @@ def _http_post(url: str, payload: dict, timeout: int = 30):
     )
 
 
-def _is_true(value) -> bool:
-    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-_AUTO_EMBED_ON_UPSERT = _is_true(os.getenv("AUTO_EMBED_ON_UPSERT", "true"))
+_AUTO_EMBED_ON_UPSERT = is_true(os.getenv("AUTO_EMBED_ON_UPSERT", "true"))
 
 
 def _build_embedding_from_text(text):

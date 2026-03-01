@@ -1,12 +1,14 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 문서 처리 파이프라인 모듈
 # PDF, 텍스트 등 다양한 형식의 문서를 파싱하고 처리하여
 # LLM이 활용할 수 있는 형태로 변환합니다.
 # --->
+# messages_to_text: 대화 메시지 목록 → RAG 저장용 텍스트 변환 (공통)
+# format_rag_save_result: RAG 저장 결과 → 사용자 안내 메시지 포맷팅 (공통)
 # detect_document_type: 문서 유형 및 작물명 감지
 # llm_document_process: 문서를 처리하여 ChromaDB에 저장
 # process_attached_files: 첨부 파일들을 처리하고 학습
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import os
 import traceback
 from datetime import datetime
@@ -79,6 +81,11 @@ def format_rag_save_result(result, message_count=0):
             summary += f"  감지된 작물: {crop_name}\n"
         if structured:
             summary += f"  구조화 데이터: 저장 완료\n"
+        if result.get("summary_stored"):
+            summary += f"  문서 요약: LLM 생성 완료\n"
+        qa_count = result.get("qa_pairs_generated", 0)
+        if qa_count > 0:
+            summary += f"  QA 쌍: {qa_count}개 생성\n"
         summary += "\n저장된 대화 내용으로 질문해보세요!"
         return True, summary
     else:
@@ -205,7 +212,34 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None):
         if isinstance(chunks_result, dict) and not chunks_result.get("success", False):
             logger.warning(f"문서 청크 저장 실패: {chunks_result.get('error', '알 수 없는 오류')}")
 
-        # 2. 구조화된 정보 추출 및 저장 (extract_structured_information이 필요하면 별도 import)
+        # 2. LLM 문서 이해/요약 (요약 + QA 쌍 생성)
+        try:
+            from agri_ai_core.src.ai.rag.document_enricher import enrich_document
+
+            enrich_result = enrich_document(
+                document_content=document_content,
+                metadata=metadata,
+                document_type=document_type,
+                crop_name=crop_name,
+            )
+
+            if enrich_result.get("success"):
+                result["summary_stored"] = enrich_result.get("summary_stored", False)
+                result["qa_pairs_generated"] = enrich_result.get("qa_pairs_generated", 0)
+                logger.info(
+                    f"[문서학습] LLM enrichment 완료: "
+                    f"요약={'O' if enrich_result.get('summary_stored') else 'X'}, "
+                    f"QA={enrich_result.get('qa_pairs_generated', 0)}쌍"
+                )
+            else:
+                logger.warning(
+                    f"[문서학습] LLM enrichment 실패 (청크 저장은 유지): "
+                    f"{enrich_result.get('error', '')}"
+                )
+        except Exception as e:
+            logger.warning(f"[문서학습] LLM enrichment 예외 (청크 저장은 유지): {e}")
+
+        # 3. 구조화된 정보 추출 및 저장 (extract_structured_information이 필요하면 별도 import)
         # 여기서는 기본 메타데이터만 저장
         try:
             # 안정적 ID: 파일명 기반 (동일 파일 재학습시 upsert)
@@ -315,6 +349,8 @@ def process_attached_files(file_paths, farm_id):
                     msg += f" | 작물: {crop_name}"
                 if structured:
                     msg += f" | 구조화 데이터 저장 완료"
+                if result.get("summary_stored"):
+                    msg += f" | LLM 요약 완료"
                 if qa_count > 0:
                     msg += f" | {qa_count}개 QA 쌍 생성"
 
