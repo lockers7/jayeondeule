@@ -1,19 +1,22 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 텍스트 임베딩 생성 모듈
 # 텍스트를 벡터로 변환하는 임베딩 모델을 관리하고,
 # 배치 처리를 통해 효율적인 벡터화를 수행합니다.
 # --->
+# _disable_embedding: 임베딩 서비스 비활성화 (global 없이 상태 변경)
+# _mcp_get_status: MCP 서버 상태 조회
+# _extract_embedding_from_payload: 응답에서 임베딩 벡터 추출
+# _get_expected_dim: 설정된 임베딩 차원(없으면 기본 768)을 반환
 # check_ollama_health: Ollama 서버 상태 확인
 # get_dynamic_timeout: 텍스트 길이에 따른 동적 타임아웃 계산
 # generate_dummy_embedding: 일관성 있는 더미 임베딩 생성
 # embed_text: 텍스트를 임베딩 벡터로 변환
-# reset_embedding_service: 임베딩 서비스 상태 초기화
-# clear_embedding_cache: 임베딩 캐시 클리어
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import os
 import time
 import hashlib
 import logging
+import threading
 import numpy as np
 from collections import OrderedDict
 from typing import Any, Optional
@@ -29,18 +32,21 @@ logger = setup_logger(__name__)
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 _embedding_cache = OrderedDict()
 _EMBEDDING_CACHE_MAX = 256
+_cache_lock = threading.Lock()
 _embed_state = {"disabled": False, "reason": None}
 
 
+# ============================================================
+# 임베딩 서비스 비활성화 (global 없이 상태 변경)
+# ============================================================
 def _disable_embedding(reason):
-    """임베딩 서비스 비활성화 (global 없이 상태 변경)"""
     _embed_state["disabled"] = True
     _embed_state["reason"] = reason
     _embed_state["disabled_ts"] = time.time()
 
 # 헬스체크 TTL 캐시
 _health_cache = {"ok": False, "ts": 0.0}
-_HEALTH_TTL = 60  # 초
+_HEALTH_TTL = 300  # 초 (5분)
 
 
 def _mcp_get_status(url: str, timeout: int = 5) -> Optional[int]:
@@ -76,7 +82,7 @@ def _extract_embedding_from_payload(data: Any):
 # --->
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def _get_expected_dim() -> int:
-    return getattr(settings, "embedding_dim", None) or 768
+    return getattr(settings, "embedding_dim", None) or 1024
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -127,9 +133,9 @@ def generate_dummy_embedding(text):
         text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
         seed = int(text_hash[:8], 16)
 
-        np.random.seed(seed)
+        rng = np.random.default_rng(seed)
         expected_dim = _get_expected_dim()
-        dummy_embedding = np.random.normal(0, 0.1, expected_dim).tolist()
+        dummy_embedding = rng.normal(0, 0.1, expected_dim).tolist()
 
         logger.debug(f"[embed_text] 더미 임베딩 생성 완료 - 시드: {seed}, 차원: {expected_dim}")
         return dummy_embedding
@@ -184,11 +190,12 @@ def embed_text(text, timeout=60, max_retries=5):
         logger.debug(f"[embed_text] 텍스트 길이 제한 적용: {original_length} -> {len(text)} 문자")
 
     cache_key = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    cached = _embedding_cache.get(cache_key)
-    if cached is not None:
-        logger.debug("[embed_text] 캐시된 임베딩 사용")
-        _embedding_cache.move_to_end(cache_key)
-        return cached
+    with _cache_lock:
+        cached = _embedding_cache.get(cache_key)
+        if cached is not None:
+            logger.debug("[embed_text] 캐시된 임베딩 사용")
+            _embedding_cache.move_to_end(cache_key)
+            return cached
 
     _t_health = time.time()
     if not check_ollama_health():
@@ -267,10 +274,11 @@ def embed_text(text, timeout=60, max_retries=5):
                 if len(embedding) == expected_dim:
                     _embed_total_ms = (time.time() - _t_embed_start) * 1000
                     logger.debug(f"[PERF:임베딩] 성공: 총={_embed_total_ms:.0f}ms, API={elapsed_time:.2f}s, 모델={embedding_model}, 차원={len(embedding)}")
-                    _embedding_cache[cache_key] = embedding
-                    _embedding_cache.move_to_end(cache_key)
-                    if len(_embedding_cache) > _EMBEDDING_CACHE_MAX:
-                        _embedding_cache.popitem(last=False)
+                    with _cache_lock:
+                        _embedding_cache[cache_key] = embedding
+                        _embedding_cache.move_to_end(cache_key)
+                        if len(_embedding_cache) > _EMBEDDING_CACHE_MAX:
+                            _embedding_cache.popitem(last=False)
                     return embedding
                 else:
                     logger.warning(f"[embed_text] 임베딩 차원 불일치: {len(embedding)} != {expected_dim}")
@@ -296,19 +304,5 @@ def embed_text(text, timeout=60, max_retries=5):
     logger.debug(f"[PERF:임베딩] 재시도실패→더미: 총={_embed_total_ms:.0f}ms, 시도={max_retries}회, 오류={last_error}")
 
     return generate_dummy_embedding(text)
-
-
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 임베딩 서비스 상태 초기화
-# --->
-# 외부에서 호출하여 임베딩 서비스를 재활성화
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def reset_embedding_service():
-    _embed_state["disabled"] = False
-    _embed_state["reason"] = None
-    _embedding_cache.clear()
-    _health_cache["ok"] = False
-    _health_cache["ts"] = 0.0
-    logger.info("[embed_text] 임베딩 서비스 상태 초기화 완료")
 
 

@@ -120,7 +120,7 @@ relay_11st_flag,air_intake_valve_flag,흡기댐퍼,순환모드에 따라 제어
 relay_12st_flag,unused,미사용,-
 relay_13st_flag,unused,미사용,-
 relay_14st_flag,air_exhaust_valve_flag,배기댐퍼,순환모드에 따라 제어
-relay_15st_flag,indoor_heater2_flag,열풍댐퍼,열풍기와 연동 (ON 시퀀스: 열풍댐퍼→열풍기)
+relay_15st_flag,indoor_heater_valve_flag,열풍댐퍼,열풍기와 연동 (ON 시퀀스: 열풍댐퍼→열풍기)
 relay_16st_flag,unused,미사용,-
 
 ========================================
@@ -140,7 +140,7 @@ relay_10st_flag,air_intake_valve_flag,흡기댐퍼,순환모드에 따라 제어
 relay_11st_flag,air_exhaust_valve_flag,배기댐퍼,순환모드에 따라 제어
 relay_12st_flag,drainage_motor_flag,배수밸브,항상 ON (배수)
 relay_13st_flag,indoor_heater_flag,열풍기,저온+고습 시 가온/제습
-relay_14st_flag,indoor_heater2_flag,열풍댐퍼,열풍기와 연동
+relay_14st_flag,indoor_heater_valve_flag,열풍댐퍼,열풍기와 연동
 relay_15st_flag,unused,미사용,-
 relay_16st_flag,unused,미사용,-
 

@@ -1,28 +1,45 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 생육 기반 인과 관계 RAG 프로세서
 # 생육 데이터 입력 시점을 기준으로 센서/릴레이 환경 통계를 묶어 VectorDB에 저장한다.
 # 장기적으로 누적된 데이터를 활용하여 AI가 최적 환경 셋팅을 제안할 수 있게 한다.
 # --->
+# _get_last_rag_datetime: 마지막 RAG 처리 시점 관리
+# _update_last_rag_datetime: 현재 시간을 마지막 생육 RAG 처리 시점으로 저장한다.
+# _db_fetch: 데이터 조회 헬퍼
+# _get_active_farm_houses: 활성 농장-재배사 목록을 조회한다.
+# _get_new_crop_entries: 마지막 RAG 시점 이후 새로운 생육 입력을 조회한다.
+# _get_sensor_stats: 시간 구간의 센서 통계를 조회한다.
+# _get_relay_stats: 시간 구간의 릴레이 가동 비율을 조회한다.
+# _get_day_night_stats: 주야간 분리 센서 통계를 조회한다.
+# _get_moving_averages: 이동평균 시작/끝 샘플을 조회한다 (트렌드 파악용).
+# _check_today_crops: 당일 생육 입력이 존재하는지 확인한다.
+# _get_season: 월(month) → 계절(봄/여름/가을/겨울) 변환
+# _build_growth_context: 생육 컨텍스트를 구성한다 (계절, 시간대, 재배일수 등).
+# _build_rag_document: RAG 문서 텍스트를 생성한다.
+# _build_rag_metadata: VectorDB 메타데이터를 구성한다.
+# _store_growth_rag: VectorDB 저장
+# _ensure_daily_rag: 00:00 일일 보장 RAG
 # run_growth_rag: 메인 진입점 (스케줄러에서 호출)
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import hashlib
 import time
 import traceback
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.postgresql.connection import db_session
 from agri_ai_core.src.postgresql import queries as dbQry
+from agri_ai_core.src.utils.conversion import safe_float, safe_int
 
 logger = setup_logger(__name__)
 
 
 # ------------------------------------------------------------------
 # 마지막 RAG 처리 시점 관리
+# 마지막 생육 RAG 처리 시점을 조회한다. 없으면 7일 전 반환.
 # ------------------------------------------------------------------
 def _get_last_rag_datetime() -> str:
-    """마지막 생육 RAG 처리 시점을 조회한다. 없으면 7일 전 반환."""
     try:
         with db_session() as database:
             row = database.fetch_one(dbQry.GET_LAST_GROWTH_RAG_DATETIME)
@@ -35,8 +52,10 @@ def _get_last_rag_datetime() -> str:
     return (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
 
 
+# ============================================================
+# 현재 시간을 마지막 생육 RAG 처리 시점으로 저장한다.
+# ============================================================
 def _update_last_rag_datetime() -> None:
-    """현재 시간을 마지막 생육 RAG 처리 시점으로 저장한다."""
     try:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with db_session() as database:
@@ -51,9 +70,9 @@ def _update_last_rag_datetime() -> None:
 
 # ------------------------------------------------------------------
 # 데이터 조회 헬퍼
+# 생육RAG DB 조회 공통 래퍼
 # ------------------------------------------------------------------
 def _db_fetch(query, vals=(), *, fetch="all", error_msg="DB 조회", default=None):
-    """생육RAG DB 조회 공통 래퍼"""
     try:
         with db_session() as database:
             if fetch == "one":
@@ -64,32 +83,42 @@ def _db_fetch(query, vals=(), *, fetch="all", error_msg="DB 조회", default=Non
         return default if default is not None else []
 
 
+# ============================================================
+# 활성 농장-재배사 목록을 조회한다.
+# ============================================================
 def _get_active_farm_houses() -> List[Dict[str, Any]]:
-    """활성 농장-재배사 목록을 조회한다."""
     return _db_fetch(dbQry.GET_ACTIVE_FARM_HOUSES_WITH_CROP, error_msg="농장-재배사 목록 조회 실패", default=[])
 
 
+# ============================================================
+# 마지막 RAG 시점 이후 새로운 생육 입력을 조회한다.
+# ============================================================
 def _get_new_crop_entries(farm_id, house_id, after_dt: str) -> List[Dict[str, Any]]:
-    """마지막 RAG 시점 이후 새로운 생육 입력을 조회한다."""
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return _db_fetch(dbQry.GET_CROPS_IN_RANGE, (farm_id, house_id, after_dt, now_str),
                      error_msg=f"생육 데이터 조회 실패 farm={farm_id} house={house_id}", default=[])
 
 
+# ============================================================
+# 시간 구간의 센서 통계를 조회한다.
+# ============================================================
 def _get_sensor_stats(farm_id, house_id, start_dt: str, end_dt: str) -> Dict[str, Any]:
-    """시간 구간의 센서 통계를 조회한다."""
     return _db_fetch(dbQry.GET_SENSOR_STATS_IN_RANGE, (farm_id, house_id, start_dt, end_dt),
                      fetch="one", error_msg="센서 통계 조회 실패", default={})
 
 
+# ============================================================
+# 시간 구간의 릴레이 가동 비율을 조회한다.
+# ============================================================
 def _get_relay_stats(farm_id, house_id, start_dt: str, end_dt: str) -> Dict[str, Any]:
-    """시간 구간의 릴레이 가동 비율을 조회한다."""
     return _db_fetch(dbQry.GET_RELAY_STATS_IN_RANGE, (farm_id, house_id, start_dt, end_dt),
                      fetch="one", error_msg="릴레이 통계 조회 실패", default={})
 
 
+# ============================================================
+# 주야간 분리 센서 통계를 조회한다.
+# ============================================================
 def _get_day_night_stats(farm_id, house_id, start_dt: str, end_dt: str) -> Dict[str, Dict]:
-    """주야간 분리 센서 통계를 조회한다."""
     result = {"day": {}, "night": {}}
     try:
         with db_session() as database:
@@ -107,14 +136,18 @@ def _get_day_night_stats(farm_id, house_id, start_dt: str, end_dt: str) -> Dict[
     return result
 
 
+# ============================================================
+# 이동평균 시작/끝 샘플을 조회한다 (트렌드 파악용).
+# ============================================================
 def _get_moving_averages(farm_id, house_id, start_dt: str, end_dt: str) -> List[Dict]:
-    """이동평균 시작/끝 샘플을 조회한다 (트렌드 파악용)."""
     return _db_fetch(dbQry.GET_SENSOR_MOVING_AVG, (farm_id, house_id, start_dt, end_dt),
                      error_msg="이동평균 조회 실패", default=[])
 
 
+# ============================================================
+# 당일 생육 입력이 존재하는지 확인한다.
+# ============================================================
 def _check_today_crops(farm_id, house_id) -> bool:
-    """당일 생육 입력이 존재하는지 확인한다."""
     try:
         with db_session() as database:
             row = database.fetch_one(
@@ -138,22 +171,10 @@ def _get_season(month: int) -> str:
     return _SEASON_MAP.get(month, "겨울")
 
 
-def _safe_float(value, default=0.0):
-    try:
-        return float(value) if value is not None else default
-    except (ValueError, TypeError):
-        return default
-
-
-def _safe_int(value, default=0):
-    try:
-        return int(value) if value is not None else default
-    except (ValueError, TypeError):
-        return default
-
-
+# ============================================================
+# 생육 컨텍스트를 구성한다 (계절, 시간대, 재배일수 등).
+# ============================================================
 def _build_growth_context(crop_entry: Dict, sensor_stats: Dict, day_night: Dict) -> Dict[str, Any]:
-    """생육 컨텍스트를 구성한다 (계절, 시간대, 재배일수 등)."""
     record_dt_str = crop_entry.get("record_datetime", "")
     try:
         record_dt = datetime.strptime(record_dt_str[:19], "%Y-%m-%d %H:%M:%S")
@@ -193,6 +214,9 @@ def _build_growth_context(crop_entry: Dict, sensor_stats: Dict, day_night: Dict)
     }
 
 
+# ============================================================
+# RAG 문서 텍스트를 생성한다.
+# ============================================================
 def _build_rag_document(
     crop_entry: Dict,
     sensor_stats: Dict,
@@ -205,7 +229,6 @@ def _build_rag_document(
     start_dt: str = "",
     is_daily_guarantee: bool = False,
 ) -> str:
-    """RAG 문서 텍스트를 생성한다."""
     lines = []
     record_dt = context.get("record_datetime", "")[:10]
 
@@ -224,58 +247,58 @@ def _build_rag_document(
     )
 
     # 환경 통계
-    sample_count = _safe_int(sensor_stats.get("sample_count"))
+    sample_count = safe_int(sensor_stats.get("sample_count"))
     if sample_count > 0:
         lines.append("")
         lines.append(f"[환경 통계 ({start_dt[:10]} ~ {record_dt}, 센서 {sample_count}건)]")
 
         day_stats = day_night.get("day", {})
         night_stats = day_night.get("night", {})
-        day_temp = _safe_float(day_stats.get("avg_indoor_temp"))
-        night_temp = _safe_float(night_stats.get("avg_indoor_temp"))
+        day_temp = safe_float(day_stats.get("avg_indoor_temp"))
+        night_temp = safe_float(night_stats.get("avg_indoor_temp"))
 
         lines.append(
-            f"- 실내온도: 평균 {_safe_float(sensor_stats.get('avg_indoor_temp'))}°C"
+            f"- 실내온도: 평균 {safe_float(sensor_stats.get('avg_indoor_temp'))}°C"
             f" (주간 {day_temp}°C / 야간 {night_temp}°C),"
-            f" 표준편차 {_safe_float(sensor_stats.get('std_indoor_temp'))},"
-            f" 범위 {_safe_float(sensor_stats.get('min_indoor_temp'))}~{_safe_float(sensor_stats.get('max_indoor_temp'))}"
+            f" 표준편차 {safe_float(sensor_stats.get('std_indoor_temp'))},"
+            f" 범위 {safe_float(sensor_stats.get('min_indoor_temp'))}~{safe_float(sensor_stats.get('max_indoor_temp'))}"
         )
 
-        day_hum = _safe_float(day_stats.get("avg_indoor_humidity"))
-        night_hum = _safe_float(night_stats.get("avg_indoor_humidity"))
+        day_hum = safe_float(day_stats.get("avg_indoor_humidity"))
+        night_hum = safe_float(night_stats.get("avg_indoor_humidity"))
         lines.append(
-            f"- 실내습도: 평균 {_safe_float(sensor_stats.get('avg_indoor_humidity'))}%"
+            f"- 실내습도: 평균 {safe_float(sensor_stats.get('avg_indoor_humidity'))}%"
             f" (주간 {day_hum}% / 야간 {night_hum}%),"
-            f" 표준편차 {_safe_float(sensor_stats.get('std_indoor_humidity'))},"
-            f" 범위 {_safe_float(sensor_stats.get('min_indoor_humidity'))}~{_safe_float(sensor_stats.get('max_indoor_humidity'))}"
+            f" 표준편차 {safe_float(sensor_stats.get('std_indoor_humidity'))},"
+            f" 범위 {safe_float(sensor_stats.get('min_indoor_humidity'))}~{safe_float(sensor_stats.get('max_indoor_humidity'))}"
         )
 
         lines.append(
-            f"- CO2: 평균 {_safe_float(sensor_stats.get('avg_co2'))}ppm,"
-            f" 표준편차 {_safe_float(sensor_stats.get('std_co2'))},"
-            f" 범위 {_safe_float(sensor_stats.get('min_co2'))}~{_safe_float(sensor_stats.get('max_co2'))}"
+            f"- CO2: 평균 {safe_float(sensor_stats.get('avg_co2'))}ppm,"
+            f" 표준편차 {safe_float(sensor_stats.get('std_co2'))},"
+            f" 범위 {safe_float(sensor_stats.get('min_co2'))}~{safe_float(sensor_stats.get('max_co2'))}"
         )
 
         lines.append(
-            f"- 수온: 평균 {_safe_float(sensor_stats.get('avg_water_temp'))}°C,"
-            f" 범위 {_safe_float(sensor_stats.get('min_water_temp'))}~{_safe_float(sensor_stats.get('max_water_temp'))}"
+            f"- 수온: 평균 {safe_float(sensor_stats.get('avg_water_temp'))}°C,"
+            f" 범위 {safe_float(sensor_stats.get('min_water_temp'))}~{safe_float(sensor_stats.get('max_water_temp'))}"
         )
 
-        day_light = _safe_float(day_stats.get("avg_light_level"))
-        night_light = _safe_float(night_stats.get("avg_light_level"))
+        day_light = safe_float(day_stats.get("avg_light_level"))
+        night_light = safe_float(night_stats.get("avg_light_level"))
         lines.append(
-            f"- 광량: 평균 {_safe_float(sensor_stats.get('avg_light_level'))}"
+            f"- 광량: 평균 {safe_float(sensor_stats.get('avg_light_level'))}"
             f" (주간 {day_light} / 야간 {night_light})"
         )
 
     # 릴레이 가동 비율
-    relay_sample = _safe_int(relay_stats.get("sample_count"))
+    relay_sample = safe_int(relay_stats.get("sample_count"))
     if relay_sample > 0:
         lines.append("")
         lines.append("[릴레이 가동 비율]")
 
         def _pct(val):
-            return f"{_safe_float(val) * 100:.1f}%"
+            return f"{safe_float(val) * 100:.1f}%"
 
         lines.append(
             f"- 물가열기: {_pct(relay_stats.get('heater_ratio'))} | "
@@ -297,10 +320,10 @@ def _build_rag_document(
         lines.append("[이동평균 트렌드 (6시간 윈도우)]")
         first = moving_avg[0]
         last = moving_avg[-1]
-        t1 = _safe_float(first.get("ma_indoor_temp"))
-        t2 = _safe_float(last.get("ma_indoor_temp"))
-        h1 = _safe_float(first.get("ma_indoor_humidity"))
-        h2 = _safe_float(last.get("ma_indoor_humidity"))
+        t1 = safe_float(first.get("ma_indoor_temp"))
+        t2 = safe_float(last.get("ma_indoor_temp"))
+        h1 = safe_float(first.get("ma_indoor_humidity"))
+        h2 = safe_float(last.get("ma_indoor_humidity"))
 
         if abs(t2 - t1) > 1.0:
             trend = "상승" if t2 > t1 else "하강"
@@ -319,10 +342,10 @@ def _build_rag_document(
         lines.append("")
         lines.append("[생육 결과]")
 
-        total_yield = _safe_float(crop_entry.get("total_yield"))
-        g1 = _safe_float(crop_entry.get("grade_1_yield"))
-        g2 = _safe_float(crop_entry.get("grade_2_yield"))
-        g3 = _safe_float(crop_entry.get("grade_3_yield"))
+        total_yield = safe_float(crop_entry.get("total_yield"))
+        g1 = safe_float(crop_entry.get("grade_1_yield"))
+        g2 = safe_float(crop_entry.get("grade_2_yield"))
+        g3 = safe_float(crop_entry.get("grade_3_yield"))
         g1_ratio = (g1 / total_yield * 100) if total_yield > 0 else 0
 
         if total_yield > 0:
@@ -355,6 +378,9 @@ def _build_rag_document(
     return "\n".join(lines)
 
 
+# ============================================================
+# VectorDB 메타데이터를 구성한다.
+# ============================================================
 def _build_rag_metadata(
     farm_id,
     house_id,
@@ -363,9 +389,8 @@ def _build_rag_metadata(
     sensor_stats: Dict,
     is_daily_guarantee: bool = False,
 ) -> Dict[str, Any]:
-    """VectorDB 메타데이터를 구성한다."""
-    total_yield = _safe_float(crop_entry.get("total_yield"))
-    g1 = _safe_float(crop_entry.get("grade_1_yield"))
+    total_yield = safe_float(crop_entry.get("total_yield"))
+    g1 = safe_float(crop_entry.get("grade_1_yield"))
     g1_ratio = (g1 / total_yield) if total_yield > 0 else 0.0
 
     # 이상 상태 판정
@@ -392,16 +417,17 @@ def _build_rag_metadata(
         "season": context.get("season", ""),
         "month": context.get("month", 0),
         "crop_level": context.get("crop_level", ""),
+        "ctrl_type": context.get("ctrl_type", ""),
         "days_since_start": context.get("days_since_start", 0),
         "crop_kind": context.get("crop_kind", ""),
         "growth_status": context.get("growth_status", ""),
         "pest_type": pest,
         "anomaly_flag": anomaly_flag,
         "quality_label": quality_label,
-        "sensor_sample_count": _safe_int(sensor_stats.get("sample_count")),
-        "avg_indoor_temp": _safe_float(sensor_stats.get("avg_indoor_temp")),
-        "avg_indoor_humidity": _safe_float(sensor_stats.get("avg_indoor_humidity")),
-        "avg_co2": _safe_float(sensor_stats.get("avg_co2")),
+        "sensor_sample_count": safe_int(sensor_stats.get("sample_count")),
+        "avg_indoor_temp": safe_float(sensor_stats.get("avg_indoor_temp")),
+        "avg_indoor_humidity": safe_float(sensor_stats.get("avg_indoor_humidity")),
+        "avg_co2": safe_float(sensor_stats.get("avg_co2")),
         "grade_1_ratio": round(g1_ratio, 3),
         "total_yield": total_yield,
         "is_daily_guarantee": is_daily_guarantee,
@@ -410,9 +436,9 @@ def _build_rag_metadata(
 
 # ------------------------------------------------------------------
 # VectorDB 저장
+# RAG 문서를 farm_knowledge 컬렉션에 저장한다.
 # ------------------------------------------------------------------
 def _store_growth_rag(document: str, metadata: Dict[str, Any]) -> bool:
-    """RAG 문서를 farm_knowledge 컬렉션에 저장한다."""
     try:
         from agri_ai_core.src.ai.rag.embedder import embed_text
         from agri_ai_core.src.chroma.collections import farm_knowledge_collection
@@ -459,9 +485,9 @@ def _store_growth_rag(document: str, metadata: Dict[str, Any]) -> bool:
 
 # ------------------------------------------------------------------
 # 00:00 일일 보장 RAG
+# 당일 생육 입력이 없을 때 정상 간주 RAG를 생성한다.
 # ------------------------------------------------------------------
 def _ensure_daily_rag(farm_id, house_id, last_rag_dt: str, farm_name: str = "", house_name: str = "") -> bool:
-    """당일 생육 입력이 없을 때 정상 간주 RAG를 생성한다."""
     if _check_today_crops(farm_id, house_id):
         return False  # 당일 입력이 있으면 불필요
 
@@ -475,7 +501,7 @@ def _ensure_daily_rag(farm_id, house_id, last_rag_dt: str, farm_name: str = "", 
     day_night = _get_day_night_stats(farm_id, house_id, start_dt, now_str)
     moving_avg = _get_moving_averages(farm_id, house_id, start_dt, now_str)
 
-    if not sensor_stats or _safe_int(sensor_stats.get("sample_count")) == 0:
+    if not sensor_stats or safe_int(sensor_stats.get("sample_count")) == 0:
         logger.debug(f"[생육RAG] 센서 데이터 없음, 일일 보장 RAG 스킵 farm={farm_id} house={house_id}")
         return False
 
@@ -511,18 +537,14 @@ def _ensure_daily_rag(farm_id, house_id, last_rag_dt: str, farm_name: str = "", 
 
 # ------------------------------------------------------------------
 # 메인 진입점
+# 생육 기반 인과 관계 RAG를 실행한다.
+# 스케줄러에 의해 12:00과 00:00에 호출된다.
+# Args:
+# is_midnight: True이면 00:00 실행 (당일 생육 미입력 시 보장 RAG 생성)
+# Returns:
+# dict: 처리 결과 요약
 # ------------------------------------------------------------------
 def run_growth_rag(is_midnight: bool = False) -> Dict[str, Any]:
-    """
-    생육 기반 인과 관계 RAG를 실행한다.
-    스케줄러에 의해 12:00과 00:00에 호출된다.
-
-    Args:
-        is_midnight: True이면 00:00 실행 (당일 생육 미입력 시 보장 RAG 생성)
-
-    Returns:
-        dict: 처리 결과 요약
-    """
     t_start = time.time()
     logger.info("=" * 80)
     logger.info(f"[생육RAG] 시작 (is_midnight={is_midnight})")

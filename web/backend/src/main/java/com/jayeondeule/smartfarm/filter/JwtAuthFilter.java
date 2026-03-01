@@ -14,6 +14,8 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.filter.OncePerRequestFilter;
 
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+
 import java.util.List;
 
 @Slf4j
@@ -44,11 +46,16 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 UserClaimDTO userInfo = jwtUtil.getUserInfo(token);
 
                 // Authentication 객체 생성
+                // 사용자 권한을 GrantedAuthority로 매핑
+                List<SimpleGrantedAuthority> authorities = List.of(
+                        new SimpleGrantedAuthority("ROLE_" + userInfo.getAuthLvel().getName())
+                );
+
                 UsernamePasswordAuthenticationToken auth =
                         new UsernamePasswordAuthenticationToken(
-                                userInfo, // principal: 사용자 정보(Map)
-                                null,     // credentials
-                                List.of() // authorities: 나중에 Role 기반 권한 처리 가능
+                                userInfo,    // principal: 사용자 정보
+                                null,        // credentials
+                                authorities  // authorities: Role 기반 권한
                         );
 
                 SecurityContextHolder.getContext().setAuthentication(auth);

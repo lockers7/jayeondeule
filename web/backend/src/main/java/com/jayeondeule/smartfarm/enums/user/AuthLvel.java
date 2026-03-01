@@ -10,7 +10,8 @@ import lombok.RequiredArgsConstructor;
 public enum AuthLvel {
     ADMIN(0, "ADMIN"),
     FARM_ADMIN(1, "FARM_ADMIN"),
-    MONITOR(2, "MONITOR");
+    MONITOR(2, "MONITOR"),
+    HOUS_MANAGER(3, "HOUS_MANAGER");
 
     private final int code;
     private final String name;

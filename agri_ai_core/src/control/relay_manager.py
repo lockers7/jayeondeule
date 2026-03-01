@@ -1,101 +1,47 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 릴레이 제어 관리자 모듈
 # 릴레이 설정값 변경, 상태 모니터링, 제어 이력 관리 등
 # 릴레이 제어의 상위 레벨 관리 기능을 제공합니다.
 # --->
+# _relay_detail_parts: 릴레이 전체 상태를 상세 문자열 리스트로 생성
+# log_relay_detail: 릴레이 상세 상태 로그 출력
 # set_relay_value: 릴레이 값 설정
 # get_relay_status: 릴레이 상태 조회
-# batch_relay_control: 릴레이 일괄 제어
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import traceback
-from datetime import datetime
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.config import get_relay_mapping
 from agri_ai_core.src.postgresql.connection import db_session
 from agri_ai_core.src.postgresql import queries as dbQry
 from agri_ai_core.src.postgresql.reader import read_latest_relay_info
+from agri_ai_core.src.control.control_common import (
+    RELAY_COUNT, get_pin_map, reverse_pin_map, SEMANTIC_LABELS,
+)
 
 logger = setup_logger(__name__)
 
-RELAY_COUNT = 16
 
-
-def _get_alias_mapping(house_id):
-    if int(house_id) == 2:
-        return {
-            "lighting_flag": "relay_5st_flag",
-            "irrigation_flag": "relay_6st_flag",
-        }
-    return {
-        "lighting_flag": "relay_7st_flag",
-        "irrigation_flag": "relay_8st_flag",
-    }
-
-
-# 릴레이 번호 → (영문 기능명, 한글명) 매핑
-_RELAY_DESC_STANDARD = {
-    'relay_1st_flag': ('water_heater_flag', '물가열기'),
-    'relay_2st_flag': ('fog_occurs_flag', '분사펌프'),
-    'relay_3st_flag': ('drainage_motor_flag', '배수밸브'),
-    'relay_4st_flag': ('unused', '미사용'),
-    'relay_5st_flag': ('intake_fan_flag', '흡기팬'),
-    'relay_6st_flag': ('exhaust_fan_flag', '배기팬'),
-    'relay_7st_flag': ('lighting_flag', '조명토글'),
-    'relay_8st_flag': ('irrigation_flag', '관수밸브'),
-    'relay_9st_flag': ('indoor_heater_flag', '열풍기'),
-    'relay_10st_flag': ('air_circulation_valve_flag', '순환댐퍼'),
-    'relay_11st_flag': ('air_intake_valve_flag', '흡기댐퍼'),
-    'relay_12st_flag': ('unused', '미사용'),
-    'relay_13st_flag': ('unused', '미사용'),
-    'relay_14st_flag': ('air_exhaust_valve_flag', '배기댐퍼'),
-    'relay_15st_flag': ('indoor_heater2_flag', '열풍댐퍼'),
-    'relay_16st_flag': ('unused', '미사용'),
-}
-
-_RELAY_DESC_E = {
-    'relay_1st_flag': ('water_heater_flag', '물가열기'),
-    'relay_2st_flag': ('fog_occurs_flag', '분사펌프'),
-    'relay_3st_flag': ('radiator_flag', '라디에터'),
-    'relay_4st_flag': ('unused', '미사용'),
-    'relay_5st_flag': ('lighting_flag', '조명토글'),
-    'relay_6st_flag': ('irrigation_flag', '관수밸브'),
-    'relay_7st_flag': ('intake_fan_flag', '흡기팬'),
-    'relay_8st_flag': ('exhaust_fan_flag', '배기팬'),
-    'relay_9st_flag': ('air_circulation_valve_flag', '순환댐퍼'),
-    'relay_10st_flag': ('air_intake_valve_flag', '흡기댐퍼'),
-    'relay_11st_flag': ('air_exhaust_valve_flag', '배기댐퍼'),
-    'relay_12st_flag': ('drainage_motor_flag', '배수밸브'),
-    'relay_13st_flag': ('indoor_heater_flag', '열풍기'),
-    'relay_14st_flag': ('indoor_heater2_flag', '열풍댐퍼'),
-    'relay_15st_flag': ('unused', '미사용'),
-    'relay_16st_flag': ('unused', '미사용'),
-}
-
-
-def format_relay_detail(house_id, relay_values):
-    desc_map = _RELAY_DESC_E if int(house_id) == 2 else _RELAY_DESC_STANDARD
+def _relay_detail_parts(house_id, relay_values):
+    reverse = reverse_pin_map(house_id)
     parts = []
     for i in range(1, RELAY_COUNT + 1):
         key = f"relay_{i}st_flag"
         value = relay_values.get(key, False)
-        eng, kor = desc_map.get(key, (key, ''))
+        semantic = reverse.get(key)
+        eng = semantic or 'unused'
+        kor = SEMANTIC_LABELS.get(semantic, '미사용') if semantic else '미사용'
         status = "ON" if value else "OFF"
         parts.append(f"{key}({eng}-{kor}): {status}")
-    return ", ".join(parts)
+    return parts
 
 
 def log_relay_detail(farm_id, house_id):
     current = read_latest_relay_info(farm_id, house_id)
     if not current:
         return
-    desc_map = _RELAY_DESC_E if int(house_id) == 2 else _RELAY_DESC_STANDARD
-    for i in range(1, RELAY_COUNT + 1):
-        key = f"relay_{i}st_flag"
-        value = bool(current.get(key, False))
-        eng, kor = desc_map.get(key, (key, ''))
-        status = "ON" if value else "OFF"
-        logger.info(f"{key}({eng}-{kor}): {status}")
+    for part in _relay_detail_parts(house_id, current):
+        logger.info(part)
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -129,8 +75,8 @@ def set_relay_value(farm_id, house_id, relay_settings, raw_mode=False):
                 # DB에 상태가 없으면 기본값 사용
                 relay_values = {f"relay_{i}st_flag": False for i in range(1, RELAY_COUNT + 1)}
 
-            # house_id별 alias 매핑 적용
-            alias_mapping = _get_alias_mapping(house_id)
+            # house_id별 시멘틱→릴레이 핀 매핑 적용
+            alias_mapping = get_pin_map(house_id)
 
             for key, value in relay_settings.items():
                 # 별칭을 실제 relay flag로 변환
@@ -232,74 +178,4 @@ def get_relay_status(farm_id, house_id):
         logger.error(f"릴레이 상태 조회 중 오류: {e}")
         logger.error(traceback.format_exc())
         return None
-
-
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 릴레이 일괄 제어
-# 여러 릴레이 일괄 제어
-#
-# Args:
-#     farm_id: 농장 ID
-#     house_id: 재배사 ID
-#     relay_commands: 릴레이 명령 목록
-#
-# Returns:
-#     dict: 실행 결과
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def batch_relay_control(farm_id, house_id, relay_commands):
-    try:
-        results = []
-        success_count = 0
-        fail_count = 0
-
-        for command in relay_commands:
-            relay_key = command.get("relay_key")
-            state = command.get("state")
-
-            try:
-                # 단일 릴레이 설정
-                relay_settings = {relay_key: state}
-                result = set_relay_value(farm_id, house_id, relay_settings)
-
-                if result["success"]:
-                    success_count += 1
-                    results.append({
-                        "relay_key": relay_key,
-                        "state": state,
-                        "success": True
-                    })
-                else:
-                    fail_count += 1
-                    results.append({
-                        "relay_key": relay_key,
-                        "state": state,
-                        "success": False,
-                        "error": result.get("message")
-                    })
-
-            except Exception as e:
-                fail_count += 1
-                results.append({
-                    "relay_key": relay_key,
-                    "state": state,
-                    "success": False,
-                    "error": str(e)
-                })
-
-        return {
-            "success": fail_count == 0,
-            "total": len(relay_commands),
-            "success_count": success_count,
-            "fail_count": fail_count,
-            "results": results
-        }
-
-    except Exception as e:
-        logger.error(f"릴레이 일괄 제어 중 오류: {e}")
-        logger.error(traceback.format_exc())
-        return {
-            "success": False,
-            "message": f"오류 발생: {str(e)}"
-        }
-
 

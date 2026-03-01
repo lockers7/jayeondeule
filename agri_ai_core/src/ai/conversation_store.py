@@ -1,7 +1,11 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 대화 히스토리 저장소
 # PostgreSQL 기반 영속 저장 + 인메모리 폴백으로 멀티턴 대화를 지원한다.
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --->
+# _SessionData: 인메모리 폴백용 세션 데이터
+# ConversationStore: 대화 이력 저장소 (메모리+DB)
+# get_conversation_store: 글로벌 ConversationStore 싱글톤을 반환한다.
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import os
 import re
 import threading
@@ -25,8 +29,10 @@ _RE_THINK_TAG = re.compile(
 )
 
 
+# ============================================================
+# 인메모리 폴백용 세션 데이터
+# ============================================================
 class _SessionData:
-    """인메모리 폴백용 세션 데이터"""
     __slots__ = ("turns", "last_access")
 
     def __init__(self):
@@ -47,8 +53,10 @@ class ConversationStore:
         # PostgreSQL 초기화 시도
         self._init_db()
 
+    # ============================================================
+    # PostgreSQL 테이블 생성 및 오래된 데이터 정리
+    # ============================================================
     def _init_db(self):
-        """PostgreSQL 테이블 생성 및 오래된 데이터 정리"""
         try:
             from agri_ai_core.src.postgresql.connection import db_session
             from agri_ai_core.src.postgresql import queries as dbQry
@@ -72,9 +80,9 @@ class ConversationStore:
 
     # ------------------------------------------------------------------
     # 공개 API
+    # 대화 턴을 추가한다. role은 'user' 또는 'assistant'.
     # ------------------------------------------------------------------
     def add_turn(self, session_id: str, role: str, content: str, farm_id: str = None) -> None:
-        """대화 턴을 추가한다. role은 'user' 또는 'assistant'."""
         if self._db_available:
             try:
                 self._db_add_turn(session_id, role, content, farm_id)
@@ -84,8 +92,10 @@ class ConversationStore:
 
         self._memory_add_turn(session_id, role, content)
 
+    # ============================================================
+    # 세션의 대화 히스토리를 반환한다. 없으면 빈 리스트.
+    # ============================================================
     def get_history(self, session_id: str) -> List[Dict[str, str]]:
-        """세션의 대화 히스토리를 반환한다. 없으면 빈 리스트."""
         if self._db_available:
             try:
                 return self._db_get_history(session_id)
@@ -94,8 +104,10 @@ class ConversationStore:
 
         return self._memory_get_history(session_id)
 
+    # ============================================================
+    # 최근 N턴(Q+A 쌍)만 반환한다. 하이브리드 컨텍스트용.
+    # ============================================================
     def get_recent_turns(self, session_id: str, n_turns: int = 2) -> List[Dict[str, str]]:
-        """최근 N턴(Q+A 쌍)만 반환한다. 하이브리드 컨텍스트용."""
         if self._db_available:
             try:
                 return self._db_get_recent_turns(session_id, n_turns)
@@ -122,28 +134,6 @@ class ConversationStore:
                 return []
             count = min(n_turns * 2, len(session.turns))
             return list(session.turns[-count:])
-
-    def clear_session(self, session_id: str) -> None:
-        """특정 세션을 삭제한다."""
-        if self._db_available:
-            try:
-                self._db_clear_session(session_id)
-            except Exception as e:
-                logger.warning(f"[대화저장소] DB 세션 삭제 실패: {e}")
-
-        self._memory_clear_session(session_id)
-
-    def session_count(self) -> int:
-        """활성 세션 수를 반환한다."""
-        if self._db_available:
-            try:
-                return self._db_session_count()
-            except Exception:
-                pass
-
-        with self._lock:
-            self._evict_expired()
-            return len(self._memory_store)
 
     # ------------------------------------------------------------------
     # PostgreSQL 구현
@@ -188,8 +178,10 @@ class ConversationStore:
 
         return [{"role": r["role"], "content": r["content"]} for r in rows]
 
+    # ============================================================
+    # 오래된 대화 턴을 LLM으로 요약하고 conversation_collection에 임베딩 저장
+    # ============================================================
     def _summarize_old_turns(self, session_id: str, old_turns: list) -> Optional[str]:
-        """오래된 대화 턴을 LLM으로 요약하고 conversation_collection에 임베딩 저장"""
         try:
             from agri_ai_core.src.ai.mcp_client import mcp_http_request
             from agri_ai_core.config import settings, get_ollama_url
@@ -250,8 +242,10 @@ class ConversationStore:
             logger.debug(f"[대화저장소] 대화 요약 실패: {e}")
             return None
 
+    # ============================================================
+    # 대화 요약을 conversation_collection에 임베딩 저장
+    # ============================================================
     def _store_summary_to_vectordb(self, session_id: str, summary: str):
-        """대화 요약을 conversation_collection에 임베딩 저장"""
         try:
             from agri_ai_core.src.ai.rag.embedder import embed_text
             from agri_ai_core.src.chroma.collections import conversation_collection
@@ -286,27 +280,6 @@ class ConversationStore:
         except Exception as e:
             logger.debug(f"[대화저장소] 대화 요약 VectorDB 저장 실패: {e}")
 
-    def _db_clear_session(self, session_id):
-        from agri_ai_core.src.postgresql.connection import db_session
-        from agri_ai_core.src.postgresql import queries as dbQry
-
-        with db_session() as database:
-            database.execute_query(
-                dbQry.DELETE_AI_CONVERSATION_SESSION,
-                (session_id,),
-            )
-
-    def _db_session_count(self):
-        from agri_ai_core.src.postgresql.connection import db_session
-        from agri_ai_core.src.postgresql import queries as dbQry
-
-        with db_session() as database:
-            result = database.fetch_one(
-                dbQry.COUNT_AI_CONVERSATION_SESSIONS,
-                (str(self._ttl_days),),
-            )
-            return result.get("cnt", 0) if result else 0
-
     # ------------------------------------------------------------------
     # 인메모리 폴백 구현
     # ------------------------------------------------------------------
@@ -336,13 +309,10 @@ class ConversationStore:
             session.last_access = time.time()
             return list(session.turns)
 
-    def _memory_clear_session(self, session_id):
-        with self._lock:
-            if session_id in self._memory_store:
-                del self._memory_store[session_id]
-
+    # ============================================================
+    # TTL 초과된 인메모리 세션을 제거한다. _lock 안에서 호출.
+    # ============================================================
     def _evict_expired(self):
-        """TTL 초과된 인메모리 세션을 제거한다. _lock 안에서 호출."""
         now = time.time()
         expired = [
             sid for sid, data in self._memory_store.items()
@@ -359,8 +329,10 @@ _global_store: Optional[ConversationStore] = None
 _store_lock = threading.Lock()
 
 
+# ============================================================
+# 글로벌 ConversationStore 싱글톤을 반환한다.
+# ============================================================
 def get_conversation_store() -> ConversationStore:
-    """글로벌 ConversationStore 싱글톤을 반환한다."""
     global _global_store
     if _global_store is None:
         with _store_lock:

@@ -1,7 +1,20 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # LLM 쿼리 핸들러 (Tool Use 방식)
 # LLM이 필요한 도구를 자율적으로 선택하고 실행하여 사용자 질문 처리
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --->
+# _dedupe_list: 공통 헬퍼 함수
+# _build_default_tool_args: 도구별 기본 인자 생성
+# _load_hybrid_context: 하이브리드 대화 컨텍스트: 직전 N턴 + VectorDB 관련 대화 검색
+# _search_related_conversations: VectorDB conversation_collection에서 관련 과거 대화를 검색
+# _save_conversation_turn_hybrid: 대화 턴 저장: PostgreSQL(동기) + VectorDB(비동기)
+# _async_vectordb_save: 백그라운드: Q+A 쌍을 VectorDB에 임베딩 저장 + 수명 관리
+# _prune_old_conversations: farm_id별 대화 기록을 최대 N건으로 유지
+# _call_llm_with_timeout: LLM 호출 (타임아웃 포함)
+# _unpack_llm_result: LLM 결과를 (response_text, sources, tools_used, response_type) 튜플로 언패킹
+# query_llm_simple: 질의 처리 (Tool Use 방식)
+# _split_for_streaming: SSE 스트리밍 질의 처리
+# query_llm_simple_stream: SSE 스트리밍 질의 처리 (비동기 제너레이터)
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import hashlib
 import json
 import os
@@ -26,9 +39,9 @@ _STREAM_HEARTBEAT_SECONDS = max(5, int(os.getenv("STREAM_HEARTBEAT_SECONDS", "15
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 공통 헬퍼 함수
+# 공통 중복 제거 헬퍼
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def _dedupe_list(items, type_check, key_fn, value_fn=None):
-    """공통 중복 제거 헬퍼"""
     deduped, seen = [], set()
     for item in items or []:
         if not isinstance(item, type_check):
@@ -41,23 +54,10 @@ def _dedupe_list(items, type_check, key_fn, value_fn=None):
     return deduped
 
 
-def _dedupe_tools(items):
-    """도구 목록 중복 제거"""
-    return _dedupe_list(items, str, str.strip, str.strip)
-
-
-def _dedupe_sources(items):
-    """출처 목록 중복 제거"""
-    def _key(d):
-        t, u = str(d.get("title", "")).strip(), str(d.get("url", "")).strip()
-        return (t, u) if t and u else None
-    def _val(d):
-        return {"title": str(d.get("title", "")).strip(), "url": str(d.get("url", "")).strip()}
-    return _dedupe_list(items, dict, _key, _val)
-
-
+# ============================================================
+# 도구별 기본 인자 생성
+# ============================================================
 def _build_default_tool_args(user_query, farm_id, house_id):
-    """도구별 기본 인자 생성"""
     return {
         "search_web": {"query": user_query},
         "search_farm_knowledge": {
@@ -74,41 +74,22 @@ def _build_default_tool_args(user_query, farm_id, house_id):
     }
 
 
-def _load_conversation_history(session_id, label=""):
-    """대화 히스토리 로드 (멀티턴)"""
-    if not session_id:
-        return None
-    store = get_conversation_store()
-    history = store.get_history(session_id)
-    if history:
-        logger.info(f"[{label}멀티턴] session={session_id[:12]}... 이전 대화 {len(history)}턴 로드")
-    return history
-
-
-def _save_conversation_turn(session_id, user_query, response_text, label=""):
-    """대화 턴 저장 (멀티턴) - 레거시, 폴백용"""
-    if not session_id:
-        return
-    store = get_conversation_store()
-    store.add_turn(session_id, "user", user_query)
-    store.add_turn(session_id, "assistant", response_text)
-    logger.info(f"[{label}멀티턴] session={session_id[:12]}... 턴 저장 완료")
-
-
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 하이브리드 대화 컨텍스트 (VectorDB + 최근 턴)
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 _HYBRID_RECENT_TURNS = int(os.getenv("HYBRID_RECENT_TURNS", "2"))
 _HYBRID_RELATED_RESULTS = int(os.getenv("HYBRID_RELATED_RESULTS", "5"))
 _HYBRID_MAX_RECORDS_PER_FARM = int(os.getenv("HYBRID_MAX_RECORDS", "30"))
-_CONVERSATION_MAX_DISTANCE = float(os.getenv("CONV_VECTOR_MAX_DISTANCE", "22.0"))
+_CONVERSATION_MAX_DISTANCE = float(os.getenv("CONV_VECTOR_MAX_DISTANCE", "16.0"))
 _GREETING_RE_HYBRID = re.compile(
     r"^(안녕|반가|잘\s*지내|하이|헬로|좋은\s*(아침|저녁|하루)|수고|얀녕|고마워|감사)"
 )
 
 
+# ============================================================
+# 하이브리드 대화 컨텍스트: 직전 N턴 + VectorDB 관련 대화 검색
+# ============================================================
 def _load_hybrid_context(session_id, user_query, farm_id, label=""):
-    """하이브리드 대화 컨텍스트: 직전 N턴 + VectorDB 관련 대화 검색"""
     if not session_id:
         return None
 
@@ -138,8 +119,10 @@ def _load_hybrid_context(session_id, user_query, farm_id, label=""):
     return history if history else None
 
 
+# ============================================================
+# VectorDB conversation_collection에서 관련 과거 대화를 검색
+# ============================================================
 def _search_related_conversations(user_query, farm_id):
-    """VectorDB conversation_collection에서 관련 과거 대화를 검색"""
     try:
         from agri_ai_core.src.ai.rag.embedder import embed_text
         from agri_ai_core.src.chroma.collections import conversation_collection
@@ -204,15 +187,17 @@ def _search_related_conversations(user_query, farm_id):
             return None
 
         logger.info(f"[하이브리드] 관련 대화 {len(lines)}건 검색됨 (farm={farm_id})")
-        return "\n".join(lines[:5])
+        return "\n".join(lines[:_HYBRID_RELATED_RESULTS])
 
     except Exception as e:
         logger.debug(f"[하이브리드] 관련 대화 검색 실패: {e}")
         return None
 
 
+# ============================================================
+# 대화 턴 저장: PostgreSQL(동기) + VectorDB(비동기)
+# ============================================================
 def _save_conversation_turn_hybrid(session_id, user_query, response_text, farm_id=None, label=""):
-    """대화 턴 저장: PostgreSQL(동기) + VectorDB(비동기)"""
     if not session_id:
         return
 
@@ -230,8 +215,10 @@ def _save_conversation_turn_hybrid(session_id, user_query, response_text, farm_i
     ).start()
 
 
+# ============================================================
+# 백그라운드: Q+A 쌍을 VectorDB에 임베딩 저장 + 수명 관리
+# ============================================================
 def _async_vectordb_save(session_id, user_query, response_text, farm_id):
-    """백그라운드: Q+A 쌍을 VectorDB에 임베딩 저장 + 수명 관리"""
     try:
         from agri_ai_core.src.ai.rag.embedder import embed_text
         from agri_ai_core.src.chroma.collections import conversation_collection
@@ -285,8 +272,11 @@ def _async_vectordb_save(session_id, user_query, response_text, farm_id):
         logger.debug(f"[하이브리드] VectorDB 비동기 저장 실패: {e}")
 
 
+# ============================================================
+# farm_id별 대화 기록을 최대 N건으로 유지
+# LLM 호출 + 타임아웃 처리
+# ============================================================
 def _prune_old_conversations(collection_name, farm_id):
-    """farm_id별 대화 기록을 최대 N건으로 유지"""
     try:
         from agri_ai_core.src.chroma.operations import get_documents, delete_document
 
@@ -331,7 +321,6 @@ def _prune_old_conversations(collection_name, farm_id):
 
 
 async def _call_llm_with_timeout(full_query, farm_name, default_tool_args, conversation_history):
-    """LLM 호출 + 타임아웃 처리"""
     return await asyncio.wait_for(
         asyncio.to_thread(
             get_llm_response_with_tools,
@@ -344,8 +333,10 @@ async def _call_llm_with_timeout(full_query, farm_name, default_tool_args, conve
     )
 
 
+# ============================================================
+# LLM 결과를 (response_text, sources, tools_used, response_type) 튜플로 언패킹
+# ============================================================
 def _unpack_llm_result(result):
-    """LLM 결과를 (response_text, sources, tools_used, response_type) 튜플로 언패킹"""
     if isinstance(result, dict):
         return (
             result.get("response", ""),
@@ -482,10 +473,16 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # SSE 스트리밍 질의 처리
 # 도구 실행 중 status 이벤트, 답변 텍스트 token 이벤트, 완료 done 이벤트를 yield
+# 텍스트를 스트리밍 전송에 적합한 작은 청크로 분할
+# SSE 스트리밍 질의 처리.
+# yield 이벤트 형식:
+# {"type": "status",  "content": "상태 메시지"}
+# {"type": "token",   "content": "텍스트 청크"}
+# {"type": "done",    "session_id": "...", "sources": [...], "tools_used": [...], "response_type": "..."}
+# {"type": "error",   "content": "에러 메시지"}
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 def _split_for_streaming(text, target_size=30):
-    """텍스트를 스트리밍 전송에 적합한 작은 청크로 분할"""
     if not text:
         return
     i = 0
@@ -511,14 +508,6 @@ def _split_for_streaming(text, target_size=30):
 
 async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
                                    farm_name=None, house_name=None, session_id=None):
-    """
-    SSE 스트리밍 질의 처리.
-    yield 이벤트 형식:
-      {"type": "status",  "content": "상태 메시지"}
-      {"type": "token",   "content": "텍스트 청크"}
-      {"type": "done",    "session_id": "...", "sources": [...], "tools_used": [...], "response_type": "..."}
-      {"type": "error",   "content": "에러 메시지"}
-    """
     start_time = datetime.now()
 
     try:

@@ -1,14 +1,12 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 모델 학습 관리 모듈
 # LLM 파인튜닝, 임베딩 모델 학습 등의 프로세스를 관리하고,
 # 학습 진행 상황을 모니터링하며 결과를 저장합니다.
 # --->
 # verify_chroma_connection: ChromaDB 연결 상태 확인
-# create_default_crop_entry: 기본 작물 데이터 생성
-# create_default_units_entry: 기본 장치 데이터 생성
 # process_farm_hour_data: 농장별 시간대 데이터 처리
 # update_ollama_model: LLM 모델 학습
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import json
 import traceback
 import pandas as pd
@@ -22,8 +20,8 @@ from agri_ai_core.src.chroma.client import heartbeat
 from agri_ai_core.src.chroma.operations import (
     get_documents,
     upsert_collection_data,
-    generate_doc_id
 )
+from agri_ai_core.src.chroma.utils import generate_doc_id
 from agri_ai_core.src.chroma.loader import (
     get_unlearned_data,
     update_learned_last_status
@@ -31,7 +29,7 @@ from agri_ai_core.src.chroma.loader import (
 from agri_ai_core.src.ai.learning.data_analyzer import (
     analyze_farm_optimal_conditions,
     analyze_farm_time_patterns,
-    process_stats_and_optimal_data
+    update_learning_timestamp
 )
 
 logger = setup_logger(__name__)
@@ -55,54 +53,6 @@ def verify_chroma_connection():
     except Exception as e:
         logger.error(f"ChromaDB 연결 확인 중 오류: {e}")
         return False
-
-
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 기본 작물 데이터 생성
-# --->
-# 기본 작물 데이터 생성
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def create_default_crop_entry(farm_id, house_id="0"):
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    today_str = now_str.split(" ")[0]
-    return {
-        "farm_id": farm_id,
-        "house_id": house_id,
-        "record_datetime": now_str,
-        "기록일시": now_str,
-        "농장번호": farm_id,
-        "farm_name": "",
-        "house_name": "",
-        "data_kind": "crops",
-        "crop_strt_date": today_str,
-        "crop_end_date": today_str,
-        "code_name": "",
-        "crop_qtty": 0,
-        **{f"crop_grde_qtty_{i}": 0 for i in range(1, 6)},
-        **{f"crop_grde_amut_{i}": 0 for i in range(1, 6)},
-        "grade_1_ratio": 0.0,
-        "rmks": "empty_crop_data",
-        "source_agg": {},
-        "stats_agg": {},
-        "hour_agg": {}
-    }
-
-
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 기본 장치 데이터 생성
-# --->
-# 기본 장치 데이터 생성
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def create_default_units_entry(farm_id, house_id="0"):
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return {
-        "farm_id": farm_id,
-        "house_id": house_id,
-        "record_datetime": now_str,
-        "sensor_value": {},
-        "relay_status": {}
-    }
-
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -185,7 +135,7 @@ def process_farm_hour_data(farm_id, hour, data, hour_timestamp=None):
                     parsed = pd.to_datetime(dt)
                     if parsed.hour == target_hour:
                         filtered_datetimes.append(parsed)
-                except:
+                except Exception:
                     continue
 
         if filtered_datetimes:
@@ -278,7 +228,7 @@ def update_ollama_model(after_date=None, top_cnt=0):
         # 통계 및 최적 환경 데이터 처리
         stats_start = datetime.now()
         try:
-            process_stats_and_optimal_data()
+            update_learning_timestamp()
             stats_end = datetime.now()
             stats_time = (stats_end - stats_start).total_seconds()
             logger.debug(f"통계 및 최적 환경 데이터 처리 완료 (처리시간: {stats_time:.3f}초)")

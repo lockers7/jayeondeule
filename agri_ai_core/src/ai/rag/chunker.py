@@ -1,18 +1,18 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 텍스트 청킹 모듈
 # 긴 텍스트를 의미 단위로 분할하여 임베딩에 적합한 크기의
 # 청크로 나누는 다양한 청킹 전략을 제공합니다.
 # --->
 # chunk_document: 문서를 청크로 분할
 # store_document_with_chunks: 문서를 청크로 나누어 벡터 DB에 저장
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import re
 import traceback
 from datetime import datetime
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.chroma.collections import document_collection
-from agri_ai_core.src.chroma.operations import upsert_collection_data, upsert_documents_with_embedding, get_documents, delete_document
+from agri_ai_core.src.chroma.operations import upsert_documents_with_embedding, get_documents, delete_document
 from agri_ai_core.src.ai.rag.embedder import embed_text
 
 logger = setup_logger(__name__)
@@ -173,7 +173,13 @@ def store_document_with_chunks(document_content, document_metadata, chunk_size=1
             try:
                 batch_result = upsert_documents_with_embedding(document_collection(), batch_docs)
                 if isinstance(batch_result, dict) and batch_result.get("success"):
-                    success_count = batch_result.get("count", len(batch_docs))
+                    reported_count = batch_result.get("count", len(batch_docs))
+                    if reported_count != len(batch_docs):
+                        logger.warning(
+                            f"[청크저장] 배치 upsert 부분 성공: "
+                            f"요청={len(batch_docs)}건, 처리={reported_count}건"
+                        )
+                    success_count = reported_count
                     logger.info(f"[청크저장] 배치 upsert 성공: {success_count}건 (임베딩 포함)")
                 else:
                     error = batch_result.get("error", "알 수 없는 오류") if isinstance(batch_result, dict) else str(batch_result)

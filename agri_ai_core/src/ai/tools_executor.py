@@ -1,12 +1,31 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # LLM Tool 실행기
 # LLM이 요청한 도구를 실제로 실행하는 모듈
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --->
+# _is_korean_query: 웹 검색 API 모듈 (Naver / Brave)
+# _search_via_naver_api: Naver 검색 API를 통한 검색 (블로그 + 웹)
+# _search_via_brave_api: Brave Search API를 통한 검색
+# _search_via_searxng: SearXNG 자체 호스팅 메타 검색 엔진을 통한 검색
+# _search_via_api: API 검색 통합 라우터
+# _json_default: json.dumps 기본 직렬화로 처리할 수 없는 타입 변환.
+# search_farm_knowledge: 농장 지식 검색
+# get_farm_realtime_data: 농장 실시간 데이터 가져오기
+# _auto_fetch_urls: 웹 검색
+# search_web: MCP를 통한 웹 검색 + 상위 URL 본문 자동 읽기
+# _cache_web_results_to_vectordb: 웹 검색 결과를 web_knowledge 컬렉션에 임베딩 저장 (URL 해시 기반 중복 방지)
+# _strip_html: URL 본문 가져오기
+# _direct_fetch_url: urllib로 직접 URL을 가져온다 (MCP fallback용).
+# fetch_url_content: URL의 웹페이지 본문 텍스트를 가져온다.
+# execute_tool: 도구 실행기 (메인)
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import json
 import os
 import re
 import time
 import threading
+import urllib.request
+import urllib.parse
+import urllib.error
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Dict, Any, List, Optional
@@ -22,27 +41,23 @@ _WEB_SEARCH_CONTENT_MAX_CHARS = max(500, int(os.getenv("WEB_SEARCH_CONTENT_MAX_C
 # ============================================================
 # 웹 검색 API 모듈 (Naver / Brave)
 # API 키가 설정되면 JSON API 우선 사용, 실패 시 MCP fallback
+# 쿼리에 한국어가 포함되어 있는지 판별
 # ============================================================
 
 def _is_korean_query(query: str) -> bool:
-    """쿼리에 한국어가 포함되어 있는지 판별"""
     korean_chars = sum(1 for c in query if '\uac00' <= c <= '\ud7a3' or '\u3131' <= c <= '\u3163')
     return korean_chars > 0
 
 
+# ============================================================
+# Naver 검색 API를 통한 검색 (블로그 + 웹)
+# Returns: 검색 결과 리스트 또는 None (API 키 없음/실패)
+# ============================================================
 def _search_via_naver_api(query: str, display: int = 10) -> Optional[List[Dict[str, Any]]]:
-    """
-    Naver 검색 API를 통한 검색 (블로그 + 웹)
-    Returns: 검색 결과 리스트 또는 None (API 키 없음/실패)
-    """
     client_id = os.getenv("NAVER_CLIENT_ID", "").strip()
     client_secret = os.getenv("NAVER_CLIENT_SECRET", "").strip()
     if not client_id or not client_secret:
         return None
-
-    import urllib.request
-    import urllib.parse
-    import urllib.error
 
     headers = {
         "X-Naver-Client-Id": client_id,
@@ -99,18 +114,14 @@ def _search_via_naver_api(query: str, display: int = 10) -> Optional[List[Dict[s
     return results
 
 
+# ============================================================
+# Brave Search API를 통한 검색
+# Returns: 검색 결과 리스트 또는 None (API 키 없음/실패)
+# ============================================================
 def _search_via_brave_api(query: str, count: int = 10) -> Optional[List[Dict[str, Any]]]:
-    """
-    Brave Search API를 통한 검색
-    Returns: 검색 결과 리스트 또는 None (API 키 없음/실패)
-    """
     api_key = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
     if not api_key:
         return None
-
-    import urllib.request
-    import urllib.parse
-    import urllib.error
 
     params = urllib.parse.urlencode({
         "q": query,
@@ -161,21 +172,17 @@ def _search_via_brave_api(query: str, count: int = 10) -> Optional[List[Dict[str
         return None
 
 
+# ============================================================
+# SearXNG 자체 호스팅 메타 검색 엔진을 통한 검색
+# 무료, API 키 불필요, 다중 검색엔진 (Google/Naver/Bing/DuckDuckGo) 통합
+# Returns: 검색 결과 리스트 또는 None (SearXNG 미실행/실패)
+# ============================================================
 def _search_via_searxng(query: str, count: Optional[int] = None) -> Optional[List[Dict[str, Any]]]:
-    """
-    SearXNG 자체 호스팅 메타 검색 엔진을 통한 검색
-    무료, API 키 불필요, 다중 검색엔진 (Google/Naver/Bing/DuckDuckGo) 통합
-    Returns: 검색 결과 리스트 또는 None (SearXNG 미실행/실패)
-    """
     searxng_url = os.getenv("SEARXNG_URL", "").strip()
     if not searxng_url:
         return None
     if count is None:
         count = _WEB_SEARCH_RESULT_LIMIT
-
-    import urllib.request
-    import urllib.parse
-    import urllib.error
 
     # 한국어 쿼리 감지 → 언어 설정
     lang = "ko-KR" if _is_korean_query(query) else "en-US"
@@ -226,12 +233,12 @@ def _search_via_searxng(query: str, count: Optional[int] = None) -> Optional[Lis
         return None
 
 
+# ============================================================
+# API 검색 통합 라우터
+# 우선순위: SearXNG(무료) → Naver/Brave(API키) → None(MCP fallback)
+# 한국어 → Naver 우선, 영어 → Brave 우선
+# ============================================================
 def _search_via_api(query: str, count: Optional[int] = None) -> Optional[Dict[str, Any]]:
-    """
-    API 검색 통합 라우터
-    우선순위: SearXNG(무료) → Naver/Brave(API키) → None(MCP fallback)
-    한국어 → Naver 우선, 영어 → Brave 우선
-    """
     t_start = time.time()
     is_korean = _is_korean_query(query)
 
@@ -341,8 +348,10 @@ def search_farm_knowledge(
             except Exception:
                 return None
 
+        # ============================================================
+        # 다중 키 where 딕셔너리를 ChromaDB $and 형식으로 변환
+        # ============================================================
         def _to_chroma_where(where_dict):
-            """다중 키 where 딕셔너리를 ChromaDB $and 형식으로 변환"""
             if not where_dict:
                 return None
             if len(where_dict) == 1:
@@ -803,8 +812,10 @@ def search_web(
     return result
 
 
+# ============================================================
+# 웹 검색 결과를 web_knowledge 컬렉션에 임베딩 저장 (URL 해시 기반 중복 방지)
+# ============================================================
 def _cache_web_results_to_vectordb(query: str, results: list) -> None:
-    """웹 검색 결과를 web_knowledge 컬렉션에 임베딩 저장 (URL 해시 기반 중복 방지)"""
     import hashlib
     from agri_ai_core.src.ai.rag.embedder import embed_text
     from agri_ai_core.src.chroma.collections import web_knowledge_collection

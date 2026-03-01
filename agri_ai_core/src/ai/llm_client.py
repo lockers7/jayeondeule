@@ -1,20 +1,75 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # LLM 클라이언트 핵심 모듈
 # Ollama LLM API와 통신하며, Tool Use(Function Calling)를 통한 응답 생성을 담당합니다.
 # --->
+# _use_mcp_fetch: MCP fetch 사용 여부
+# _use_ollama_package: ollama 패키지 사용 여부
+# _use_direct_ollama_http: Ollama 직접 HTTP 모드 사용 여부
+# _is_direct_ollama_enabled: Ollama 직접 HTTP 모드 활성 여부
+# _disable_direct_ollama_http: Ollama 직접 HTTP 모드 비활성화
+# _is_connection_related_error: 연결 관련 에러 여부 판단
+# _extract_model_names: 모델 목록(dict 리스트)에서 이름을 추출하는 공통 헬퍼
+# _pkg_ollama_list_models: ollama 패키지로 모델 목록 조회
+# _pkg_ollama_chat: ollama 패키지 채팅 호출
+# _build_ollama_url: Ollama API URL 생성
+# _direct_ollama_json: Ollama 직접 HTTP JSON 모드 호출
+# _direct_ollama_list_models: Ollama 직접 HTTP로 모델 목록 조회
+# _direct_ollama_chat: Ollama 직접 HTTP 채팅 호출
+# _mcp_ollama_list_models: MCP 경유 Ollama 모델 목록 조회
+# _mcp_ollama_chat: MCP 경유 Ollama 채팅 호출
+# _serialize_for_log: 로그용 JSON 직렬화
+# _log_llm_request_json: LLM 요청 JSON 로깅
+# _log_llm_response_json: LLM 응답 JSON 로깅
+# _ollama_chat: Ollama 채팅 통합 함수 (직접/MCP/패키지 자동 선택)
+# _extract_message_content: Ollama 응답에서 메시지 내용 추출
+# _normalize_assistant_message: 어시스턴트 메시지 정규화
+# _extract_tool_calls: Ollama 응답에서 도구 호출 추출
+# _extract_tool_name: 도구 호출에서 도구명 추출
+# _extract_tool_arguments: 도구 호출에서 인자 추출
+# _normalize_tool_arguments: 도구 인자 정규화
 # _get_available_models: Ollama에서 사용 가능한 모델 목록 가져오기
 # _get_model_name: 환경 설정에서 모델명을 가져오거나 기본값을 반환
 # _perform_llm_warmup: LLM 워밍업 수행
 # initialize_background_warmup: 백그라운드 워밍업 초기화
-# get_llm_response_with_tools: Tool Use 지원 LLM 응답 생성 (LLM이 도구 자율 선택)
+# _load_reasoning_terms: reasoning/독백 탐지용 용어 목록.
+# _find_reasoning_terms: 텍스트에서 추론 용어 탐색
+# _line_has_korean: 한국어 포함 라인 여부
+# _count_korean_chars: 한국어 문자 수 카운트
+# _looks_like_reasoning_line: 추론 라인 패턴 판단
+# _extract_measure_tokens: 측정값 토큰 추출
+# _extract_sensor_concepts: 센서 관련 개념 추출
+# _is_english_korean_overlap: 영한 혼합 여부 판단
+# _snapshot_answer_stage: 응답 단계별 스냅샷 로깅
+# _emit_question_log_once: 질문 로그 1회 출력
+# _is_reasoning_paragraph: 추론 단락 여부 판단
+# _strip_reasoning_paragraphs: 추론 단락 제거
+# _strip_non_korean_reasoning_for_korean_query: 한국어 질문에 대한 비한국어 추론 제거
+# _force_korean_surface_for_korean_query: 한국어 질문에 대한 한국어 표면 강제
+# _contains_reasoning_trace: 추론 흔적 포함 여부 판단
+# _rewrite_without_reasoning: 추론 제거 후 텍스트 재작성
+# _force_honorific_response_enabled: 존댓말 강제 변환 활성 여부
+# _rewrite_to_honorific: 존댓말로 변환
+# _clean_page_content: 페이지 본문에서 노이즈 제거 후 도입부 추출 (키워드 불필요, LLM이 관련성 판단).
+# _refine_search_web: search_web 결과를 구조적으로 정제하여 간결한 텍스트로 변환한다 (LLM이 관련성 판단).
+# _refine_fetch_url: fetch_url_content 결과를 구조적으로 정제한다 (LLM이 관련성 판단).
+# _refine_tool_result: 도구 결과를 LLM 메시지에 넣기 전에 도구별 지능형 정제를 수행한다.
+# _needs_honorific_rewrite: 반말이 감지되면 True, 산문 문장이 모두 존댓말이면 False
+# _enforce_honorific_response: 존댓말 응답 강제 적용
+# _finalize_user_facing_answer: 최종 사용자 응답 생성
 # filter_llm_response: LLM 응답 필터링
 # clean_llm_response: LLM 응답 정리
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# _sanitize_markdown_links: Tool Use 지원 LLM 응답 생성
+# _append_source_urls: 출처 URL 추가
+# _determine_response_type: 사용된 도구 목록으로 응답 유형 결정.
+# _build_structured_result: 구조화된 응답 결과 생성.
+# _filter_greeting_turns: 인사/잡담만으로 구성된 턴 쌍(user+assistant)을 제외한다.
+# _coerce_numeric_id: LLM이 비정수 값을 ID로 넣는 경우 기본값(정수)으로 교정
+# get_llm_response_with_tools: Tool Use 지원 LLM 응답 생성 (LLM이 도구 자율 선택)
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import os
 import re
 import time
 import json
-import hashlib
 import threading
 import traceback
 from typing import Any, Dict, List, Optional, Set
@@ -28,6 +83,7 @@ except Exception:
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.config import settings, NUM_PREDICT, NUM_PREDICT_REWRITE, get_ollama_url
+from agri_ai_core.src.utils.validators import is_true
 
 logger = setup_logger(__name__)
 
@@ -53,21 +109,17 @@ _SEARCH_WEB_REFINE_CONTENT_CHARS = max(120, int(os.getenv("SEARCH_WEB_REFINE_CON
 _SEARCH_WEB_REFINE_TOTAL_CHARS = max(1000, int(os.getenv("SEARCH_WEB_REFINE_TOTAL_CHARS", "3200")))
 
 
-def _is_true(value: Any) -> bool:
-    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
 def _use_mcp_fetch() -> bool:
     # MCP fetch는 환경 의존성이 커서 기본값은 비활성화한다.
-    return _is_true(os.getenv("USE_MCP_FETCH", "false"))
+    return is_true(os.getenv("USE_MCP_FETCH", "false"))
 
 
 def _use_ollama_package() -> bool:
-    return ollama is not None and _is_true(os.getenv("USE_OLLAMA_PACKAGE", "true"))
+    return ollama is not None and is_true(os.getenv("USE_OLLAMA_PACKAGE", "true"))
 
 
 def _use_direct_ollama_http() -> bool:
-    return _is_true(os.getenv("USE_DIRECT_OLLAMA_HTTP", "true"))
+    return is_true(os.getenv("USE_DIRECT_OLLAMA_HTTP", "true"))
 
 
 def _is_direct_ollama_enabled() -> bool:
@@ -101,8 +153,10 @@ def _is_connection_related_error(err: Exception) -> bool:
     )
 
 
+# ============================================================
+# 모델 목록(dict 리스트)에서 이름을 추출하는 공통 헬퍼
+# ============================================================
 def _extract_model_names(models_list) -> List[str]:
-    """모델 목록(dict 리스트)에서 이름을 추출하는 공통 헬퍼"""
     names: List[str] = []
     if not isinstance(models_list, list):
         return names
@@ -542,6 +596,17 @@ def _extract_tool_arguments(tool_call: Any) -> Dict[str, Any]:
     return {}
 
 
+def _coerce_numeric_id(provided_id, default_id):
+    """LLM이 비정수 값을 ID로 넣는 경우 기본값(정수)으로 교정한다."""
+    if provided_id in (None, "") or default_id in (None, ""):
+        return provided_id
+    provided_text = str(provided_id).strip()
+    default_text = str(default_id).strip()
+    if default_text.isdigit() and not provided_text.isdigit():
+        return default_text
+    return provided_id
+
+
 def _normalize_tool_arguments(
     tool_name: str,
     tool_args: Dict[str, Any],
@@ -578,17 +643,8 @@ def _normalize_tool_arguments(
         default_house_id = default_args.get("house_id")
 
         # LLM이 farm_name 같은 비정수 값을 farm_id로 넣는 경우를 방지한다.
-        if farm_id not in (None, "") and default_farm_id not in (None, ""):
-            farm_id_text = str(farm_id).strip()
-            default_farm_text = str(default_farm_id).strip()
-            if default_farm_text.isdigit() and not farm_id_text.isdigit():
-                farm_id = default_farm_text
-
-        if house_id not in (None, "") and default_house_id not in (None, ""):
-            house_id_text = str(house_id).strip()
-            default_house_text = str(default_house_id).strip()
-            if default_house_text.isdigit() and not house_id_text.isdigit():
-                house_id = default_house_text
+        farm_id = _coerce_numeric_id(farm_id, default_farm_id)
+        house_id = _coerce_numeric_id(house_id, default_house_id)
 
         return {
             "house_id": house_id,
@@ -818,18 +874,11 @@ def _load_reasoning_terms() -> List[str]:
 
 
 _REASONING_TERMS = _load_reasoning_terms()
-_reasoning_terms_logged = False
 
 
 def _find_reasoning_terms(text: str) -> List[str]:
     lowered = (text or "").lower()
     return [term for term in _REASONING_TERMS if term in lowered]
-
-
-def _log_reasoning_terms_once() -> None:
-    # 기존 호출부 호환용 no-op (답변로그는 호출당 1회만 출력).
-    global _reasoning_terms_logged
-    _reasoning_terms_logged = True
 
 
 def _line_has_korean(text: str) -> bool:
@@ -914,11 +963,6 @@ def _snapshot_answer_stage(stage: str, text: str) -> Dict[str, Any]:
     }
 
 
-def _short_text_digest(text: str) -> str:
-    raw = (text or "").encode("utf-8", errors="replace")
-    return hashlib.sha1(raw).hexdigest()[:12]
-
-
 def _emit_question_log_once(
     user_query: str,
     farm_name: Optional[str],
@@ -929,7 +973,7 @@ def _emit_question_log_once(
 # 질문 상세 로그는 호출당 1회만 출력한다.
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 ) -> None:
-    if not _is_true(os.getenv("LLM_VERBOSE_QUESTION_LOG", "true")):
+    if not is_true(os.getenv("LLM_VERBOSE_QUESTION_LOG", "true")):
         return
 
     raw_query = user_query or ""
@@ -937,46 +981,6 @@ def _emit_question_log_once(
         f"[질문상세] tools={tools_count} max_iter={max_tool_iterations} "
         f"farm={farm_name or '-'} query_len={len(raw_query)}"
     )
-
-
-def _emit_answer_log_once(
-    user_query: str,
-    final_mode: str,
-    stages: List[Dict[str, Any]],
-    dropped_details: List[str],
-    detected_terms: List[str],
-    rewrite_attempts: int,
-
-# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 답변 필터링 상세 로그 (DEBUG 레벨). INFO 로깅은 _finalize_user_facing_answer에서 직접 수행.
-# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-) -> None:
-    if not _is_true(os.getenv("LLM_VERBOSE_ANSWER_LOG", "true")):
-        return
-
-    raw_len = stages[0].get("length", 0) if stages else 0
-    final_len = stages[-1].get("length", 0) if stages else 0
-
-    changed_stages = []
-    prev_text = None
-    for s in stages:
-        cur_text = s.get("text", "")
-        if prev_text is not None and cur_text != prev_text:
-            changed_stages.append(s["stage"])
-        prev_text = cur_text
-
-    report = {
-        "final_mode": final_mode,
-        "rewrite_attempts": rewrite_attempts,
-        "detected_terms": detected_terms,
-        "dropped_count": len(dropped_details),
-        "changed_stages": changed_stages,
-        "raw_len": raw_len,
-        "final_len": final_len,
-    }
-    if dropped_details:
-        report["dropped_details"] = dropped_details
-    logger.debug(f"[답변필터상세] {json.dumps(report, ensure_ascii=False)}")
 
 
 def _is_reasoning_paragraph(paragraph: str, korean_present_in_response: bool = False) -> bool:
@@ -1369,7 +1373,7 @@ def _rewrite_without_reasoning(
 
 
 def _force_honorific_response_enabled() -> bool:
-    return _is_true(os.getenv("FORCE_HONORIFIC_RESPONSE", "true"))
+    return is_true(os.getenv("FORCE_HONORIFIC_RESPONSE", "true"))
 
 
 def _rewrite_to_honorific(
@@ -1421,8 +1425,10 @@ _NOISE_LINE_RE = re.compile(
 )
 
 
+# ============================================================
+# 페이지 본문에서 노이즈 제거 후 도입부 추출 (키워드 불필요, LLM이 관련성 판단).
+# ============================================================
 def _clean_page_content(text: str, max_chars: int) -> str:
-    """페이지 본문에서 노이즈 제거 후 도입부 추출 (키워드 불필요, LLM이 관련성 판단)."""
     if not text or not text.strip():
         return ""
     paragraphs = re.split(r"\n{2,}", text)
@@ -1444,8 +1450,10 @@ def _clean_page_content(text: str, max_chars: int) -> str:
     return "\n".join(result)
 
 
+# ============================================================
+# search_web 결과를 구조적으로 정제하여 간결한 텍스트로 변환한다 (LLM이 관련성 판단).
+# ============================================================
 def _refine_search_web(tool_result: str, user_query: str) -> str:
-    """search_web 결과를 구조적으로 정제하여 간결한 텍스트로 변환한다 (LLM이 관련성 판단)."""
     try:
         data = json.loads(tool_result)
     except (json.JSONDecodeError, TypeError):
@@ -1488,8 +1496,10 @@ def _refine_search_web(tool_result: str, user_query: str) -> str:
     return refined_text
 
 
+# ============================================================
+# fetch_url_content 결과를 구조적으로 정제한다 (LLM이 관련성 판단).
+# ============================================================
 def _refine_fetch_url(tool_result: str, user_query: str) -> str:
-    """fetch_url_content 결과를 구조적으로 정제한다 (LLM이 관련성 판단)."""
     try:
         data = json.loads(tool_result)
     except (json.JSONDecodeError, TypeError):
@@ -1511,8 +1521,10 @@ def _refine_fetch_url(tool_result: str, user_query: str) -> str:
     return "\n".join(lines)
 
 
+# ============================================================
+# 도구 결과를 LLM 메시지에 넣기 전에 도구별 지능형 정제를 수행한다.
+# ============================================================
 def _refine_tool_result(tool_name: str, tool_result: str, user_query: str) -> str:
-    """도구 결과를 LLM 메시지에 넣기 전에 도구별 지능형 정제를 수행한다."""
     if not tool_result:
         return tool_result or ""
     if tool_name == "search_web":
@@ -1549,11 +1561,13 @@ _NON_PROSE_LINE = re.compile(
     r"|\[출처\]"         # 출처 링크
     r")"
 )
-_KOREAN_CHAR_RE = re.compile(r"[가-힣]")
+# _KOREAN_CHAR_RE는 801행에서 이미 정의됨 (중복 제거)
 
 
+# ============================================================
+# 반말이 감지되면 True, 산문 문장이 모두 존댓말이면 False
+# ============================================================
 def _needs_honorific_rewrite(text: str) -> bool:
-    """반말이 감지되면 True, 산문 문장이 모두 존댓말이면 False"""
     # 라인 단위로 분리하여 마크다운 구조 요소 필터링
     lines = [line.strip() for line in text.splitlines() if len(line.strip()) > 3]
 
@@ -1643,7 +1657,6 @@ def _finalize_user_facing_answer(
     raw_answer: str,
 ) -> str:
     _t_finalize_start = time.time()
-    _log_reasoning_terms_once()
     stage_snapshots: List[Dict[str, Any]] = []
     dropped_details: List[str] = []
     rewrite_attempts = 0
@@ -2052,10 +2065,9 @@ def clean_llm_response(response_text):
 #
 # Returns:
 #     str: 최종 응답 텍스트
+# 마크다운 링크 중 유효하지 않은 URL을 가진 링크를 텍스트로 변환한다.
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def _sanitize_markdown_links(text: str) -> str:
-    """마크다운 링크 중 유효하지 않은 URL을 가진 링크를 텍스트로 변환한다."""
-    import re
     def _replace_bad_link(match):
         label = match.group(1)
         url = match.group(2).strip()
@@ -2076,8 +2088,10 @@ def _append_source_urls(answer: str, sources: list) -> str:
     return answer.rstrip() + "\n\n**출처:**\n" + "\n".join(lines)
 
 
+# ============================================================
+# 사용된 도구 목록으로 응답 유형 결정.
+# ============================================================
 def _determine_response_type(tools_used: List[str]) -> str:
-    """사용된 도구 목록으로 응답 유형 결정."""
     if "search_web" in tools_used or "fetch_url_content" in tools_used:
         return "web_search"
     if "get_farm_realtime_data" in tools_used:
@@ -2087,12 +2101,14 @@ def _determine_response_type(tools_used: List[str]) -> str:
     return "general"
 
 
+# ============================================================
+# 구조화된 응답 결과 생성.
+# ============================================================
 def _build_structured_result(
     response_text: str,
     sources: list,
     tools_used: list,
 ) -> Dict[str, Any]:
-    """구조화된 응답 결과 생성."""
     return {
         "response": response_text,
         "sources": sources if sources else [],
@@ -2107,8 +2123,10 @@ _GREETING_RE = re.compile(
 )
 
 
+# ============================================================
+# 인사/잡담만으로 구성된 턴 쌍(user+assistant)을 제외한다.
+# ============================================================
 def _filter_greeting_turns(history: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """인사/잡담만으로 구성된 턴 쌍(user+assistant)을 제외한다."""
     filtered = []
     i = 0
     while i < len(history):
@@ -2168,17 +2186,16 @@ def get_llm_response_with_tools(
                 "**말투 (절대 규칙):**\n"
                 "- 모든 문장을 반드시 존댓말 어미(~합니다/~입니다/~해요/~세요/~습니다)로 끝내세요.\n"
                 "- 설명·나열·요약도 존댓말 문장으로 마무리하세요.\n"
-                "- 반말 어미(~한다/~된다/~이다/~했다) 사용 절대 금지.\n"
+                "- 반말 어미(~한다/~된다/~이다/~했다) 사용 절대 금지합니다.\n"
                 "- 불릿/번호 항목도 문장으로 끝날 때는 존댓말로 마무리하세요.\n"
                 "- 친절하고 따뜻하게 응대합니다.\n\n"
                 "**대화 원칙:**\n"
                 "- 질문에는 구체적이고 실용적인 정보를 포함하여 충분히 답변합니다.\n"
-                "- 정보가 부족하면 솔직하게 말하되, 관련된 유용한 내용을 추가로 안내합니다.\n"
+                "- 정보가 부족하면 솔직하게 안내하되, 관련된 유용한 내용을 추가로 제공합니다.\n"
                 "- 사용자의 의도를 파악하여 맥락에 맞는 풍부한 답변을 제공합니다.\n\n"
                 "**출력 형식:**\n"
                 "- 내부 추론/독백/분석 과정을 절대 출력하지 않습니다.\n"
-                "- <think> 태그를 절대 사용하지 마세요.\n"
-                "- 최종 사용자에게 보여줄 순수 답변 본문만 출력합니다.\n"
+                "- <think> 태그 사용 절대 금지합니다. 순수 답변 본문만 출력합니다.\n"
                 "/no_think"
             )
 

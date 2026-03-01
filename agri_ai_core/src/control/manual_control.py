@@ -1,11 +1,29 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 수동 환경제어 모듈
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 환경제어 모듈
 # 센서값 기반 릴레이 자동 제어 알고리즘 (온도/습도/CO2)
 # 생육단계별 제어, 비상제어, 열풍기 쿨다운, 외부순환 최적화, 64케이스 분기 포함
 # --->
-# control_manual_environment: 단일 재배사 수동 환경제어
-# control_all_manual: 전체 재배사 수동 환경제어
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# _log_house_status: 헬퍼 함수
+# _classify: 센서값을 저/정상/고 3단계로 분류
+# _is_external_normal: 외부 온습도 정상 범위 판단
+# _is_internal_abnormal: 내부 환경 이상 여부 판단
+# _check_heater_cooldown: 열풍기 쿨다운 기간 확인
+# _update_heater_tracking: 열풍기 가동 시간 추적 업데이트
+# _reset_heater_cooldown: 열풍기 쿨다운 타이머 리셋
+# _get_current_heater_state: 열풍기 현재 상태 조회
+# _determine_devices: 온도/습도 상태 → (water_heater, fog_pump, heater, heater_damper)
+# _determine_circulation: 64케이스 센서 조건 → 순환모드 문자열
+# _check_emergency: 임계값 이탈 시 비상 릴레이 설정 반환
+# _build_relay_values: semantic 설정을 relay_*st_flag 16개 딕셔너리로 변환
+# _write_relay: 릴레이 값 DB 쓰기 + 로깅
+# _execute_control: 장치조작절대지침 준수 2단계 릴레이 제어
+# _execute_water_temp_emergency: 수온 비상 전용 (물가열기만 변경, 나머지 유지)
+# _control_budding: 발이기 제어
+# _handle_ai_emergency: AI 모드 비상제어 공통 처리 (control_all_manual, control_all_ai 공용)
+# control_manual_environment: 단일 재배사 환경제어
+# control_all_manual: 전체 재배사 환경제어
+# control_all_ai: 전체 AI 재배사 환경제어
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import time
 import traceback
 from datetime import datetime, timedelta
@@ -14,144 +32,27 @@ from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.postgresql.connection import db_session
 from agri_ai_core.src.postgresql import queries as dbQry
 from agri_ai_core.src.postgresql.reader import read_current_sensor_info, read_latest_relay_info, read_current_growth_stage
-from agri_ai_core.src.control.relay_manager import set_relay_value, RELAY_COUNT
-from agri_ai_core.src.utils.sorting import sort_houses as _sort_houses
+from agri_ai_core.src.control.relay_manager import set_relay_value
+from agri_ai_core.src.control.schedule_control import control_lighting_schedule, control_irrigation_schedule
+from agri_ai_core.src.control.control_common import (
+    RELAY_COUNT,
+    sort_houses as _sort_houses,
+    house_prefix as _house_prefix,
+    get_pin_map as _get_pin_map,
+    format_sensor_parts,
+    format_relay_on_str,
+    format_relay_off_str,
+    CIRCULATION_MODES,
+    TEMP_LOW, TEMP_HIGH, TEMP_CRITICAL_LOW, TEMP_CRITICAL_HIGH,
+    HUMIDITY_LOW, HUMIDITY_HIGH, HUMIDITY_CRITICAL_LOW, HUMIDITY_CRITICAL_HIGH,
+    CO2_LOW, CO2_HIGH, CO2_CRITICAL_HIGH,
+    WATER_TEMP_CRITICAL_LOW, WATER_TEMP_CRITICAL_HIGH,
+    BUDDING_TEMP_LOW, BUDDING_TEMP_HIGH,
+    HEATER_MAX_CONTINUOUS_MIN, HEATER_COOLDOWN_MIN,
+    DAMPER_FAN_DELAY_SEC,
+)
 
 logger = setup_logger(__name__)
-
-
-def _house_prefix(order_label="", farm_id=None, house_id=None):
-    prefix = f"{order_label} " if order_label else ""
-    if farm_id is None or house_id is None:
-        return prefix.strip()
-    return f"{prefix}농장 {farm_id}, 재배사 {house_id}"
-
-
-# ============================================================
-# 환경 제어 임계값
-# ============================================================
-TEMP_LOW = 27
-TEMP_HIGH = 30
-TEMP_CRITICAL_LOW = 25
-TEMP_CRITICAL_HIGH = 33
-
-HUMIDITY_LOW = 75
-HUMIDITY_HIGH = 85
-HUMIDITY_CRITICAL_LOW = 70
-HUMIDITY_CRITICAL_HIGH = 95
-
-CO2_LOW = 300
-CO2_HIGH = 1200
-CO2_CRITICAL_HIGH = 1500
-
-WATER_TEMP_CRITICAL_LOW = 35
-WATER_TEMP_CRITICAL_HIGH = 60
-
-BUDDING_TEMP_LOW = 29
-BUDDING_TEMP_HIGH = 33
-
-HEATER_MAX_CONTINUOUS_MIN = 30
-HEATER_COOLDOWN_MIN = 5
-
-DAMPER_FAN_DELAY_SEC = 15
-HEATER_DAMPER_DELAY_SEC = 10
-
-
-# ============================================================
-# Semantic name → relay_*st_flag 핀 매핑
-# ============================================================
-_RELAY_PIN_MAP_STANDARD = {
-    'water_heater_flag': 'relay_1st_flag',
-    'fog_occurs_flag': 'relay_2st_flag',
-    'drainage_motor_flag': 'relay_3st_flag',
-    'intake_fan_flag': 'relay_5st_flag',
-    'exhaust_fan_flag': 'relay_6st_flag',
-    'lighting_flag': 'relay_7st_flag',
-    'irrigation_flag': 'relay_8st_flag',
-    'indoor_heater_flag': 'relay_9st_flag',
-    'air_circulation_valve_flag': 'relay_10st_flag',
-    'air_intake_valve_flag': 'relay_11st_flag',
-    'air_exhaust_valve_flag': 'relay_14st_flag',
-    'indoor_heater2_flag': 'relay_15st_flag',
-}
-
-_RELAY_PIN_MAP_E = {
-    'water_heater_flag': 'relay_1st_flag',
-    'fog_occurs_flag': 'relay_2st_flag',
-    'radiator_flag': 'relay_3st_flag',
-    'lighting_flag': 'relay_5st_flag',
-    'irrigation_flag': 'relay_6st_flag',
-    'intake_fan_flag': 'relay_7st_flag',
-    'exhaust_fan_flag': 'relay_8st_flag',
-    'air_circulation_valve_flag': 'relay_9st_flag',
-    'air_intake_valve_flag': 'relay_10st_flag',
-    'air_exhaust_valve_flag': 'relay_11st_flag',
-    'drainage_motor_flag': 'relay_12st_flag',
-    'indoor_heater_flag': 'relay_13st_flag',
-    'indoor_heater2_flag': 'relay_14st_flag',
-}
-
-
-# ============================================================
-# 순환 모드 정의 (댐퍼 → 15초 후 → 팬)
-# ============================================================
-CIRCULATION_MODES = {
-    '순환정지': {
-        'dampers': {
-            'air_circulation_valve_flag': True,
-            'air_intake_valve_flag': True,
-            'air_exhaust_valve_flag': True,
-        },
-        'fans': {
-            'intake_fan_flag': False,
-            'exhaust_fan_flag': False,
-        },
-    },
-    '내부순환': {
-        'dampers': {
-            'air_circulation_valve_flag': True,
-            'air_intake_valve_flag': False,
-            'air_exhaust_valve_flag': False,
-        },
-        'fans': {
-            'intake_fan_flag': True,
-            'exhaust_fan_flag': True,
-        },
-    },
-    '외부순환': {
-        'dampers': {
-            'air_circulation_valve_flag': False,
-            'air_intake_valve_flag': True,
-            'air_exhaust_valve_flag': True,
-        },
-        'fans': {
-            'intake_fan_flag': True,
-            'exhaust_fan_flag': True,
-        },
-    },
-    '흡입순환': {
-        'dampers': {
-            'air_circulation_valve_flag': False,
-            'air_intake_valve_flag': True,
-            'air_exhaust_valve_flag': False,
-        },
-        'fans': {
-            'intake_fan_flag': True,
-            'exhaust_fan_flag': False,
-        },
-    },
-    '배기순환': {
-        'dampers': {
-            'air_circulation_valve_flag': False,
-            'air_intake_valve_flag': False,
-            'air_exhaust_valve_flag': True,
-        },
-        'fans': {
-            'intake_fan_flag': False,
-            'exhaust_fan_flag': True,
-        },
-    },
-}
 
 
 # ============================================================
@@ -162,63 +63,22 @@ _heater_state = {}
 
 # ============================================================
 # 헬퍼 함수
+# 센서 현황(INFO) + 릴레이 상세(DEBUG) 로그
 # ============================================================
-def _get_pin_map(house_id):
-    if int(house_id) == 2:
-        return _RELAY_PIN_MAP_E
-    return _RELAY_PIN_MAP_STANDARD
-
-
-_SEMANTIC_LABELS = {
-    'water_heater_flag': '물가열기',
-    'fog_occurs_flag': '분사펌프',
-    'drainage_motor_flag': '배수밸브',
-    'intake_fan_flag': '흡기팬',
-    'exhaust_fan_flag': '배기팬',
-    'lighting_flag': '조명',
-    'irrigation_flag': '관수',
-    'indoor_heater_flag': '열풍기',
-    'indoor_heater2_flag': '열풍댐퍼',
-    'air_circulation_valve_flag': '순환댐퍼',
-    'air_intake_valve_flag': '흡기댐퍼',
-    'air_exhaust_valve_flag': '배기댐퍼',
-    'radiator_flag': '라디에이터',
-}
-
-
 def _log_house_status(farm_id, house_id, order_label=""):
-    """센서 현황(INFO) + 릴레이 상세(DEBUG) 로그"""
     scope = _house_prefix(order_label, farm_id, house_id)
 
-    # INFO: 주요 센서값
     sensor = read_current_sensor_info(farm_id, house_id)
-    if sensor:
-        parts = []
-        for key, label, unit in [
-            ('indoor_temperature', '온도', '℃'),
-            ('indoor_humidity', '습도', '%'),
-            ('co2', 'CO2', 'ppm'),
-            ('water_temperature', '수온', '℃'),
-        ]:
-            v = sensor.get(key)
-            parts.append(f"{label} {v}{unit}" if v is not None else f"{label} -")
-        logger.info(f"{scope}: 센서 현황 - {', '.join(parts)}")
+    sensor_str = format_sensor_parts(sensor)
+    if sensor_str:
+        logger.info(f"{scope}: 센서 현황 - {sensor_str}")
     else:
         logger.info(f"{scope}: 센서 데이터 없음")
 
-    # DEBUG: 릴레이 상세
     relay = read_latest_relay_info(farm_id, house_id)
     if relay:
-        pin_map = _get_pin_map(house_id)
-        reverse = {v: k for k, v in pin_map.items()}
-        on_names = []
-        for i in range(1, RELAY_COUNT + 1):
-            pin = f"relay_{i}st_flag"
-            if relay.get(pin):
-                semantic = reverse.get(pin)
-                on_names.append(_SEMANTIC_LABELS.get(semantic, pin))
-        relay_str = ", ".join(on_names) if on_names else "전체 OFF"
-        logger.debug(f"{scope}: 릴레이 ON → [{relay_str}]")
+        logger.debug(f"{scope}: 릴레이 ON → [{format_relay_on_str(relay, house_id)}]")
+        logger.debug(f"{scope}: 릴레이 OFF → [{format_relay_off_str(relay, house_id)}]")
 
 
 def _classify(value, low, high):
@@ -402,7 +262,7 @@ def _check_emergency(sensor_data):
             'water_heater_flag': True,
             'fog_occurs_flag': False,
             'indoor_heater_flag': True,
-            'indoor_heater2_flag': True,
+            'indoor_heater_valve_flag': True,
         }, '내부순환', False
 
     if indoor_temp is not None and indoor_temp > TEMP_CRITICAL_HIGH:
@@ -410,7 +270,7 @@ def _check_emergency(sensor_data):
             'water_heater_flag': False,
             'fog_occurs_flag': False,
             'indoor_heater_flag': False,
-            'indoor_heater2_flag': False,
+            'indoor_heater_valve_flag': False,
         }, '배기순환', False
 
     # 습도
@@ -419,7 +279,7 @@ def _check_emergency(sensor_data):
             'water_heater_flag': True,
             'fog_occurs_flag': True,
             'indoor_heater_flag': False,
-            'indoor_heater2_flag': False,
+            'indoor_heater_valve_flag': False,
         }, '내부순환', False
 
     if indoor_humidity is not None and indoor_humidity > HUMIDITY_CRITICAL_HIGH:
@@ -427,7 +287,7 @@ def _check_emergency(sensor_data):
             'water_heater_flag': False,
             'fog_occurs_flag': False,
             'indoor_heater_flag': False,
-            'indoor_heater2_flag': False,
+            'indoor_heater_valve_flag': False,
         }, '배기순환', False
 
     # CO2
@@ -436,7 +296,7 @@ def _check_emergency(sensor_data):
             'water_heater_flag': False,
             'fog_occurs_flag': False,
             'indoor_heater_flag': False,
-            'indoor_heater2_flag': False,
+            'indoor_heater_valve_flag': False,
         }, '배기순환', False
 
     # 수온 (물가열기만 제어, 다른 장치 유지)
@@ -524,7 +384,7 @@ def _execute_control(
         circ = CIRCULATION_MODES['배기순환']
 
     heater_on = device_settings.get('indoor_heater_flag', False)
-    heater_damper_on = device_settings.get('indoor_heater2_flag', False)
+    heater_damper_on = device_settings.get('indoor_heater_valve_flag', False)
     prev_heater_on = _get_current_heater_state(current_relay, pin_map)
 
     # === Phase 1: 댐퍼 + 장치 (팬/열풍기 시퀀스 대기) ===
@@ -540,16 +400,16 @@ def _execute_control(
     # 열풍기/열풍댐퍼 Phase 1 (장치조작절대지침 준수)
     if heater_on and not prev_heater_on:
         # ON 시퀀스: 열풍댐퍼 ON 먼저, 열풍기는 Phase 2에서 ON
-        phase1_semantic['indoor_heater2_flag'] = True
+        phase1_semantic['indoor_heater_valve_flag'] = True
         phase1_semantic['indoor_heater_flag'] = False
     elif not heater_on and prev_heater_on:
         # OFF 시퀀스: 열풍기 OFF 먼저, 열풍댐퍼는 Phase 2에서 OFF
         phase1_semantic['indoor_heater_flag'] = False
-        phase1_semantic['indoor_heater2_flag'] = True
+        phase1_semantic['indoor_heater_valve_flag'] = True
     else:
         # 변화 없음: 최종 상태 즉시 적용
         phase1_semantic['indoor_heater_flag'] = heater_on
-        phase1_semantic['indoor_heater2_flag'] = heater_damper_on
+        phase1_semantic['indoor_heater_valve_flag'] = heater_damper_on
 
     # 팬: Phase 1에서는 현재 상태 유지
     if current_relay:
@@ -579,7 +439,7 @@ def _execute_control(
 
     # 열풍기/열풍댐퍼 최종 상태
     phase2_semantic['indoor_heater_flag'] = heater_on
-    phase2_semantic['indoor_heater2_flag'] = heater_damper_on
+    phase2_semantic['indoor_heater_valve_flag'] = heater_damper_on
 
     # Phase 2 쓰기
     phase2_values = _build_relay_values(house_id, phase2_semantic, current_relay, harvest_mode)
@@ -644,6 +504,40 @@ def _execute_water_temp_emergency(
 
 
 # ============================================================
+# AI 모드 비상제어 공통 처리
+# control_all_manual, control_all_ai 양쪽에서 사용
+# Returns: (result, True) if emergency handled, (None, False) if not
+# ============================================================
+def _handle_ai_emergency(farm_id, house_id, growth_stage, order_label=""):
+    sensor_data = read_current_sensor_info(farm_id, house_id)
+    if not sensor_data:
+        return None, False
+
+    is_emergency, emergency_devices, emergency_circulation, water_temp_only = _check_emergency(sensor_data)
+    if not is_emergency:
+        return None, False
+
+    current_relay = read_latest_relay_info(farm_id, house_id)
+    harvest_mode = (growth_stage == '수확기')
+
+    if water_temp_only:
+        result = _execute_water_temp_emergency(
+            farm_id, house_id,
+            emergency_devices.get('water_heater_flag', False),
+            current_relay, harvest_mode, order_label=order_label
+        )
+    else:
+        if emergency_devices.get('indoor_heater_flag', False):
+            _reset_heater_cooldown(farm_id, house_id, order_label=order_label)
+        logger.info(f"{order_label}: AI 모드 비상제어 발동")
+        result = _execute_control(
+            farm_id, house_id, emergency_devices, emergency_circulation,
+            current_relay, harvest_mode, reason="AI모드_비상제어", order_label=order_label
+        )
+    return result, True
+
+
+# ============================================================
 # 발이기 제어
 # ============================================================
 def _control_budding(farm_id, house_id, indoor_temp, current_relay, order_label=""):
@@ -658,7 +552,7 @@ def _control_budding(farm_id, house_id, indoor_temp, current_relay, order_label=
             'water_heater_flag': True,
             'fog_occurs_flag': False,
             'indoor_heater_flag': True,
-            'indoor_heater2_flag': True,
+            'indoor_heater_valve_flag': True,
         }
         return _execute_control(
             farm_id, house_id, device_settings, '내부순환',
@@ -671,7 +565,7 @@ def _control_budding(farm_id, house_id, indoor_temp, current_relay, order_label=
             'water_heater_flag': False,
             'fog_occurs_flag': False,
             'indoor_heater_flag': False,
-            'indoor_heater2_flag': False,
+            'indoor_heater_valve_flag': False,
         }
         return _execute_control(
             farm_id, house_id, device_settings, '배기순환',
@@ -683,7 +577,7 @@ def _control_budding(farm_id, house_id, indoor_temp, current_relay, order_label=
         'water_heater_flag': False,
         'fog_occurs_flag': False,
         'indoor_heater_flag': False,
-        'indoor_heater2_flag': False,
+        'indoor_heater_valve_flag': False,
     }
     return _execute_control(
         farm_id, house_id, device_settings, '순환정지',
@@ -696,7 +590,7 @@ def _control_budding(farm_id, house_id, indoor_temp, current_relay, order_label=
 # ============================================================
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 수동 환경제어 메인 함수
+# 환경제어 메인 함수
 # 제어 흐름:
 # 1. 센서 데이터 조회
 # 2. 비상제어 체크 (모든 생육단계 공통 최우선)
@@ -773,7 +667,7 @@ def control_manual_environment(farm_id, house_id, growth_stage='생육기', orde
                     'water_heater_flag': False,
                     'fog_occurs_flag': False,
                     'indoor_heater_flag': False,
-                    'indoor_heater2_flag': False,
+                    'indoor_heater_valve_flag': False,
                 },
                 '외부순환', current_relay, harvest_mode,
                 reason="외부정상+내부비정상", order_label=order_label
@@ -813,7 +707,7 @@ def control_manual_environment(farm_id, house_id, growth_stage='생육기', orde
             'water_heater_flag': water_heater,
             'fog_occurs_flag': fog_pump,
             'indoor_heater_flag': heater,
-            'indoor_heater2_flag': heater_damper,
+            'indoor_heater_valve_flag': heater_damper,
         }
 
         return _execute_control(
@@ -825,13 +719,13 @@ def control_manual_environment(farm_id, house_id, growth_stage='생육기', orde
 
     except Exception as e:
         scope = _house_prefix(order_label, farm_id, house_id)
-        logger.error(f"수동 환경제어 오류 ({scope}): {e}")
+        logger.error(f"알고리즘 환경제어 오류 ({scope}): {e}")
         logger.error(traceback.format_exc())
         return {"success": False, "message": f"오류 발생: {str(e)}"}
 
 
 # ============================================================
-# 전체 재배사 수동 환경제어
+# 전체 재배사 환경제어
 # ============================================================
 def control_all_manual():
     try:
@@ -847,17 +741,35 @@ def control_all_manual():
                 return {"success": True, "total": 0, "results": []}
 
             ordered_houses = _sort_houses(houses)
-            house_order = ", ".join(
-                str(house.get("hous_id"))
-                for house in ordered_houses
-                if house.get("hous_id") is not None
-            )
+
+            # 재배사별 모드 접두사 결정
+            def _mode_short(h):
+                if not h.get("mnul_ctrl_flag"):
+                    return "수동제어"
+                elif h.get("ctrl_type") == "ai":
+                    return "인공지능"
+                else:
+                    return "알고리즘"
+
+            mode_set = set(_mode_short(h) for h in ordered_houses if h.get("hous_id") is not None)
+            if len(mode_set) == 1:
+                all_mode_prefix = mode_set.pop()
+                house_order = ", ".join(
+                    str(h.get("hous_id")) for h in ordered_houses if h.get("hous_id") is not None
+                )
+            else:
+                all_mode_prefix = ""
+                house_order = ", ".join(
+                    f"{h.get('hous_id')}({_mode_short(h)})"
+                    for h in ordered_houses if h.get("hous_id") is not None
+                )
             if house_order:
-                logger.info(f"수동 환경제어 대상 순서: {house_order}")
+                logger.info(f"{all_mode_prefix} 환경제어 대상 순서: {house_order}")
 
             results = []
             success_count = 0
             fail_count = 0
+            mode_counts = {}  # 모드별 재배사 수 집계
 
             for index, house in enumerate(ordered_houses, start=1):
                 farm_id = house.get("farm_id")
@@ -867,6 +779,22 @@ def control_all_manual():
                     continue
 
                 order_label = f"[{index}/{len(ordered_houses)}]"
+
+                # ── 스케줄 제어 (조명/관수) — 재배사별 로그 순서 보장 ──
+                logger.info("-")
+                light_result = control_lighting_schedule(farm_id, house_id)
+                irrigation_result = control_irrigation_schedule(farm_id, house_id)
+                sched_parts = []
+                sched_schedules = []
+                sched_parts.append(f"조명 {light_result.get('status', '-')}")
+                sched_schedules.extend(light_result.get("schedules", []))
+                sched_parts.append(f"관수 {irrigation_result.get('status', '-')}")
+                sched_schedules.extend(irrigation_result.get("schedules", []))
+                sched_info = f" (스케줄: {', '.join(sched_schedules)})" if sched_schedules else ""
+                logger.info(
+                    f"{order_label} 농장 {farm_id}, 재배사 {house_id}: "
+                    f"{' / '.join(sched_parts)}{sched_info}"
+                )
 
                 # 생육단계 조회 (모든 재배사 공통)
                 growth_stage = read_current_growth_stage(farm_id, house_id)
@@ -880,19 +808,57 @@ def control_all_manual():
                 # 운용 모드 라벨 결정
                 if not mnul_ctrl_flag:
                     mode_label = "사용자 직접입력 모드"
+                    mode_short = "수동제어"
                 elif ctrl_type == 'ai':
                     mode_label = "AI 제어 모드"
+                    mode_short = "인공지능"
                 elif growth_stage == '휴지기':
                     mode_label = "휴지기"
+                    mode_short = "휴지기"
                 else:
                     mode_label = "알고리즘 수동제어"
+                    mode_short = "알고리즘"
+                mode_counts[mode_short] = mode_counts.get(mode_short, 0) + 1
 
                 logger.info(
                     f"{order_label} ──── 농장 {farm_id}, 재배사 {house_id} "
                     f"──── {mode_label} (생육단계: {growth_stage})"
                 )
 
-                # 알고리즘 수동제어 이외 모드 → 센서/릴레이 현황만 로깅 후 스킵
+                # AI 제어 모드 (10초 주기: 비상제어 + 모니터링만)
+                # LLM 정기 호출은 별도 5분 주기 작업(control_all_ai)에서 수행
+                if mode_label == "AI 제어 모드":
+                    try:
+                        from agri_ai_core.src.control.ai_control import monitor_ai_emergency, control_ai_environment
+
+                        # 1. 비상제어 (하드 리밋 — AI보다 우선)
+                        result, handled = _handle_ai_emergency(farm_id, house_id, growth_stage, order_label)
+                        if handled:
+                            results.append({"farm_id": farm_id, "house_id": house_id, "result": result})
+                            if result.get("success"):
+                                success_count += 1
+                            else:
+                                fail_count += 1
+                            continue
+
+                        # 2. AI 모니터링 (소프트 긴급: 임계치 근접 / 트렌드 급변)
+                        needs_intervention = monitor_ai_emergency(farm_id, house_id, order_label)
+                        if needs_intervention:
+                            result = control_ai_environment(farm_id, house_id, growth_stage, order_label)
+                            results.append({"farm_id": farm_id, "house_id": house_id, "result": result})
+                            if result.get("success"):
+                                success_count += 1
+                            else:
+                                fail_count += 1
+                        else:
+                            scope = _house_prefix(order_label, farm_id, house_id)
+                            logger.info(f"{scope}: 정상 - [AI] 판단: 대기 (LLM 미호출 주기)")
+                        continue
+                    except Exception as e:
+                        logger.error(f"{order_label} AI 제어 예외: {e}")
+                        continue
+
+                # 나머지 모드 (사용자 직접입력, 휴지기) → 센서/릴레이 현황만 로깅 후 스킵
                 if mode_label != "알고리즘 수동제어":
                     _log_house_status(farm_id, house_id, order_label)
                     continue
@@ -914,7 +880,12 @@ def control_all_manual():
                     "result": result
                 })
 
-            logger.info(f"수동 환경제어 완료: 총 {len(results)}개 재배사 (성공: {success_count}, 실패: {fail_count})")
+            if len(mode_counts) == 1:
+                done_prefix = list(mode_counts.keys())[0]
+                logger.info(f"{done_prefix} 환경제어 완료: 총 {len(results)}개 재배사 (성공: {success_count}, 실패: {fail_count})")
+            else:
+                mode_str = ", ".join(f"{k} {v}" for k, v in mode_counts.items())
+                logger.info(f"환경제어 완료: {mode_str} (총 {len(results)}개, 성공: {success_count}, 실패: {fail_count})")
             logger.info("-")
 
             return {
@@ -926,6 +897,90 @@ def control_all_manual():
             }
 
     except Exception as e:
-        logger.error(f"전체 수동 환경제어 오류: {e}")
+        logger.error(f"전체 환경제어 오류: {e}")
+        logger.error(traceback.format_exc())
+        return {"success": False, "message": f"오류 발생: {str(e)}"}
+
+
+# ============================================================
+# 5분 주기 AI 환경제어 (LLM 정기 호출)
+# AI 모드 재배사만 대상, 항상 LLM 호출
+# ============================================================
+def control_all_ai():
+    try:
+        with db_session() as database:
+            houses = database.fetch_all(
+                query=dbQry.GET_HOUSE_NAME,
+                vals=(None, None, None, None),
+                as_dict=True
+            )
+
+            if not houses:
+                return {"success": True, "total": 0, "results": []}
+
+            ordered_houses = _sort_houses(houses)
+
+            # AI 모드 재배사만 필터
+            ai_houses = [
+                h for h in ordered_houses
+                if h.get("mnul_ctrl_flag") and h.get("ctrl_type") == "ai"
+                and h.get("farm_id") is not None and h.get("hous_id") is not None
+            ]
+
+            if not ai_houses:
+                return {"success": True, "total": 0, "results": []}
+
+            ai_order = ", ".join(str(h.get("hous_id")) for h in ai_houses)
+            logger.info(f"인공지능 환경제어 시작: 대상 재배사 {ai_order}")
+
+            results = []
+            success_count = 0
+            fail_count = 0
+
+            for index, house in enumerate(ai_houses, start=1):
+                farm_id = house.get("farm_id")
+                house_id = house.get("hous_id")
+                order_label = f"[AI {index}/{len(ai_houses)}]"
+
+                growth_stage = read_current_growth_stage(farm_id, house_id) or '생육기'
+
+                try:
+                    from agri_ai_core.src.control.ai_control import control_ai_environment
+
+                    # 비상제어 체크 (AI보다 우선)
+                    result, handled = _handle_ai_emergency(farm_id, house_id, growth_stage, order_label)
+                    if handled:
+                        results.append({"farm_id": farm_id, "house_id": house_id, "result": result})
+                        if result.get("success"):
+                            success_count += 1
+                        else:
+                            fail_count += 1
+                        continue
+
+                    # AI LLM 정기 호출 (항상 실행)
+                    result = control_ai_environment(farm_id, house_id, growth_stage, order_label)
+                    results.append({"farm_id": farm_id, "house_id": house_id, "result": result})
+                    if result.get("success"):
+                        success_count += 1
+                    else:
+                        fail_count += 1
+
+                except Exception as e:
+                    logger.error(f"{order_label} AI 제어 예외: {e}")
+                    fail_count += 1
+
+            if results:
+                logger.info(f"인공지능 환경제어 완료: 총 {len(results)}개 재배사 (성공: {success_count}, 실패: {fail_count})")
+
+            return {
+                "success": fail_count == 0,
+                "total": len(results),
+                "success_count": success_count,
+                "fail_count": fail_count,
+                "results": results
+            }
+
+    except Exception as e:
+        logger.error(f"인공지능 환경제어 오류: {e}")
         logger.error(traceback.format_exc())
         return {"success": False, "message": f"오류 발생: {str(e)}"}

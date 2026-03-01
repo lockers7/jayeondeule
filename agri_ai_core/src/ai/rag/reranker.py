@@ -1,9 +1,11 @@
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # LLM 기반 Reranker 모듈
 # 벡터 검색 상위 후보를 LLM에 전달하여 관련성 점수를 매기고 재정렬합니다.
 # --->
+# _build_rerank_prompt: Reranking 프롬프트 생성 — 각 문서에 관련성 점수(1-10) 요청
+# _parse_scores: LLM 응답에서 점수 배열 파싱
 # rerank_results: 검색 결과를 LLM 관련성 점수로 재정렬
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import os
 import re
 import json
@@ -11,7 +13,7 @@ import time
 from typing import Any, Dict, List
 
 from agri_ai_core.logs import setup_logger
-from agri_ai_core.config import settings, get_ollama_url
+from agri_ai_core.config import get_ollama_url, get_model_name
 
 logger = setup_logger(__name__)
 
@@ -22,16 +24,10 @@ RERANK_MIN_SCORE = int(os.getenv("RERANK_MIN_SCORE", "4"))
 RERANK_MAX_RETRIES = int(os.getenv("RERANK_MAX_RETRIES", "1"))
 
 
-def _get_model_name() -> str:
-    return (
-        getattr(settings.model, "model_name", None)
-        or os.getenv("LLM_MODEL_NAME")
-        or "qwen3:32b"
-    )
-
-
+# ============================================================
+# Reranking 프롬프트 생성 — 각 문서에 관련성 점수(1-10) 요청
+# ============================================================
 def _build_rerank_prompt(query: str, documents: List[Dict[str, Any]]) -> str:
-    """Reranking 프롬프트 생성 — 각 문서에 관련성 점수(1-10) 요청"""
     doc_texts = []
     for i, doc in enumerate(documents):
         content = doc.get("content", "")[:400]
@@ -56,8 +52,10 @@ def _build_rerank_prompt(query: str, documents: List[Dict[str, Any]]) -> str:
     )
 
 
+# ============================================================
+# LLM 응답에서 점수 배열 파싱
+# ============================================================
 def _parse_scores(response_text: str, expected_count: int) -> List[int]:
-    """LLM 응답에서 점수 배열 파싱"""
     if not response_text:
         return []
 
@@ -80,20 +78,19 @@ def _parse_scores(response_text: str, expected_count: int) -> List[int]:
     return []
 
 
+# ============================================================
+# LLM 기반 Reranker.
+# 벡터 검색 결과(최대 RERANK_MAX_CANDIDATES건)를 LLM에 전달하여
+# 관련성 점수로 재정렬 후 상위 top_k건 반환.
+# - 실패 시 RERANK_MAX_RETRIES회 재시도
+# - RERANK_MIN_SCORE 미만 결과 필터링
+# - 모든 결과가 임계값 미달 시 빈 배열 반환
+# ============================================================
 def rerank_results(
     query: str,
     results: List[Dict[str, Any]],
     top_k: int = 3,
 ) -> List[Dict[str, Any]]:
-    """
-    LLM 기반 Reranker.
-    벡터 검색 결과(최대 RERANK_MAX_CANDIDATES건)를 LLM에 전달하여
-    관련성 점수로 재정렬 후 상위 top_k건 반환.
-
-    - 실패 시 RERANK_MAX_RETRIES회 재시도
-    - RERANK_MIN_SCORE 미만 결과 필터링
-    - 모든 결과가 임계값 미달 시 빈 배열 반환
-    """
     if not results:
         return []
 
@@ -110,7 +107,7 @@ def rerank_results(
             from agri_ai_core.src.ai.mcp_client import mcp_http_request
 
             ollama_url = get_ollama_url()
-            model_name = _get_model_name()
+            model_name = get_model_name()
             prompt = _build_rerank_prompt(query, candidates)
 
             payload = {
@@ -149,6 +146,8 @@ def rerank_results(
                     f"{elapsed:.1f}s, {last_error})"
                 )
                 scores = []
+                if attempt < RERANK_MAX_RETRIES:
+                    payload["options"]["temperature"] = 0.3
                 continue
 
             break  # 성공
