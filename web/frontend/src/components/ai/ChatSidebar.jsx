@@ -1,17 +1,38 @@
-import React, {useEffect, useState} from "react";
-import {Button, Form} from "react-bootstrap";
-import {getFarmList} from "../../utils/farmUtil.js";
-import {getHouseList} from "../../utils/houseUtil.js";
+import React, { useEffect, useState } from "react";
+import { Button, Form } from "react-bootstrap";
+import { getFarmList } from "../../utils/farmUtil.js";
+import { getHouseList } from "../../utils/houseUtil.js";
 
 export default function ChatSidebar({
-                                        selectedFarm,
-                                        setSelectedFarm,
-                                        selectedHouse,
-                                        setSelectedHouse,
-                                        onClearMessages,
-                                    }) {
+    selectedFarm,
+    setSelectedFarm,
+    selectedHouse,
+    setSelectedHouse,
+    onClearMessages,
+}) {
     const [farms, setFarms] = useState([]);
     const [houses, setHouses] = useState([]);
+    const [region, setRegion] = useState("확인 중...");
+
+    // IP 기반 지역 판단 (서버 측 조회)
+    useEffect(() => {
+        fetch("/ai-api/geo")
+            .then((res) => res.json())
+            .then((data) => {
+                if (data.city && data.region) {
+                    setRegion(`${data.region} ${data.city}`);
+                } else if (data.city) {
+                    setRegion(data.city);
+                } else if (data.region) {
+                    setRegion(data.region);
+                } else {
+                    setRegion("알 수 없음");
+                }
+            })
+            .catch(() => {
+                setRegion("알 수 없음");
+            });
+    }, []);
 
     // 농장 목록 로드
     useEffect(() => {
@@ -29,7 +50,7 @@ export default function ChatSidebar({
     // 재배사 목록 로드 (농장 선택 변경 시)
     useEffect(() => {
         if (!selectedFarm) return;
-        getHouseList({farmId: selectedFarm.farmId})
+        getHouseList({ farmId: selectedFarm.farmId })
             .then((res) => {
                 const list = res.data || [];
                 setHouses(list);
@@ -64,14 +85,14 @@ export default function ChatSidebar({
             }}
         >
             {/* 헤더 */}
-            <h5 style={{color: "#1B5E20", marginBottom: "4px"}}>자연들에</h5>
-            <small className="text-muted" style={{marginBottom: "20px"}}>스마트팜 AI 관리</small>
+            <h5 style={{ color: "#1B5E20", marginBottom: "4px" }}>자연들에</h5>
+            <small className="text-muted" style={{ marginBottom: "20px" }}>스마트팜 AI 관리</small>
 
-            <hr/>
+            <hr />
 
             {/* 농장 선택 */}
             <Form.Group className="mb-3">
-                <Form.Label style={{fontWeight: "600", fontSize: "14px"}}>농장 선택</Form.Label>
+                <Form.Label style={{ fontWeight: "600", fontSize: "14px" }}>농장 선택</Form.Label>
                 <Form.Select
                     size="sm"
                     value={selectedFarm ? String(selectedFarm.farmId) : ""}
@@ -87,7 +108,7 @@ export default function ChatSidebar({
 
             {/* 재배사 선택 */}
             <Form.Group className="mb-3">
-                <Form.Label style={{fontWeight: "600", fontSize: "14px"}}>재배사 선택</Form.Label>
+                <Form.Label style={{ fontWeight: "600", fontSize: "14px" }}>재배사 선택</Form.Label>
                 <Form.Select
                     size="sm"
                     value={selectedHouse ? String(selectedHouse.housId) : ""}
@@ -112,14 +133,15 @@ export default function ChatSidebar({
                     marginBottom: "20px",
                 }}
             >
-                <div style={{fontWeight: "600", fontSize: "13px", color: "#495057", marginBottom: "4px"}}>
+                <div style={{ fontWeight: "600", fontSize: "13px", color: "#495057", marginBottom: "4px" }}>
                     현재 선택
                 </div>
-                <div style={{fontSize: "13px"}}>농장: {selectedFarm?.farmName || "-"}</div>
-                <div style={{fontSize: "13px"}}>재배사: {selectedHouse?.housName || "-"}</div>
+                <div style={{ fontSize: "13px", display: "flex" }}><span style={{ width: "52px", display: "inline-block" }}>지&nbsp;&nbsp;&nbsp;역</span>:&nbsp;{region}</div>
+                <div style={{ fontSize: "13px", display: "flex" }}><span style={{ width: "52px", display: "inline-block" }}>농&nbsp;&nbsp;&nbsp;장</span>:&nbsp;{selectedFarm?.farmName || "-"}</div>
+                <div style={{ fontSize: "13px", display: "flex" }}><span style={{ width: "52px", display: "inline-block" }}>재배사</span>:&nbsp;{selectedHouse?.housName || "-"}</div>
             </div>
 
-            <hr/>
+            <hr />
 
             {/* 대화 기록 삭제 */}
             <Button variant="outline-secondary" size="sm" className="w-100" onClick={onClearMessages}>

@@ -125,16 +125,19 @@ def get_available_tools() -> List[Dict[str, Any]]:
 # 시스템 프롬프트 생성
 # Tool Use를 위한 시스템 프롬프트 생성
 # Args: farm_name: 농장명
+#       farm_info: 농장 기본 정보 문자열 (DB에서 조회한 농장/재배사/작물 정보)
 # Returns: str: 시스템 프롬프트
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def get_system_prompt_with_tools(farm_name: str = None) -> str:
-    farm_display = f"{farm_name} 농장" if farm_name else "스마트팜"
+def get_system_prompt_with_tools(farm_name: str = None, farm_info: str = None) -> str:
+    farm_display = farm_name if (farm_name and "농장" in farm_name) else f"{farm_name} 농장" if farm_name else "스마트팜"
     now = datetime.now()
     weekdays = ['월요일', '화요일', '수요일', '목요일', '금요일', '토요일', '일요일']
     current_datetime = f"{now.strftime('%Y년 %m월 %d일')} {weekdays[now.weekday()]} {now.strftime('%H시 %M분')}"
 
+    farm_info_section = f"\n\n**농장 기본 정보:**\n{farm_info}" if farm_info else ""
+
     return f"""당신은 {farm_display}를 운영하는 농장주를 지원하는 AI 도우미입니다.
-**현재:** {current_datetime}
+**현재:** {current_datetime}{farm_info_section}
 
 **말투 (절대 규칙):**
 - 모든 문장을 반드시 존댓말 어미(~합니다/~입니다/~해요/~세요/~습니다)로 끝내세요.
