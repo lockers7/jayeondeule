@@ -12,7 +12,6 @@ export async function createMemo(farmId, houseId, content) {
 }
 
 export async function updateMemo(farmId, houseId, content) {
-    console.log(content);
     const { url, method } = apiRoutes.memos.patch(farmId, houseId, content.recdDttm);
     return api({url, method, data:content});
 }

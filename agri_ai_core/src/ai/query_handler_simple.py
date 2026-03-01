@@ -57,12 +57,34 @@ def _dedupe_list(items, type_check, key_fn, value_fn=None):
 # ============================================================
 # 도구별 기본 인자 생성
 # ============================================================
+# 파일명 패턴: UUID prefix + 파일명.확장자 또는 단순 파일명.확장자
+# 확장자는 알파벳만 허용 (소수점 숫자 오탐 방지: 2528.92000 등)
+# 단순 파일명은 최소 1개 문자(한글/영문) 포함 필수
+_FILE_NAME_RE = re.compile(
+    r'[\'"]?'
+    r'('
+    r'[a-f0-9]{6,}_[\w\-가-힣.]+\.[a-zA-Z]{2,5}'
+    r'|'
+    r'(?=.*[a-zA-Z가-힣])[\w\-가-힣.]+\.[a-zA-Z]{2,5}'
+    r')'
+    r'[\'"]?'
+)
+
+
 def _build_default_tool_args(user_query, farm_id, house_id):
+    # 질문에서 파일명 패턴 감지
+    detected_file_name = None
+    match = _FILE_NAME_RE.search(user_query or "")
+    if match:
+        detected_file_name = match.group(1)
+        logger.info(f"[기본인자] 파일명 감지: {detected_file_name}")
+
     return {
         "search_web": {"query": user_query},
         "search_farm_knowledge": {
             "query": user_query,
             "n_results": 5,
+            "file_name": detected_file_name,
             "farm_id": str(farm_id) if farm_id is not None else None,
             "house_id": str(house_id) if house_id is not None else None,
         },
@@ -106,7 +128,10 @@ def _load_hybrid_context(session_id, user_query, farm_id, label=""):
     if related_context:
         history.append({
             "role": "system",
-            "content": f"[관련 과거 대화 참고]\n{related_context}",
+            "content": (
+                f"[관련 과거 대화 주제 (참고만 하세요. 반드시 도구를 사용하여 최신 데이터를 확인한 후 답변하세요.)]\n"
+                f"{related_context}"
+            ),
         })
     if recent_turns:
         history.extend(recent_turns)
@@ -171,7 +196,7 @@ def _search_related_conversations(user_query, farm_id):
         metadatas = results.get("metadatas", []) or []
         distances = results.get("distances", []) or []
 
-        # 거리 임계값 필터 + 포맷
+        # 거리 임계값 필터 + 포맷 (질문만 추출, 과거 답변은 포함하지 않음)
         lines = []
         for idx, doc in enumerate(documents):
             dist = distances[idx] if idx < len(distances) else None
@@ -179,9 +204,16 @@ def _search_related_conversations(user_query, farm_id):
                 continue
             meta = metadatas[idx] if idx < len(metadatas) else {}
             record_dt = (meta or {}).get("record_datetime", "")[:10]
-            preview = (doc or "")[:300]
-            if preview:
-                lines.append(f"- ({record_dt}) {preview}")
+            # 과거 답변을 포함하면 LLM이 도구 호출 없이 복사하므로 질문만 추출
+            query_preview = (meta or {}).get("query_preview", "")
+            if not query_preview:
+                raw = (doc or "")
+                if raw.startswith("질문:"):
+                    query_preview = raw.split("\n답변:")[0].replace("질문:", "").strip()[:200]
+                else:
+                    query_preview = raw[:200]
+            if query_preview:
+                lines.append(f"- ({record_dt}) 질문: {query_preview}")
 
         if not lines:
             return None

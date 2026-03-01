@@ -111,7 +111,7 @@ const apiRoutes = {
          * response: {FarmDTO}<br>
          */
         getMyFarm: {
-            url: `${BASE_URL}/farms/me}`,
+            url: `${BASE_URL}/farms/me`,
             method: "GET"
         },
 

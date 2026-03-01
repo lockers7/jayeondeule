@@ -607,6 +607,42 @@ def _coerce_numeric_id(provided_id, default_id):
     return provided_id
 
 
+# 인사/잡담 판별 패턴 (폴백 제외 대상)
+_GREETING_RE = re.compile(
+    r"^(안녕|반가|잘\s*지내|하이|헬로|좋은\s*(아침|저녁|하루)|수고|고마워|감사|네|예|아니)",
+    re.IGNORECASE,
+)
+
+# 파일/데이터 관련 키워드 (폴백 트리거)
+_DATA_KEYWORDS = re.compile(
+    r"(파일|문서|학습|RAG|데이터|요약|내용|정리|csv|pdf|txt|json|md|"
+    r"검색|찾아|알려|설명|버섯|작물|재배|센서|온도|습도|"
+    r"농장|재배사|생육|수확|병해충|방제)",
+    re.IGNORECASE,
+)
+
+
+def _should_fallback_search(user_query: str) -> bool:
+    """첫 반복에서 도구 호출이 없을 때 폴백 검색을 실행할지 판단한다."""
+    stripped = (user_query or "").strip()
+    # 짧은 인사/잡담은 폴백 불필요
+    if len(stripped) < 5:
+        return False
+    if _GREETING_RE.search(stripped):
+        return False
+    # 긴 질문(500자 이상)은 사용자가 인라인 데이터를 직접 제공한 것으로 간주 → 폴백 스킵
+    # (예: 주식 데이터 분석, 표 데이터 해석 등 LLM이 자체 분석 가능)
+    if len(stripped) > 500:
+        return False
+    # 데이터/파일/농장 관련 키워드가 있으면 폴백 실행
+    if _DATA_KEYWORDS.search(stripped):
+        return True
+    # 파일명 패턴 감지 (확장자는 알파벳만 — 소수점 숫자 2528.92000 등 제외)
+    if re.search(r'\.[a-zA-Z]{2,5}\b', stripped):
+        return True
+    return False
+
+
 def _normalize_tool_arguments(
     tool_name: str,
     tool_args: Dict[str, Any],
@@ -633,6 +669,7 @@ def _normalize_tool_arguments(
         return {
             "query": _pick("query"),
             "n_results": _pick("n_results", 3),
+            "file_name": _pick("file_name"),
             "farm_id": _pick("farm_id"),
             "house_id": _pick("house_id"),
         }
@@ -2295,6 +2332,29 @@ def get_llm_response_with_tools(
             tool_calls = _extract_tool_calls(assistant_message)
             iter_elapsed = time.time() - t_iter
             if not tool_calls:
+                # ── Tool Use 폴백: 첫 반복에서 도구 미호출 + 데이터 관련 질문 → 자동 search_farm_knowledge ──
+                if iteration == 0 and _should_fallback_search(user_query):
+                    logger.info("[Tool Use 폴백] LLM이 도구를 호출하지 않음 → search_farm_knowledge 자동 실행")
+                    fallback_args = _normalize_tool_arguments(
+                        "search_farm_knowledge",
+                        {"query": user_query},
+                        default_tool_args=default_tool_args,
+                    )
+                    t_fb = time.time()
+                    fb_result = execute_tool("search_farm_knowledge", fallback_args)
+                    fb_elapsed = time.time() - t_fb
+                    logger.info(f"[Tool Use 폴백] search_farm_knowledge 완료 ({fb_elapsed:.1f}s) 결과길이={len(fb_result or '')}자")
+
+                    if "search_farm_knowledge" not in _tools_used:
+                        _tools_used.append("search_farm_knowledge")
+
+                    # 폴백 검색 결과를 메시지에 주입하고 LLM 재호출
+                    messages.append({
+                        "role": "tool",
+                        "content": str(fb_result or "검색 결과 없음"),
+                    })
+                    continue  # 다음 iteration에서 LLM이 검색 결과를 보고 답변 생성
+
                 final_answer = assistant_message.get("content", "")
                 _tooluse_total_s = time.time() - _t_tooluse_start
                 logger.info(

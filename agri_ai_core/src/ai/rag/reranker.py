@@ -59,6 +59,14 @@ def _parse_scores(response_text: str, expected_count: int) -> List[int]:
     if not response_text:
         return []
 
+    # <think>...</think> 태그 제거 (qwen3 모델이 /no_think 무시하는 경우 대응)
+    cleaned = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL).strip()
+    if not cleaned:
+        # think 태그가 닫히지 않은 경우 (아직 think 중인 응답)
+        cleaned = re.sub(r'<think>.*', '', response_text, flags=re.DOTALL).strip()
+    if cleaned:
+        response_text = cleaned
+
     # JSON 배열 패턴 매칭
     array_match = re.search(r'\[[\d\s,]+\]', response_text)
     if array_match:
@@ -117,6 +125,7 @@ def rerank_results(
                 "options": {
                     "temperature": 0,
                     "num_predict": 60,
+                    "think": False,
                 },
             }
 
@@ -163,12 +172,14 @@ def rerank_results(
 
     elapsed = time.time() - t_start
 
-    # 모든 시도 실패 → 빈 배열 반환 (무관한 결과 전달 방지)
+    # 모든 시도 실패 → 거리 기반 상위 결과를 폴백으로 반환
     if not scores:
+        fallback = candidates[:top_k]
         logger.warning(
-            f"[Reranker] 모든 시도 실패 ({elapsed:.1f}s, 마지막: {last_error}) → 빈 결과 반환"
+            f"[Reranker] 모든 시도 실패 ({elapsed:.1f}s, 마지막: {last_error}) "
+            f"→ 거리 기반 상위 {len(fallback)}건 폴백 반환"
         )
-        return []
+        return fallback
 
     # 점수 기반 재정렬 (높은 점수 우선)
     scored_results = list(zip(scores, candidates))

@@ -50,7 +50,6 @@ HEATER_MAX_CONTINUOUS_MIN = 30
 HEATER_COOLDOWN_MIN = 5
 
 DAMPER_FAN_DELAY_SEC = 15
-HEATER_DAMPER_DELAY_SEC = 10
 
 
 # ============================================================

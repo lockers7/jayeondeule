@@ -312,13 +312,14 @@ def _json_default(value: Any) -> Any:
 def search_farm_knowledge(
     query: str,
     n_results: int = 3,
+    file_name: str = None,
     farm_id: str = None,
     house_id: str = None,
 ) -> Dict[str, Any]:
     t_start = time.time()
     logger.info(
         f"[VectorDB검색] 시작 query=\"{(query or '')[:80]}\" "
-        f"n_results={n_results} farm_id={farm_id} house_id={house_id}"
+        f"n_results={n_results} file_name={file_name} farm_id={farm_id} house_id={house_id}"
     )
     try:
         from agri_ai_core.src.ai.rag.embedder import embed_text
@@ -404,10 +405,15 @@ def search_farm_knowledge(
         collection_plans = []
         doc_collection_name = document_collection()
         if doc_collection_name:
+            # file_name이 지정된 경우 해당 파일 청크만 검색하는 where 필터 적용
+            doc_where = None
+            if file_name:
+                doc_where = {"file_name": {"$eq": file_name}}
+                logger.info(f"[VectorDB검색] file_name 필터 적용: {file_name}")
             collection_plans.append({
                 "label": "document",
                 "name": doc_collection_name,
-                "where": None,
+                "where": doc_where,
                 "max_distance": _parse_positive_float(os.getenv("DOC_VECTOR_MAX_DISTANCE", "22.0"), 22.0),
             })
 
@@ -517,8 +523,8 @@ def search_farm_knowledge(
             from agri_ai_core.src.ai.rag.reranker import rerank_results
             deduped_results = rerank_results(query, deduped_results, top_k=max_results)
         except Exception as e:
-            logger.warning(f"[VectorDB검색] Reranker 임포트/호출 실패: {e} → 빈 결과 반환")
-            deduped_results = []
+            logger.warning(f"[VectorDB검색] Reranker 예외: {e} → 거리 기반 상위 {max_results}건 폴백")
+            deduped_results = deduped_results[:max_results]
 
         total_elapsed = time.time() - t_start
         skip_info = f" (거리필터 제외={skipped_count}건)" if skipped_count else ""
@@ -988,6 +994,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
             result = search_farm_knowledge(
                 query=tool_args.get("query"),
                 n_results=tool_args.get("n_results", 3),
+                file_name=tool_args.get("file_name"),
                 farm_id=tool_args.get("farm_id"),
                 house_id=tool_args.get("house_id"),
             )

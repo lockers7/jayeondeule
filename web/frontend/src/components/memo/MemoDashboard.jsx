@@ -59,7 +59,7 @@ export default function MemoDashboard({farmId, houseId}) {
         setPage(0);
         setHasMore(true);
         queryClient.invalidateQueries(["memos", farmId, houseId]);
-    }, [houseId])
+    }, [farmId, houseId, queryClient])
 
     // 무한 스크롤
     const lastMemoRef = useCallback(
@@ -110,7 +110,6 @@ export default function MemoDashboard({farmId, houseId}) {
         mutationFn: async (recdDttm) =>
             await deleteMemo(farmId, houseId, recdDttm),
         onSuccess: (_, memoId) => {
-            console.log(memoId);
             setMemos((prev) => prev.filter((m) => m.recdDttm !== memoId));
         },
     });

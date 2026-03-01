@@ -151,15 +151,17 @@ def store_document_with_chunks(document_content, document_metadata, chunk_size=1
                     "record_datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 })
 
-                # 실제 임베딩 생성
-                embedding = embed_text(chunk)
+                # 파일명을 청크 텍스트에 포함하여 임베딩 (파일명 기반 검색 지원)
+                chunk_text = f"[파일: {file_name}]\n{chunk}" if file_name else chunk
+
+                embedding = embed_text(chunk_text)
                 if not embedding:
                     logger.warning(f"[청크저장] 청크 {chunk_id} 임베딩 실패 → 스킵")
                     continue
 
                 batch_docs.append({
                     "doc_id": chunk_id,
-                    "text": chunk,
+                    "text": chunk_text,
                     "metadata": chunk_metadata,
                     "embedding": embedding,
                 })

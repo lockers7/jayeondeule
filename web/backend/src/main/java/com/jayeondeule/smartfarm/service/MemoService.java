@@ -18,7 +18,10 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -50,7 +53,15 @@ public class MemoService {
         Page<FarmHouseCrops> memoList = farmHouseCropsRepository.findAllByFarmIdAndHousId(farmId, houseId, pageable);
 
         Page<FarmHouseCropsDTO> result = memoList.map(memo -> mapper.convertValue(memo, FarmHouseCropsDTO.class));
-        result.forEach(item -> item.setAthrName(userRepository.findByUserId(item.getAthr()).getUserName()));
+
+        // N+1 방지: 작성자 ID를 배치 조회
+        Set<String> authorIds = result.getContent().stream()
+                .map(FarmHouseCropsDTO::getAthr)
+                .collect(Collectors.toSet());
+        Map<String, String> nameMap = userRepository.findByUserIdIn(authorIds).stream()
+                .collect(Collectors.toMap(user -> user.getUserId(), user -> user.getUserName()));
+        result.forEach(item -> item.setAthrName(nameMap.getOrDefault(item.getAthr(), item.getAthr())));
+
         return result;
     }
 

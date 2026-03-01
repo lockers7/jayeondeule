@@ -10,6 +10,7 @@
 # process_attached_files: 첨부 파일들을 처리하고 학습
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import os
+import threading
 import traceback
 from datetime import datetime
 
@@ -26,6 +27,37 @@ DOC_TYPE_LABELS = {
     "disease_info": "병해충 정보",
     "general": "일반 문서",
 }
+
+# 작물 키워드 사전 (문서 유형 자동 감지용)
+_CROP_KEYWORDS = {
+    # 버섯류
+    "상황버섯": "상황버섯", "상황": "상황버섯", "Phellinus": "상황버섯",
+    "표고버섯": "표고버섯", "표고": "표고버섯",
+    "느타리버섯": "느타리버섯", "느타리": "느타리버섯",
+    "영지버섯": "영지버섯", "영지": "영지버섯",
+    "새송이버섯": "새송이버섯", "새송이": "새송이버섯",
+    "팽이버섯": "팽이버섯", "팽이": "팽이버섯",
+    "송이버섯": "송이버섯",
+    "목이버섯": "목이버섯", "목이": "목이버섯",
+    "동충하초": "동충하초",
+    "노루궁뎅이": "노루궁뎅이버섯",
+    # 약용작물
+    "작약": "작약", "쇠무릎": "쇠무릎", "우슬": "쇠무릎",
+    "당귀": "당귀", "황기": "황기", "인삼": "인삼",
+    "천궁": "천궁", "감초": "감초", "구기자": "구기자",
+    "오미자": "오미자", "산수유": "산수유",
+    # 일반 농작물
+    "딸기": "딸기", "토마토": "토마토", "고추": "고추",
+    "오이": "오이", "상추": "상추", "파프리카": "파프리카",
+    "멜론": "멜론", "수박": "수박", "참외": "참외",
+}
+
+# 병해충 키워드 목록
+_DISEASE_KEYWORDS = [
+    "병해충", "병원균", "방제", "흰가루병", "탄저병", "잿빛곰팡이병",
+    "노균병", "역병", "세균성", "바이러스병", "해충", "진딧물",
+    "응애", "나방", "선충", "균핵병", "시들음병", "무름병",
+]
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -102,27 +134,116 @@ def format_rag_save_result(result, message_count=0):
 # Returns:
 # tuple: (document_type, crop_name)
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def detect_document_type(document_content):
+def detect_document_type(document_content, filename=None):
     document_type = 'general'
     crop_name = None
 
-    # 문서 내용 기반 유형 분류
-    first_1000 = document_content[:1000]
-    if "상황버섯" in first_1000:
+    # 검색 대상: 문서 앞부분 + 파일명
+    search_text = document_content[:2000]
+    if filename:
+        search_text = f"{filename} {search_text}"
+
+    # 1. 작물 키워드 매칭 (빈도 기반: 가장 많이 등장하는 작물)
+    crop_counts = {}
+    for keyword, name in _CROP_KEYWORDS.items():
+        count = search_text.count(keyword)
+        if count > 0:
+            crop_counts[name] = crop_counts.get(name, 0) + count
+
+    if crop_counts:
         document_type = 'crop_info'
-        crop_name = "상황버섯"
-    elif "작약" in first_1000:
+        crop_name = max(crop_counts, key=crop_counts.get)
+    elif "특용작물" in search_text or "약용작물" in search_text or "재배" in search_text:
         document_type = 'crop_info'
-        crop_name = "작약"
-    elif "쇠무릎" in first_1000:
-        document_type = 'crop_info'
-        crop_name = "쇠무릎"
-    elif "특용작물" in first_1000 or "약용작물" in first_1000:
-        document_type = 'crop_info'
-    elif any(term in document_content for term in ["병해충", "병원균", "방제", "흰가루병", "탄저병"]):
+    # 2. 병해충 키워드 매칭
+    elif any(term in search_text for term in _DISEASE_KEYWORDS):
         document_type = 'disease_info'
 
     return document_type, crop_name
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 작물/병해충 문서를 farm_knowledge_collection에 이중 저장
+# document_collection에 이미 저장된 청크를 farm_knowledge에도 저장하여
+# farm_id/house_id 기반 검색에서도 작물 관련 문서가 검색되도록 함
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def _store_crop_chunks_to_farm_knowledge(document_content, metadata, document_type, crop_name, filename, farm_id):
+    from agri_ai_core.src.ai.rag.embedder import embed_text
+    from agri_ai_core.src.ai.rag.chunker import chunk_document
+    from agri_ai_core.src.chroma.operations import upsert_documents_with_embedding
+
+    chunks = chunk_document(document_content, chunk_size=1000, chunk_overlap=200)
+    if not chunks:
+        return
+
+    doc_id_base = filename.replace(".", "_") if filename else "crop_unknown"
+    batch_docs = []
+
+    for i, chunk in enumerate(chunks):
+        chunk_id = f"fk_{doc_id_base}_{i}"
+        chunk_text = f"[파일: {filename}]\n{chunk}" if filename else chunk
+
+        embedding = embed_text(chunk_text)
+        if not embedding:
+            continue
+
+        chunk_metadata = {
+            "document_type": document_type,
+            "file_name": filename,
+            "data_kind": "crop_document_chunk",
+            "chunk_id": i,
+            "total_chunks": len(chunks),
+            "record_datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        if crop_name:
+            chunk_metadata["crop_name"] = crop_name
+        if farm_id is not None:
+            chunk_metadata["farm_id"] = str(farm_id)
+
+        batch_docs.append({
+            "doc_id": chunk_id,
+            "text": chunk_text,
+            "metadata": chunk_metadata,
+            "embedding": embedding,
+        })
+
+    if batch_docs:
+        result = upsert_documents_with_embedding(farm_knowledge_collection(), batch_docs)
+        stored = result.get("count", len(batch_docs)) if isinstance(result, dict) and result.get("success") else 0
+        logger.info(
+            f"[문서학습] farm_knowledge 이중 저장 완료: {filename} "
+            f"type={document_type} crop={crop_name or '-'} chunks={stored}건"
+        )
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# LLM enrichment 백그라운드 실행 (요약 + QA 쌍 생성)
+# 청크 저장 완료 후 비동기로 실행되어 API 응답을 블로킹하지 않음
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def _background_enrich(document_content, metadata, document_type, crop_name, filename):
+    try:
+        from agri_ai_core.src.ai.rag.document_enricher import enrich_document
+
+        enrich_result = enrich_document(
+            document_content=document_content,
+            metadata=metadata,
+            document_type=document_type,
+            crop_name=crop_name,
+        )
+
+        if enrich_result.get("success"):
+            logger.info(
+                f"[문서학습] LLM enrichment 백그라운드 완료: {filename} "
+                f"요약={'O' if enrich_result.get('summary_stored') else 'X'}, "
+                f"QA={enrich_result.get('qa_pairs_generated', 0)}쌍"
+            )
+        else:
+            logger.warning(
+                f"[문서학습] LLM enrichment 백그라운드 실패 (청크 저장은 유지): {filename} "
+                f"{enrich_result.get('error', '')}"
+            )
+    except Exception as e:
+        logger.warning(f"[문서학습] LLM enrichment 백그라운드 예외 (청크 저장은 유지): {filename} {e}")
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -178,8 +299,8 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None):
 
             logger.debug(f"문서 로드 완료: {filename}, 크기: {file_size/1024:.2f}KB")
 
-        # 문서 유형 감지
-        document_type, crop_name = detect_document_type(document_content)
+        # 문서 유형 감지 (파일명도 함께 분석)
+        document_type, crop_name = detect_document_type(document_content, filename)
 
         # 결과에 문서 유형과 작물명 추가
         result["document_type"] = document_type
@@ -212,37 +333,9 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None):
         if isinstance(chunks_result, dict) and not chunks_result.get("success", False):
             logger.warning(f"문서 청크 저장 실패: {chunks_result.get('error', '알 수 없는 오류')}")
 
-        # 2. LLM 문서 이해/요약 (요약 + QA 쌍 생성)
+        # 2. 구조화된 정보 추출 및 저장
+        #    embed_text 호출이 있으므로, enrichment 스레드 시작 전에 완료하여 Ollama GPU 경합 방지
         try:
-            from agri_ai_core.src.ai.rag.document_enricher import enrich_document
-
-            enrich_result = enrich_document(
-                document_content=document_content,
-                metadata=metadata,
-                document_type=document_type,
-                crop_name=crop_name,
-            )
-
-            if enrich_result.get("success"):
-                result["summary_stored"] = enrich_result.get("summary_stored", False)
-                result["qa_pairs_generated"] = enrich_result.get("qa_pairs_generated", 0)
-                logger.info(
-                    f"[문서학습] LLM enrichment 완료: "
-                    f"요약={'O' if enrich_result.get('summary_stored') else 'X'}, "
-                    f"QA={enrich_result.get('qa_pairs_generated', 0)}쌍"
-                )
-            else:
-                logger.warning(
-                    f"[문서학습] LLM enrichment 실패 (청크 저장은 유지): "
-                    f"{enrich_result.get('error', '')}"
-                )
-        except Exception as e:
-            logger.warning(f"[문서학습] LLM enrichment 예외 (청크 저장은 유지): {e}")
-
-        # 3. 구조화된 정보 추출 및 저장 (extract_structured_information이 필요하면 별도 import)
-        # 여기서는 기본 메타데이터만 저장
-        try:
-            # 안정적 ID: 파일명 기반 (동일 파일 재학습시 upsert)
             doc_id = f"doc_{filename.replace('.', '_')}"
             optimal_metadata = metadata.copy()
             optimal_metadata.update({
@@ -274,6 +367,17 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None):
             logger.debug(f"구조화된 정보 저장 완료: {doc_id}")
         except Exception as e:
             logger.warning(f"구조화된 정보 저장 중 오류: {e}")
+
+        # 3. 작물/병해충 문서 → farm_knowledge_collection에도 청크 이중 저장
+        if document_type in ('crop_info', 'disease_info'):
+            try:
+                _store_crop_chunks_to_farm_knowledge(
+                    document_content, metadata, document_type, crop_name, filename, farm_id
+                )
+            except Exception as e:
+                logger.warning(f"[문서학습] farm_knowledge 이중 저장 실패 (document 저장은 유지): {e}")
+
+        logger.info(f"[문서학습] 청크 + 구조화 데이터 저장 완료: {filename} (type={document_type})")
 
         # 성공 처리
         result["success"] = True

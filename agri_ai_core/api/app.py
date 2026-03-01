@@ -51,7 +51,7 @@ UPLOAD_DIR = os.getenv("UPLOAD_PATH", os.path.join(PROJECT_ROOT, "upload"))
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE_MB", "100")) * 1024 * 1024  # 기본 100MB
-ALLOWED_EXTENSIONS = {".txt", ".csv", ".pdf", ".xlsx", ".xls"}
+ALLOWED_EXTENSIONS = {".txt", ".csv", ".pdf", ".xlsx", ".xls", ".json", ".md"}
 
 
 async def verify_api_key(api_key: str = Security(api_key_header)):

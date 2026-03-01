@@ -75,8 +75,6 @@ public class FarmController {
         if (userInfo != null) {
             if (userInfo.getAuthLvel().equals(AuthLvel.ADMIN)) {
                 farmService.patchFarmByFarmId(farmId, modifiedInfo);
-            } else if (farmService.getFarmByUserId(userInfo.getUserId()).getFarmId() == farmId) {
-//                farmService.patchFarmByFarmId(farmId, modifiedInfo);
             }
         }
     }
@@ -88,8 +86,6 @@ public class FarmController {
         if (userInfo != null) {
             if (userInfo.getAuthLvel().equals(AuthLvel.ADMIN)) {
                 farmService.deleteFarmByFarmId(farmId);
-            } else if (farmService.getFarmByUserId(userInfo.getUserId()).getFarmId() == farmId) {
-//                farmService.deleteFarmByFarmId(farmId);
             }
         }
     }

@@ -23,8 +23,8 @@ from agri_ai_core.config import get_ollama_url, get_model_name
 logger = setup_logger(__name__)
 
 # Enrichment 설정
-ENRICHMENT_TIMEOUT_SUMMARY = int(os.getenv("ENRICHMENT_TIMEOUT_SUMMARY", "60"))
-ENRICHMENT_TIMEOUT_QA = int(os.getenv("ENRICHMENT_TIMEOUT_QA", "90"))
+ENRICHMENT_TIMEOUT_SUMMARY = int(os.getenv("ENRICHMENT_TIMEOUT_SUMMARY", "180"))
+ENRICHMENT_TIMEOUT_QA = int(os.getenv("ENRICHMENT_TIMEOUT_QA", "180"))
 ENRICHMENT_MAX_INPUT_CHARS = int(os.getenv("ENRICHMENT_MAX_INPUT_CHARS", "5000"))
 ENRICHMENT_MAX_QA_PAIRS = int(os.getenv("ENRICHMENT_MAX_QA_PAIRS", "5"))
 
