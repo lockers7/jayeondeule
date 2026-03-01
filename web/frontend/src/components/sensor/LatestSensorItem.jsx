@@ -23,6 +23,8 @@ const CROP_LEVEL_OPTIONS = [
     {value: 4, label: "휴지기"},
 ];
 
+const fmt = (v, unit) => (v != null ? Math.round(v * 100) / 100 + unit : "-");
+
 export default function LatestSensorItem({latestSensorData, house, setSelectedHouse, selectedHouse, farmId}) {
     const queryClient = useQueryClient();
     const trStyle = {};
@@ -103,12 +105,12 @@ export default function LatestSensorItem({latestSensorData, house, setSelectedHo
                     </Form.Select>
                     </div>
                 </td>
-                <td style={trStyle}>{Math.round(latestSensorData.indrTprtValu * 100) / 100 + "℃" ?? "-"}</td>
-                <td style={trStyle}>{Math.round(latestSensorData.oudrTprtValu * 100) / 100 + "℃" ?? "-"}</td>
-                <td style={trStyle}>{Math.round(latestSensorData.indrHmdtValu * 100) / 100 + "%" ?? "-"}</td>
-                <td style={trStyle}>{Math.round(latestSensorData.oudrHmdtValu * 100) / 100 + "%" ?? "-"}</td>
-                <td style={trStyle}>{Math.round(latestSensorData.co2Valu * 100) / 100 + "ppm" ?? "-"}</td>
-                <td style={trStyle}>{Math.round(latestSensorData.watrTprtValu * 100) / 100 + "℃" ?? "-"}</td>
+                <td style={trStyle}>{fmt(latestSensorData.indrTprtValu, "℃")}</td>
+                <td style={trStyle}>{fmt(latestSensorData.oudrTprtValu, "℃")}</td>
+                <td style={trStyle}>{fmt(latestSensorData.indrHmdtValu, "%")}</td>
+                <td style={trStyle}>{fmt(latestSensorData.oudrHmdtValu, "%")}</td>
+                <td style={trStyle}>{fmt(latestSensorData.co2Valu, "ppm")}</td>
+                <td style={trStyle}>{fmt(latestSensorData.watrTprtValu, "℃")}</td>
                 <td style={{...trStyle, fontSize: "12px"}}>
                     {formatDate(latestSensorData.recdDttm)}<br/>
                     {formatTime(latestSensorData.recdDttm)}

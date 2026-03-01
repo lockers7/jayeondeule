@@ -607,41 +607,6 @@ def _coerce_numeric_id(provided_id, default_id):
     return provided_id
 
 
-# 인사/잡담 판별 패턴 (폴백 제외 대상)
-_GREETING_RE = re.compile(
-    r"^(안녕|반가|잘\s*지내|하이|헬로|좋은\s*(아침|저녁|하루)|수고|고마워|감사|네|예|아니)",
-    re.IGNORECASE,
-)
-
-# 파일/데이터 관련 키워드 (폴백 트리거)
-_DATA_KEYWORDS = re.compile(
-    r"(파일|문서|학습|RAG|데이터|요약|내용|정리|csv|pdf|txt|json|md|"
-    r"검색|찾아|알려|설명|버섯|작물|재배|센서|온도|습도|"
-    r"농장|재배사|생육|수확|병해충|방제)",
-    re.IGNORECASE,
-)
-
-
-def _should_fallback_search(user_query: str) -> bool:
-    """첫 반복에서 도구 호출이 없을 때 폴백 검색을 실행할지 판단한다."""
-    stripped = (user_query or "").strip()
-    # 짧은 인사/잡담은 폴백 불필요
-    if len(stripped) < 5:
-        return False
-    if _GREETING_RE.search(stripped):
-        return False
-    # 긴 질문(500자 이상)은 사용자가 인라인 데이터를 직접 제공한 것으로 간주 → 폴백 스킵
-    # (예: 주식 데이터 분석, 표 데이터 해석 등 LLM이 자체 분석 가능)
-    if len(stripped) > 500:
-        return False
-    # 데이터/파일/농장 관련 키워드가 있으면 폴백 실행
-    if _DATA_KEYWORDS.search(stripped):
-        return True
-    # 파일명 패턴 감지 (확장자는 알파벳만 — 소수점 숫자 2528.92000 등 제외)
-    if re.search(r'\.[a-zA-Z]{2,5}\b', stripped):
-        return True
-    return False
-
 
 def _normalize_tool_arguments(
     tool_name: str,
@@ -2146,9 +2111,16 @@ def _build_structured_result(
     sources: list,
     tools_used: list,
 ) -> Dict[str, Any]:
+    # LLM이 실제 인용한 출처만 필터 (답변에 URL이 포함된 출처만 유지)
+    cited_sources = sources
+    if sources and response_text and ("http://" in response_text or "https://" in response_text):
+        cited_sources = [s for s in sources if s.get("url") and s["url"] in response_text]
+        if not cited_sources:
+            cited_sources = sources  # 안전장치: 매칭 실패 시 원본 유지
+
     return {
         "response": response_text,
-        "sources": sources if sources else [],
+        "sources": cited_sources if cited_sources else [],
         "tools_used": tools_used if tools_used else [],
         "response_type": _determine_response_type(tools_used),
     }
@@ -2187,6 +2159,52 @@ def _filter_greeting_turns(history: List[Dict[str, str]]) -> List[Dict[str, str]
     return filtered
 
 
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 농장 기본 정보 텍스트 생성
+# DB에서 농장/재배사 정보를 조회하여 system prompt에 삽입할 텍스트 생성
+# Returns: str | None: 농장 정보 텍스트
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def _build_farm_info_text() -> str:
+    try:
+        from agri_ai_core.src.postgresql.reader import read_farm_house_list
+        from agri_ai_core.src.postgresql.connection import db_session
+
+        # 농장 기본 정보 (주요 재배 작물, 주소 포함)
+        with db_session() as db:
+            farms = db.fetch_all(
+                "SELECT f.farm_id, f.farm_name, f.addr, "
+                "c.code_name AS main_crop, f.rmks "
+                "FROM FARM_M_INFO f "
+                "LEFT JOIN CODE_M_INFO c ON c.code_id = 'main_prdt' AND c.code_item = f.main_prdt "
+                "WHERE f.farm_id != 0",
+                as_dict=True,
+            )
+
+        if not farms:
+            return None
+
+        lines = []
+        for farm in farms:
+            lines.append(f"- 농장명: {farm.get('farm_name', '-')}")
+            if farm.get("main_crop"):
+                lines.append(f"- 주요 재배 작물: {farm['main_crop']}")
+            if farm.get("addr"):
+                lines.append(f"- 주소: {farm['addr']}")
+            if farm.get("rmks"):
+                lines.append(f"- 비고: {farm['rmks']}")
+
+        # 재배사 목록
+        house_list = read_farm_house_list()
+        if house_list:
+            house_names = [h.get("hous_name", "") for h in house_list]
+            lines.append(f"- 재배사: {', '.join(house_names)}")
+
+        return "\n".join(lines) if lines else None
+    except Exception as e:
+        logger.debug(f"[농장정보] 조회 실패: {e}")
+        return None
+
+
 def get_llm_response_with_tools(
     user_query: str,
     farm_name: str = None,
@@ -2216,7 +2234,8 @@ def get_llm_response_with_tools(
 
         # 농장명이 있으면 농장 시스템 프롬프트, 없으면 일반 프롬프트
         if farm_name:
-            system_prompt = get_system_prompt_with_tools(farm_name)
+            farm_info = _build_farm_info_text()
+            system_prompt = get_system_prompt_with_tools(farm_name, farm_info)
         else:
             system_prompt = (
                 "당신은 다양한 분야의 지식을 갖춘 AI 어시스턴트입니다.\n\n"
@@ -2332,29 +2351,6 @@ def get_llm_response_with_tools(
             tool_calls = _extract_tool_calls(assistant_message)
             iter_elapsed = time.time() - t_iter
             if not tool_calls:
-                # ── Tool Use 폴백: 첫 반복에서 도구 미호출 + 데이터 관련 질문 → 자동 search_farm_knowledge ──
-                if iteration == 0 and _should_fallback_search(user_query):
-                    logger.info("[Tool Use 폴백] LLM이 도구를 호출하지 않음 → search_farm_knowledge 자동 실행")
-                    fallback_args = _normalize_tool_arguments(
-                        "search_farm_knowledge",
-                        {"query": user_query},
-                        default_tool_args=default_tool_args,
-                    )
-                    t_fb = time.time()
-                    fb_result = execute_tool("search_farm_knowledge", fallback_args)
-                    fb_elapsed = time.time() - t_fb
-                    logger.info(f"[Tool Use 폴백] search_farm_knowledge 완료 ({fb_elapsed:.1f}s) 결과길이={len(fb_result or '')}자")
-
-                    if "search_farm_knowledge" not in _tools_used:
-                        _tools_used.append("search_farm_knowledge")
-
-                    # 폴백 검색 결과를 메시지에 주입하고 LLM 재호출
-                    messages.append({
-                        "role": "tool",
-                        "content": str(fb_result or "검색 결과 없음"),
-                    })
-                    continue  # 다음 iteration에서 LLM이 검색 결과를 보고 답변 생성
-
                 final_answer = assistant_message.get("content", "")
                 _tooluse_total_s = time.time() - _t_tooluse_start
                 logger.info(

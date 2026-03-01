@@ -718,6 +718,42 @@ def _auto_fetch_urls(results: list, max_fetch: int = 3) -> None:
 
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 웹 검색 결과 관련성 필터
+# 쿼리 키워드와 무관한 검색 결과를 제거합니다.
+# 검색 엔진이 복합어(예: "상황버섯")를 분리("상황"+"버섯")하여 무관한 결과를 반환하는 문제를 방지합니다.
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def _filter_relevant_results(query: str, results: list) -> list:
+    if not query or not results:
+        return results
+
+    # 쿼리에서 2글자 이상 키워드 추출
+    keywords = [w for w in query.split() if len(w) >= 2]
+    if not keywords:
+        return results
+
+    filtered = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        title = (item.get("title") or "").lower()
+        desc = (item.get("description") or item.get("snippet") or "").lower()
+        text = f"{title} {desc}"
+
+        # 키워드 중 최소 1개 이상이 제목+설명에 포함되어야 함
+        matched = sum(1 for kw in keywords if kw.lower() in text)
+        if matched >= 1:
+            filtered.append(item)
+        else:
+            logger.debug(f"[웹검색] 관련성 필터 제거: {item.get('title', '')[:50]}")
+
+    # 필터 후 결과가 너무 적으면 원본 반환 (안전장치)
+    if len(filtered) < 2 and len(results) >= 2:
+        return results
+
+    return filtered
+
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # MCP를 통한 웹 검색 + 상위 URL 본문 자동 읽기
 # Args: query: 검색 키워드
 # Returns: dict: 검색 결과 (page_content 포함)
@@ -777,6 +813,10 @@ def search_web(
             logger.warning(f"[웹검색] MCP 스크래핑 fallback 실패: {e}")
             if not result:
                 result = {"success": False, "error": str(e), "results": []}
+
+    # 검색 결과 관련성 필터: 쿼리 키워드와 무관한 결과 제거
+    if isinstance(result, dict) and result.get("results"):
+        result["results"] = _filter_relevant_results(query, result["results"])
 
     search_elapsed = time.time() - t_start
     result_count = len(result.get("results", [])) if isinstance(result, dict) else 0

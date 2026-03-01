@@ -215,6 +215,96 @@ app.add_middleware(
 )
 
 
+_KR_REGION = {
+    "Seoul": "서울특별시", "Busan": "부산광역시", "Daegu": "대구광역시",
+    "Incheon": "인천광역시", "Gwangju": "광주광역시", "Daejeon": "대전광역시",
+    "Ulsan": "울산광역시", "Sejong": "세종특별자치시",
+    "Gyeonggi": "경기도", "Gyeonggi-do": "경기도",
+    "Gangwon": "강원도", "Gangwon-do": "강원도",
+    "North Chungcheong": "충청북도", "Chungcheongbuk-do": "충청북도",
+    "South Chungcheong": "충청남도", "Chungcheongnam-do": "충청남도",
+    "North Jeolla": "전라북도", "Jeollabuk-do": "전라북도",
+    "South Jeolla": "전라남도", "Jeollanam-do": "전라남도",
+    "North Gyeongsang": "경상북도", "Gyeongsangbuk-do": "경상북도",
+    "South Gyeongsang": "경상남도", "Gyeongsangnam-do": "경상남도",
+    "Jeju": "제주특별자치도", "Jeju-do": "제주특별자치도",
+}
+_KR_CITY = {
+    # 서울 자치구
+    "Gwanak-gu": "관악구", "Dongjak-gu": "동작구", "Gangnam-gu": "강남구",
+    "Gangdong-gu": "강동구", "Gangbuk-gu": "강북구", "Gangseo-gu": "강서구",
+    "Gwangjin-gu": "광진구", "Guro-gu": "구로구", "Geumcheon-gu": "금천구",
+    "Nowon-gu": "노원구", "Dobong-gu": "도봉구", "Dongdaemun-gu": "동대문구",
+    "Mapo-gu": "마포구", "Seodaemun-gu": "서대문구", "Seocho-gu": "서초구",
+    "Seongdong-gu": "성동구", "Seongbuk-gu": "성북구", "Songpa-gu": "송파구",
+    "Yangcheon-gu": "양천구", "Yeongdeungpo-gu": "영등포구", "Yongsan-gu": "용산구",
+    "Eunpyeong-gu": "은평구", "Jongno-gu": "종로구", "Jung-gu": "중구",
+    "Jungnang-gu": "중랑구",
+    # 광역시 자치구 (부산 등)
+    "Haeundae-gu": "해운대구", "Busanjin-gu": "부산진구", "Nam-gu": "남구",
+    "Buk-gu": "북구", "Seo-gu": "서구", "Dong-gu": "동구",
+    "Yeonsu-gu": "연수구", "Namdong-gu": "남동구", "Bupyeong-gu": "부평구",
+    "Dalseo-gu": "달서구", "Suseong-gu": "수성구",
+    # 주요 시
+    "Suwon-si": "수원시", "Seongnam-si": "성남시", "Goyang-si": "고양시",
+    "Yongin-si": "용인시", "Bucheon-si": "부천시", "Ansan-si": "안산시",
+    "Anyang-si": "안양시", "Namyangju-si": "남양주시", "Hwaseong-si": "화성시",
+    "Pyeongtaek-si": "평택시", "Uijeongbu-si": "의정부시", "Siheung-si": "시흥시",
+    "Paju-si": "파주시", "Gimpo-si": "김포시", "Gwangmyeong-si": "광명시",
+    "Gwangju-si": "광주시", "Hanam-si": "하남시", "Gunpo-si": "군포시",
+    "Yangju-si": "양주시", "Osan-si": "오산시", "Icheon-si": "이천시",
+    "Guri-si": "구리시", "Anseong-si": "안성시", "Pocheon-si": "포천시",
+    "Uiwang-si": "의왕시", "Yeoju-si": "여주시", "Dongducheon-si": "동두천시",
+    "Gapyeong-gun": "가평군", "Yangpyeong-gun": "양평군", "Yeoncheon-gun": "연천군",
+    "Cheongju-si": "청주시", "Chungju-si": "충주시", "Cheonan-si": "천안시",
+    "Asan-si": "아산시", "Gongju-si": "공주시", "Sejong-si": "세종시",
+    "Jeonju-si": "전주시", "Iksan-si": "익산시", "Gunsan-si": "군산시",
+    "Mokpo-si": "목포시", "Yeosu-si": "여수시", "Suncheon-si": "순천시",
+    "Pohang-si": "포항시", "Gumi-si": "구미시", "Gyeongju-si": "경주시",
+    "Changwon-si": "창원시", "Gimhae-si": "김해시", "Jinju-si": "진주시",
+    "Yangsan-si": "양산시", "Geoje-si": "거제시",
+    "Chuncheon-si": "춘천시", "Wonju-si": "원주시", "Gangneung-si": "강릉시",
+    "Jeju-si": "제주시", "Seogwipo-si": "서귀포시",
+}
+
+
+def _is_private_ip(ip: str) -> bool:
+    import ipaddress
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return True
+
+
+def _to_korean(region_en: str, city_en: str) -> tuple:
+    region_kr = _KR_REGION.get(region_en, region_en)
+    city_kr = _KR_CITY.get(city_en, city_en)
+    return region_kr, city_kr
+
+
+@app.get("/geo")
+async def geo_location(request: Request):
+    """클라이언트 IP 기반 지역 정보 반환 (한글, 최소 구/시/군 단위)"""
+    client_ip = (
+        request.headers.get("X-Real-IP")
+        or (request.headers.get("X-Forwarded-For", "").split(",")[0].strip())
+        or request.client.host
+    )
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=5) as http:
+            # 사설 IP면 IP 없이 호출 → 서버 공인IP 기반 조회
+            url = "https://ipwho.is/" if _is_private_ip(client_ip) else f"https://ipwho.is/{client_ip}"
+            resp = await http.get(url)
+            data = resp.json()
+            if data.get("success", False):
+                region_kr, city_kr = _to_korean(data.get("region", ""), data.get("city", ""))
+                return {"region": region_kr, "city": city_kr, "ip": data.get("ip", client_ip)}
+    except Exception:
+        pass
+    return {"region": "", "city": "", "ip": client_ip}
+
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
