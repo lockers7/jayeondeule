@@ -23,7 +23,7 @@ export default function ChatSidebar({
                     setSelectedFarm(list[0]);
                 }
             })
-            .catch(console.error);
+            .catch(err => { console.error(err); });
     }, []);
 
     // 재배사 목록 로드 (농장 선택 변경 시)
@@ -37,7 +37,7 @@ export default function ChatSidebar({
                     setSelectedHouse(list[0]);
                 }
             })
-            .catch(console.error);
+            .catch(err => { console.error(err); });
     }, [selectedFarm?.farmId]);
 
     const handleFarmChange = (e) => {

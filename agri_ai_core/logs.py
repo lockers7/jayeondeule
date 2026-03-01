@@ -64,7 +64,6 @@ MAX_PLAIN_LOG_LINES = 50000
 # 날짜가 바뀌면 새로운 로그 파일을 자동으로 생성하는 핸들러
 # filename_pattern: 로그 파일 이름 패턴 (예: 'llm_%Y_%m_%d.log')
 # ============================================================
-
 class DailyRotatingFileHandler(logging.FileHandler):
     # ------------------------------------------------------------
     # filename_pattern: 로그 파일 이름 패턴 (strftime 형식)
@@ -109,7 +108,6 @@ class DailyRotatingFileHandler(logging.FileHandler):
 # 프로젝트 내 모든 파일별 로그 생성
 # 로거 초기화 공통 로직.
 # ============================================================
-
 def _setup_logger_impl(cache_key, logger_name, file_pattern, error_label):
     log_level_str = (os.getenv("LOG_LEVEL") or settings.logging.level or "INFO").strip().upper()
     log_level = getattr(logging, log_level_str, logging.INFO)
@@ -168,8 +166,10 @@ def setup_web_logger(name=None):
     return _setup_logger_impl(cache_key, cache_key, "web_%Y-%m-%d.log", "웹 로그")
 
 
+# ----------------------------------------------------------------
+# API 전용 로거 (api.log에 기록, Uvicorn 로그와 동일 파일) 
+# ----------------------------------------------------------------
 def setup_api_logger(name=None):
-    """API 전용 로거 (api.log에 기록, Uvicorn 로그와 동일 파일)"""
     cache_key = f"_api_{name}"
     if cache_key in _loggers_initialized:
         logger = logging.getLogger(cache_key)
@@ -225,7 +225,6 @@ def setup_api_logger(name=None):
 # 로그 정리 함수 (보관 기간: 100일)
 # 임시 파일에 쓴 후 원본 교체 (안전한 파일 쓰기).
 # ============================================================
-
 def _write_temp_and_replace(filepath, lines):
     dir_name = os.path.dirname(filepath)
     filename = os.path.basename(filepath)

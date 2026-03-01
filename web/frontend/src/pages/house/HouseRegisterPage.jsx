@@ -20,7 +20,6 @@ export default function HouseRegisterPage() {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        console.log(form);
         await registerHouse(form).then(() => navigate(`/farm/${form.farmId}/monitor`));
     };
 

@@ -20,18 +20,22 @@ def get_available_tools() -> List[Dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "search_farm_knowledge",
-                "description": "스마트팜 벡터 데이터베이스(ChromaDB)에서 관련 정보를 검색합니다. 문서 지식 + 농장 시계열 데이터를 함께 조회합니다.",
+                "description": "스마트팜 벡터 데이터베이스(ChromaDB)에서 관련 정보를 검색합니다. 학습(RAG)된 문서 지식, 파일 내용, 농장 시계열 데이터를 함께 조회합니다. 파일명으로도 검색 가능합니다.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "query": {
                             "type": "string",
-                            "description": "검색할 질문 또는 키워드"
+                            "description": "검색할 질문 또는 키워드. 파일 검색 시 파일명을 포함하세요."
                         },
                         "n_results": {
                             "type": "integer",
                             "description": "가져올 결과 개수 (기본값: 3)",
                             "default": 3
+                        },
+                        "file_name": {
+                            "type": "string",
+                            "description": "검색할 파일명 (선택사항, 지정 시 해당 파일의 청크만 검색)"
                         },
                         "farm_id": {
                             "type": "string",
@@ -140,10 +144,12 @@ def get_system_prompt_with_tools(farm_name: str = None) -> str:
 
 **도구 사용 규칙:**
 1. 농장/센서/릴레이/생육 질문: `get_farm_realtime_data`+`search_farm_knowledge` 반드시 모두 사용합니다. 수치/상태 추측은 금지합니다.
-2. 사실·조사·검색 요청(주소/가격/찾아줘/알아봐줘/설명해줘): `search_farm_knowledge` → 부족하면 `search_web` 사용합니다. 도구 없이 추측 답변은 절대 금지합니다.
-3. 일반 정보(날씨/뉴스/환율/맛집/최신): `search_web` 반드시 사용합니다.
-4. 인사/감정/의견: 도구 없이 응답 가능합니다.
-5. 애매하면 도구를 더 사용합니다. 확인 안 된 정보는 "확인이 필요합니다"로 답변합니다.
+2. 파일/문서/학습/RAG/데이터/요약/내용/정리 관련 질문: `search_farm_knowledge` 반드시 사용합니다. 파일명이 포함된 질문은 해당 파일명을 query와 file_name 파라미터에 넣어 반드시 검색합니다. "없다/모른다" 답변 전에 반드시 도구로 검색해야 합니다.
+3. 사실·조사·검색 요청(주소/가격/찾아줘/알아봐줘/설명해줘/알려줘): `search_farm_knowledge` → 부족하면 `search_web` 사용합니다. 도구 없이 추측 답변은 절대 금지합니다.
+4. 일반 정보(날씨/뉴스/환율/맛집/최신): `search_web` 반드시 사용합니다.
+5. 인사/감정/의견: 도구 없이 응답 가능합니다.
+6. 애매하면 도구를 더 사용합니다. 확인 안 된 정보는 "확인이 필요합니다"로 답변합니다.
+7. **절대 금지**: 도구를 호출하지 않고 "정보가 없습니다/확인되지 않았습니다"라고 답변하는 것은 금지합니다. 반드시 먼저 도구로 검색한 후 답변하세요.
 
 **웹 검색 절차:**
 - `search_web` 결과의 `page_content` 우선 활용, 부족하면 `fetch_url_content`로 본문을 읽습니다.

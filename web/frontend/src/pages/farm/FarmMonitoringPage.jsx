@@ -20,7 +20,6 @@ import "./FarmMonitoringPage.css";
 import MemoDashboard from "../../components/memo/MemoDashboard.jsx";
 import { getUser } from "../../utils/userUtil.js";
 import SensorSettingDashboard from "../../components/sensor/SensorSettingDashboard.jsx";
-import LatestSensorItem from "../../components/sensor/LatestSensorItem.jsx";
 import LatestSensorSelected from "../../components/sensor/LatestSensorSelected.jsx";
 
 export default function FarmMonitoringPage() {
@@ -91,7 +90,7 @@ export default function FarmMonitoringPage() {
         if (!farmId) {
             getUser().then((res) => navigate(`/farm/${res.data.farmId}/monitor`));
         }
-    }, [])
+    }, [farmId, navigate])
 
     // selectedHouse 초기값
     useEffect(() => {

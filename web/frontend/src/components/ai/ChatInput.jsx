@@ -34,11 +34,6 @@ export default function ChatInput({value, onChange, onSend, isLoading, farmName}
                     style={{resize: "none", flex: 1, border: "2px solid #28a745"}}
                 />
                 <div style={{display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", gap: "4px"}}>
-                    {/* 자전거 애니메이션 숨김
-                    <div style={{height: "32px", display: "flex", alignItems: "flex-end", justifyContent: "center"}}>
-                        {isLoading && <span className="chat-running-bicycle">🚴</span>}
-                    </div>
-                    */}
                     <Button
                         variant="success"
                         onClick={onSend}

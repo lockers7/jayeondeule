@@ -8,7 +8,7 @@ import java.time.LocalDateTime;
 
 @Getter
 @Entity
-@IdClass(RelayRecording.class)
+@IdClass(RelayRecordingId.class)
 @Table(name = "RELAY_L_RECORDING")
 public class RelayRecording {
     //RELAY_L_RECORDING 테이블 엔티티 (릴레이 동작상태, 저장일자 등)

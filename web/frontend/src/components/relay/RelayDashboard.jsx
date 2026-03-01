@@ -48,7 +48,7 @@ export default function RelayDashboard({farmId, house, setSelectedHouse}) {
                 {label: "히터밸브(15)", num: 15},
             ]);
         }
-    }, [house])
+    }, [farmId, house])
 
     // relay 상태 조회 (polling)
     const {data: relayStatus = {}, isLoading: isRelayLoading, error: relayError} = useQuery({

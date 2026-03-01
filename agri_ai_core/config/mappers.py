@@ -5,34 +5,6 @@
 # get_relay_mapping: 릴레이 전체 매핑 반환
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-# 센서 매핑 (한글 -> 영문 키)
-SENSOR_MAPPING = {
-    "내부온도": "indoor_temperature_value",
-    "내부습도": "indoor_humidity_value",
-    "외부온도": "outdoor_temperature_value",
-    "외부습도": "outdoor_humidity_value",
-    "co2": "co2_concentration_value",
-    "수온": "water_temperature_value",
-    "광량": "light_level_value",
-    "수위": "water_level_value"
-}
-
-# 릴레이 매핑 (한글 -> 영문 키)
-RELAY_MAPPING = {
-    "물가열기": "water_heater_flag",
-    "분사펌프": "fog_occurs_flag",
-    "배수밸브": "drainage_motor_flag",
-    "흡기팬": "intake_fan_flag",
-    "배기팬": "exhaust_fan_flag",
-    "조명토글": "lighting_flag",
-    "관수밸브": "irrigation_flag",
-    "열풍기": "indoor_heater_flag",
-    "순환댐퍼": "air_circulation_valve_flag",
-    "흡기댐퍼": "air_intake_valve_flag",
-    "배기댐퍼": "air_exhaust_valve_flag",
-    "열풍댐퍼": "indoor_heater_valve_flag"
-}
-
 # 센서 필드 매핑 - 키: 센서 필드명, 값: (한글명, 단위)
 SENSOR_FIELD_MAPPING = {
     "indoor_temperature_value": ("내부온도", "℃"),

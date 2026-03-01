@@ -1,11 +1,10 @@
-import React, {useEffect, useState} from "react";
+import React from "react";
 import {Navbar, Container, Nav} from "react-bootstrap";
 import {Link} from "react-router-dom";
 import AdminNavLink from "./navLinks/AdminNavLink.jsx";
 import CommonNavLink from "./navLinks/CommonNavLink.jsx";
 import GuestNavLink from "./navLinks/GuestNavLink.jsx";
 import {useSelector} from "react-redux";
-import {getUser} from "../../utils/userUtil.js";
 
 export default function Header() {
     const auth = useSelector(state => state.auth);

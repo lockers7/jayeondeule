@@ -29,7 +29,7 @@ export default function ChatMessageList({messages}) {
             ) : (
                 messages.map((msg, index) => (
                     <ChatBubble
-                        key={index}
+                        key={msg.timestamp || `msg-${index}`}
                         role={msg.role}
                         content={msg.content}
                         sources={msg.sources}

@@ -4,7 +4,6 @@ import com.jayeondeule.smartfarm.enums.security.WhiteList;
 import com.jayeondeule.smartfarm.filter.JwtAuthFilter;
 import com.jayeondeule.smartfarm.util.JwtUtil;
 import com.jayeondeule.smartfarm.util.SwaggerBeanUtil;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -25,7 +24,6 @@ import java.util.List;
 
 @Configuration
 public class SecurityConfig {
-    @Autowired
     private final SwaggerBeanUtil swaggerBeanUtility;
     private final JwtUtil jwtUtil;
 

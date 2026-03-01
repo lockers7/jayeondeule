@@ -115,10 +115,10 @@ FarmUnits/
 | 8 | relay_8st_flag | 관수 | 7 |
 | 9 | relay_9st_flag | 실내히터 | 6 |
 | 10 | relay_10st_flag | 공기순환밸브 | 12 |
-| 11 | relay_11st_flag | 공기흡입밸브 | 20 |
+| 11 | relay_11st_flag | 공기흡기밸브 | 20 |
 | 12 | relay_12st_flag | 미사용 | 16 |
 | 13 | relay_13st_flag | 미사용 | 19 |
-| 14 | relay_14st_flag | 공기배출밸브 | 13 |
+| 14 | relay_14st_flag | 공기배기밸브 | 13 |
 | 15 | relay_15st_flag | 실내히터밸브 | 26 |
 | 16 | relay_16st_flag | 미사용 | 21 |
 
