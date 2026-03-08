@@ -180,6 +180,27 @@ def _pkg_ollama_list_models() -> List[str]:
     return _extract_model_names(models or [])
 
 
+def _build_chat_payload(
+    model: str,
+    messages: List[Dict[str, Any]],
+    options: Optional[Dict[str, Any]] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    keep_alive: Optional[str] = None,
+    think: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Ollama chat API용 공통 payload 빌드."""
+    payload: Dict[str, Any] = {"model": model, "messages": messages, "stream": False}
+    if options:
+        payload["options"] = options
+    if tools:
+        payload["tools"] = tools
+    if keep_alive:
+        payload["keep_alive"] = keep_alive
+    if think is not None:
+        payload["think"] = think
+    return payload
+
+
 def _pkg_ollama_chat(
     model: str,
     messages: List[Dict[str, Any]],
@@ -190,22 +211,7 @@ def _pkg_ollama_chat(
 ) -> Any:
     if not _use_ollama_package():
         raise RuntimeError("ollama package unavailable")
-
-    payload: Dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "stream": False,
-    }
-    if options:
-        payload["options"] = options
-    if tools:
-        payload["tools"] = tools
-    if keep_alive:
-        payload["keep_alive"] = keep_alive
-    if think is not None:
-        payload["think"] = think
-
-    return ollama.chat(**payload)
+    return ollama.chat(**_build_chat_payload(model, messages, options, tools, keep_alive, think))
 
 
 
@@ -276,20 +282,7 @@ def _direct_ollama_chat(
     timeout: int = 600,
     think: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "stream": False,
-    }
-    if options:
-        payload["options"] = options
-    if tools:
-        payload["tools"] = tools
-    if keep_alive:
-        payload["keep_alive"] = keep_alive
-    if think is not None:
-        payload["think"] = think
-
+    payload = _build_chat_payload(model, messages, options, tools, keep_alive, think)
     return _direct_ollama_json(path="/api/chat", method="POST", json_body=payload, timeout=timeout)
 
 
@@ -319,20 +312,7 @@ def _mcp_ollama_chat(
 ) -> Dict[str, Any]:
     from agri_ai_core.src.ai.mcp_client import mcp_fetch_json
 
-    payload: Dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "stream": False,
-    }
-    if options:
-        payload["options"] = options
-    if tools:
-        payload["tools"] = tools
-    if keep_alive:
-        payload["keep_alive"] = keep_alive
-    if think is not None:
-        payload["think"] = think
-
+    payload = _build_chat_payload(model, messages, options, tools, keep_alive, think)
     result = mcp_fetch_json(
         url=f"{get_ollama_url()}/api/chat",
         method="POST",
@@ -366,17 +346,10 @@ def _serialize_for_log(obj):
 
 def _log_llm_request_json(model, messages, options, tools, keep_alive):
     try:
-        payload = {
-            "model": model,
-            "messages": _serialize_for_log(messages),
-            "stream": False,
-        }
-        if options:
-            payload["options"] = _serialize_for_log(options)
-        if tools:
-            payload["tools"] = _serialize_for_log(tools)
-        if keep_alive:
-            payload["keep_alive"] = keep_alive
+        payload = _build_chat_payload(model, _serialize_for_log(messages),
+                                       _serialize_for_log(options) if options else None,
+                                       _serialize_for_log(tools) if tools else None,
+                                       keep_alive)
         logger.info(
             "[LLM 호출 JSON 요청]\n%s",
             json.dumps(payload, ensure_ascii=False, indent=2, default=str),
@@ -802,43 +775,18 @@ _THINKING_PATTERNS = [
 
 _KOREAN_CHAR_RE = re.compile(r"[가-힣]")
 
-_REASONING_HINT_KEYWORDS = [
-    "first,",
-    "second,",
-    "third,",
-    "hmm,",
-    "wait,",
-    "that means",
-    "so the main points",
-    "putting it all together",
-    "here's the answer",
-    "in a clear, concise",
-    "in korean sentence",
-    "relay statuses",
-    "advise checking",
-    "the system expects",
-    "can't be converted to json",
-    "json serializable",
-    "maybe it's",
-    "might be a problem",
-]
-
 _DEFAULT_REASONING_TERMS = [
-    "first,",
-    "second,",
-    "third,",
-    "hmm,",
-    "wait,",
-    "so,",
-    "so the main points",
-    "putting it all together",
-    "in a clear, concise",
-    "here's the answer",
-    "let me think",
-    "based on",
-    "relay statuses",
-    "sensor data",
+    "first,", "second,", "third,", "hmm,", "wait,", "so,",
+    "that means", "so the main points", "putting it all together",
+    "here's the answer", "in a clear, concise", "in korean sentence",
+    "let me think", "based on",
+    "relay statuses", "sensor data",
+    "advise checking", "the system expects",
+    "can't be converted to json", "json serializable",
+    "maybe it's", "might be a problem",
 ]
+# 하위 호환 별칭
+_REASONING_HINT_KEYWORDS = _DEFAULT_REASONING_TERMS
 
 _MEASURE_TOKEN_PATTERN = re.compile(
     r"[-+]?\d+(?:\.\d+)?\s*(?:°c|°f|%|ppm|m|lux|루멘|도|℃|℉)?",
@@ -1779,7 +1727,7 @@ def _enforce_honorific_response(
     except Exception as err:
         logger.warning(f"[존댓말교정] 교정 실패: {err}")
 
-    candidate = clean_llm_response(filter_llm_response(candidate, filter_type="general"))
+    candidate = clean_llm_response(candidate)
     candidate = _strip_reasoning_paragraphs(candidate)
     candidate = _strip_non_korean_reasoning_for_korean_query(
         candidate,
@@ -1809,20 +1757,12 @@ def _finalize_user_facing_answer(
 
     stage_snapshots.append(_snapshot_answer_stage("raw", raw_answer))
 
-    _t_filter = time.time()
-    filtered = filter_llm_response(raw_answer, filter_type="general")
-    stage_snapshots.append(_snapshot_answer_stage("after_filter", filtered))
-    _filter_ms = (time.time() - _t_filter) * 1000
-    if filtered != raw_answer:
-        logger.info(f"[필터단계:filter] {len(raw_answer)}자→{len(filtered)}자")
-        logger.info(f"[필터단계:filter내용]\n{filtered}")
-
     _t_clean = time.time()
-    cleaned = clean_llm_response(filtered)
+    cleaned = clean_llm_response(raw_answer)
     stage_snapshots.append(_snapshot_answer_stage("after_clean", cleaned))
     _clean_ms = (time.time() - _t_clean) * 1000
-    if cleaned != filtered:
-        logger.info(f"[필터단계:clean] {len(filtered)}자→{len(cleaned)}자")
+    if cleaned != raw_answer:
+        logger.info(f"[필터단계:clean] {len(raw_answer)}자→{len(cleaned)}자")
         logger.info(f"[필터단계:clean내용]\n{cleaned}")
 
     _t_strip = time.time()
@@ -1896,7 +1836,7 @@ def _finalize_user_facing_answer(
         stage_snapshots.append(_snapshot_answer_stage(f"rewrite_raw_{attempt + 1}", rewritten))
 
         before_rewrite_clean = rewritten
-        rewritten = clean_llm_response(filter_llm_response(rewritten, filter_type="general"))
+        rewritten = clean_llm_response(rewritten)
         rewritten = _strip_reasoning_paragraphs(rewritten, dropped_details_out=dropped_details)
         rewritten = _strip_non_korean_reasoning_for_korean_query(
             rewritten,
@@ -1974,137 +1914,46 @@ def _finalize_user_facing_answer(
 # Returns:
 #     str: 필터링된 텍스트
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def filter_llm_response(text, filter_type="general", query_type=None):
-    if not text or len(text.strip()) == 0:
-        return text
-
-    original_length = len(text)
-    filtered_text = text
-
-    # 1. Think 태그 제거 (공통)
-    try:
-        filtered_text = re.sub(r"<think>.*?</think>\s*", "", filtered_text, flags=re.DOTALL | re.IGNORECASE)
-        filtered_text = re.sub(r"<thinking>.*?</thinking>\s*", "", filtered_text, flags=re.DOTALL | re.IGNORECASE)
-        filtered_text = re.sub(r"<think>.*", "", filtered_text, flags=re.DOTALL | re.IGNORECASE)
-        filtered_text = re.sub(r"<thinking>.*", "", filtered_text, flags=re.DOTALL | re.IGNORECASE)
-    except Exception as e:
-        logger.warning(f"think 태그 제거 중 오류: {e}")
-
-    # 2. 일반 필터링 (기본 타입에만 적용)
-    if filter_type == "general":
-        # 생각 과정 라인 제거 (공통 패턴 사용)
-        lines = filtered_text.split('\n')
-        cleaned_lines = []
-        removed_count = 0
-
-        for line in lines:
-            line_stripped = line.strip()
-            has_korean = _line_has_korean(line)
-
-            # 한글이 포함되어 있으면 생각 과정이 아님
-            if has_korean:
-                cleaned_lines.append(line)
-                continue
-
-            # 생각 과정 패턴 체크 (정규식 사용)
-            is_thinking = False
-            for pattern in _THINKING_PATTERNS:
-                if re.match(pattern, line_stripped, re.IGNORECASE):
-                    is_thinking = True
-                    removed_count += 1
-                    if removed_count <= 3:  # 처음 3개만 로깅
-                        logger.debug(f"[필터] 생각 과정 제거: {line_stripped[:80]}...")
-                    break
-
-            if not is_thinking:
-                cleaned_lines.append(line)
-
-        if removed_count > 0:
-            logger.debug(f"[필터] 생각 과정 라인 {removed_count}개 제거")
-
-        filtered_text = '\n'.join(cleaned_lines)
-
-        # 마크다운 헤더 제거
-        markdown_headers_to_remove = [
-            r"^(### )?Final Answer:?\s*",
-            r"^(### )?Final Output:?\s*",
-            r"^(### )?Response:?\s*",
-            r"^(### )?Answer:?\s*",
-            r"^(### )?결론:?\s*"
-        ]
-        for pattern in markdown_headers_to_remove:
-            try:
-                filtered_text = re.sub(pattern, "", filtered_text, flags=re.MULTILINE | re.IGNORECASE)
-            except Exception as e:
-                logger.warning(f"헤더 제거 중 오류: {e}")
-
-        # 코드 블록 마커 제거
-        try:
-            filtered_text = re.sub(r"^```[a-zA-Z]*\s*$", "", filtered_text, flags=re.MULTILINE)
-            filtered_text = re.sub(r"^```\s*$", "", filtered_text, flags=re.MULTILINE)
-        except Exception as e:
-            logger.warning(f"코드 블럭 마커 제거 중 오류: {e}")
-
-    # 3. 기본 정리 (공통) - 빈 줄 정리: 3개 이상 연속 줄바꿈 → 1개 빈 줄로 (1개 빈 줄은 유지)
-    filtered_text = re.sub(r'(\n\s*){3,}', '\n\n', filtered_text)
-    filtered_text = filtered_text.strip()
-    final_length = len(filtered_text)
-
-    # 4. 일반 필터링 후 과도한 제거 검사
-    if filter_type == "general" and original_length > 0:
-        removal_ratio = (original_length - final_length) / original_length
-        if removal_ratio > 0.9:
-            logger.warning(f"필터링으로 인해 응답의 {removal_ratio*100:.1f}%가 제거됨")
-            if final_length < 10:
-                fallback_text = re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL | re.IGNORECASE)
-                if len(fallback_text.strip()) > final_length:
-                    filtered_text = fallback_text.strip()
-        elif removal_ratio > 0.1:
-            removed_chars = original_length - final_length
-            logger.debug(f"[필터] 응답 필터링: {removed_chars}자 제거 ({original_length} → {final_length})")
-
-    return filtered_text
-
-
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# LLM 응답 정리
-# LLM 응답에서 불필요한 내용 제거
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def clean_llm_response(response_text):
+    """LLM 응답 필터링 + 정리 통합 함수.
+    Think 태그 제거, 생각 과정 라인 제거, 마크다운 헤더/코드블록 제거, 메타 추론 제거, 빈 줄 정리."""
     if not response_text:
         return response_text
 
     original_text = response_text
+    original_length = len(response_text)
     removed_lines = []
     has_korean_any = _line_has_korean(response_text)
 
-    # Think 태그 제거
+    # 1. Think 태그 제거
     response_text = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL | re.IGNORECASE)
+    response_text = re.sub(r'<thinking>.*?</thinking>', '', response_text, flags=re.DOTALL | re.IGNORECASE)
+    response_text = re.sub(r'<think>.*', '', response_text, flags=re.DOTALL | re.IGNORECASE)
+    response_text = re.sub(r'<thinking>.*', '', response_text, flags=re.DOTALL | re.IGNORECASE)
     response_text = re.sub(r'</?think[^>]*>', '', response_text, flags=re.IGNORECASE)
     response_text = re.sub(r'<meta[^>]*>', '', response_text, flags=re.IGNORECASE)
 
-    lines = response_text.split('\n')
-    cleaned_lines = []
-
-    meta_reasoning_keywords = [
+    # 2. 생각 과정 라인 제거 + 영문 메타 추론 제거
+    _meta_reasoning_keywords = (
         "user", "tools", "tool", "respond", "response", "answer", "final answer",
         "language", "markdown", "check if", "make sure", "keep it", "need to",
         "i need to", "i should", "let me", "let's", "reasoning", "analysis",
         "the user said", "might be asking", "direct query", "call any tools",
         "tools are for", "statement, not a question", "as the ai",
         "that means", "decimal", "json serializable", "converted to json",
-    ]
-    meta_reasoning_starts = [
+    )
+    _meta_reasoning_starts = (
         "check if", "make sure", "keep it", "need to", "i need to", "i should",
         "let me", "let's", "respond", "answer", "use the", "given", "since",
         "okay,", "wait,", "well,", "so,", "now,", "hmm,",
-    ]
+    )
 
+    lines = response_text.split('\n')
+    cleaned_lines = []
     for line in lines:
         line_stripped = line.strip()
         has_korean = _line_has_korean(line)
 
-        # 생각 과정 패턴 체크 (공통 패턴 사용)
         is_thinking = False
         if not has_korean:
             for pattern in _THINKING_PATTERNS:
@@ -2113,16 +1962,13 @@ def clean_llm_response(response_text):
                     removed_lines.append(line_stripped[:100])
                     break
 
-        # 한글이 섞여 있어도 영문 메타 추론(독백) 문장 제거
         if not is_thinking and has_korean_any and line_stripped:
             lower_line = line_stripped.lower()
-            has_meta_keyword = any(keyword in lower_line for keyword in meta_reasoning_keywords)
-            starts_as_meta = any(lower_line.startswith(prefix) for prefix in meta_reasoning_starts)
+            has_meta_keyword = any(kw in lower_line for kw in _meta_reasoning_keywords)
+            starts_as_meta = any(lower_line.startswith(p) for p in _meta_reasoning_starts)
             ascii_alpha_count = sum(1 for c in line_stripped if c.isascii() and c.isalpha())
             non_space_count = sum(1 for c in line_stripped if not c.isspace())
             ascii_ratio = (ascii_alpha_count / non_space_count) if non_space_count else 0.0
-
-            # 영문 비중이 높고(독백 패턴) 메타 키워드/시작 패턴에 해당하면 제거
             if has_meta_keyword and (starts_as_meta or ascii_ratio >= 0.20):
                 is_thinking = True
                 removed_lines.append(line_stripped[:100])
@@ -2130,35 +1976,38 @@ def clean_llm_response(response_text):
         if not is_thinking:
             cleaned_lines.append(line)
 
-    # 제거된 라인 로깅
     if removed_lines:
         logger.debug(f"[필터] 생각 과정 라인 {len(removed_lines)}개 제거:")
-        for removed in removed_lines[:5]:  # 최대 5개만 로깅
+        for removed in removed_lines[:5]:
             logger.debug(f"  - {removed}...")
         if len(removed_lines) > 5:
             logger.debug(f"  ... 외 {len(removed_lines) - 5}개")
 
     response_text = '\n'.join(cleaned_lines)
-    # 빈 줄 정리: 3개 이상 연속 줄바꿈 → 1개 빈 줄로 (1개 빈 줄은 유지)
+
+    # 3. 마크다운 헤더 제거
+    for hdr in (r"^(### )?Final Answer:?\s*", r"^(### )?Final Output:?\s*",
+                r"^(### )?Response:?\s*", r"^(### )?Answer:?\s*", r"^(### )?결론:?\s*"):
+        response_text = re.sub(hdr, "", response_text, flags=re.MULTILINE | re.IGNORECASE)
+
+    # 4. 코드 블록 마커 제거
+    response_text = re.sub(r"^```[a-zA-Z]*\s*$", "", response_text, flags=re.MULTILINE)
+    response_text = re.sub(r"^```\s*$", "", response_text, flags=re.MULTILINE)
+
+    # 5. 빈 줄 정리 + 다중 공백 축소
     response_text = re.sub(r'(\n\s*){3,}', '\n\n', response_text)
     response_text = re.sub(r'[ \t]{2,}(?!\n)', ' ', response_text)
     response_text = response_text.strip()
 
-    # 추가 필터링: 마침표로 구분된 짧은 영문 검증/판단 문장 제거
-    # (사용자 요청: "Double-check the numbers. Temperature 25.3°C is comfortable..." 같은 패턴)
+    # 6. 영문 검증/판단 문장 제거 (한글 응답 내)
     if has_korean_any:
-        # 한글이 포함된 응답에서 영문 검증 문장만 제거
         sentence_removed_count = 0
         for line in response_text.split('\n'):
             if _line_has_korean(line):
-                continue  # 한글이 있는 줄은 건너뜀
-
-            # 마침표로 분리된 문장들 검사
+                continue
             sentences = [s.strip() for s in line.split('.') if s.strip()]
             filtered_sentences = []
-
             for sentence in sentences:
-                # 짧은 영문 검증/판단 문장인지 확인
                 is_verification = False
                 if len(sentence) < 200 and not _line_has_korean(sentence):
                     for pattern in _THINKING_PATTERNS:
@@ -2166,11 +2015,8 @@ def clean_llm_response(response_text):
                             is_verification = True
                             sentence_removed_count += 1
                             break
-
                 if not is_verification:
                     filtered_sentences.append(sentence)
-
-            # 문장들을 다시 조립
             if filtered_sentences:
                 new_line = '. '.join(filtered_sentences)
                 if new_line and not new_line.endswith('.'):
@@ -2178,20 +2024,33 @@ def clean_llm_response(response_text):
                 response_text = response_text.replace(line, new_line)
             else:
                 response_text = response_text.replace(line, '')
-
         if sentence_removed_count > 0:
             logger.debug(f"[필터] 검증/판단 문장 {sentence_removed_count}개 추가 제거")
 
-    # 빈 줄 정리: 3개 이상 연속 줄바꿈 → 1개 빈 줄로 (1개 빈 줄은 유지)
+    # 7. 최종 빈 줄 정리
     response_text = re.sub(r'(\n\s*){3,}', '\n\n', response_text)
     response_text = response_text.strip()
 
-    # 필터링 결과 요약 로깅
-    if len(original_text) > len(response_text):
-        removed_chars = len(original_text) - len(response_text)
-        logger.debug(f"[필터] LLM 응답 정리: {removed_chars}자 제거 ({len(original_text)} → {len(response_text)})")
+    # 8. 과도한 제거 검사 (90% 이상 제거 시 폴백)
+    final_length = len(response_text)
+    if original_length > 0:
+        removal_ratio = (original_length - final_length) / original_length
+        if removal_ratio > 0.9:
+            logger.warning(f"필터링으로 인해 응답의 {removal_ratio*100:.1f}%가 제거됨")
+            if final_length < 10:
+                fallback = re.sub(r"<think>.*?</think>\s*", "", original_text, flags=re.DOTALL | re.IGNORECASE)
+                if len(fallback.strip()) > final_length:
+                    response_text = fallback.strip()
+        elif removal_ratio > 0.1:
+            removed_chars = original_length - final_length
+            logger.debug(f"[필터] LLM 응답 정리: {removed_chars}자 제거 ({original_length} → {final_length})")
 
     return response_text
+
+
+# filter_llm_response → clean_llm_response 호환 래퍼 (내부 호출 유지용)
+def filter_llm_response(text, filter_type="general", query_type=None):
+    return clean_llm_response(text)
 
 
 

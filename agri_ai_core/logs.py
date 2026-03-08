@@ -34,24 +34,6 @@ _loggers_initialized = {}
 
 # 로그 포맷
 DEFAULT_LOG_FORMAT = '[%(asctime)s] [%(levelname)s] [%(name)-39s] -> %(message)s'
-DEFAULT_DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
-
-# 로그 파일 패턴
-DEFAULT_LOG_FILE_PATTERN = 'llm_%Y-%m-%d.log'
-WEB_LOG_FILE_PATTERN = 'web_%Y-%m-%d.log'
-
-# 로그 레벨
-LOG_LEVELS = {
-    'DEBUG': 10,
-    'INFO': 20,
-    'WARNING': 30,
-    'ERROR': 40,
-    'CRITICAL': 50
-}
-
-# 기본 로그 디렉토리
-DEFAULT_LOG_DIR = 'logs'
-
 # 로그 보관 기간 (일)
 LOG_RETENTION_DAYS = 100
 
@@ -392,10 +374,5 @@ __all__ = [
     "trim_old_log_entries",
     "trim_large_plain_logs",
     "DEFAULT_LOG_FORMAT",
-    "DEFAULT_DATE_FORMAT",
-    "DEFAULT_LOG_FILE_PATTERN",
-    "WEB_LOG_FILE_PATTERN",
-    "LOG_LEVELS",
-    "DEFAULT_LOG_DIR",
     "LOG_RETENTION_DAYS",
 ]

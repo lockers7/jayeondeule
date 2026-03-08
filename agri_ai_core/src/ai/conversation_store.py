@@ -22,11 +22,7 @@ MAX_TURNS = int(os.getenv("CONVERSATION_MAX_TURNS", "10"))
 TTL_DAYS = int(os.getenv("CONVERSATION_TTL_DAYS", "7"))
 MEMORY_TTL_SECONDS = 30 * 60  # 인메모리 폴백용 TTL (30분)
 
-# <think>/<thinking> 태그 제거용 컴파일 정규식
-_RE_THINK_TAG = re.compile(
-    r"<(?:think|thinking)>.*?</(?:think|thinking)>\s*|<(?:think|thinking)>.*",
-    re.DOTALL | re.IGNORECASE,
-)
+from agri_ai_core.src.ai.utils import RE_THINK_TAG as _RE_THINK_TAG
 
 
 # ============================================================

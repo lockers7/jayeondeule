@@ -54,6 +54,24 @@ def _normalize_id(value):
     return digits[0] if digits else None
 
 
+def _resolve_relay_ids(house_id, farm_id):
+    """릴레이 제어용 house_id/farm_id를 정규화하고 검증한다. (house_id, farm_id) 또는 에러 dict 반환."""
+    from agri_ai_core.src.postgresql.connection import db_session
+    from agri_ai_core.src.postgresql.queries import GET_ONE_FARM
+    target_house_id = _normalize_id(house_id)
+    if not target_house_id:
+        return {"success": False, "error": "house_id를 확인할 수 없습니다."}
+    target_farm_id = _normalize_id(farm_id)
+    if not target_farm_id:
+        with db_session() as database:
+            farm = database.fetch_one(GET_ONE_FARM)
+            if farm and farm.get("farm_id") is not None:
+                target_farm_id = str(farm.get("farm_id"))
+    if not target_farm_id:
+        return {"success": False, "error": "farm_id를 확인할 수 없습니다."}
+    return target_house_id, target_farm_id
+
+
 _WEB_SEARCH_RESULT_LIMIT = max(3, int(os.getenv("WEB_SEARCH_RESULT_LIMIT", "8")))
 _WEB_SEARCH_AUTO_FETCH_MAX = max(1, int(os.getenv("WEB_SEARCH_AUTO_FETCH_MAX", "3")))
 _WEB_SEARCH_CONTENT_MAX_CHARS = max(500, int(os.getenv("WEB_SEARCH_CONTENT_MAX_CHARS", "2000")))
@@ -778,26 +796,15 @@ def control_relay(house_id: str, device_name: str = None, action: str = None,
         return control_relays_batch(house_id=house_id, farm_id=farm_id, mode=mode)
 
     t_start = time.time()
-    target_house_id = _normalize_id(house_id)
-    logger.info(f"[릴레이제어] 시작 farm_id={farm_id} house_id={house_id}→{target_house_id} device={device_name} action={action}")
+    logger.info(f"[릴레이제어] 시작 farm_id={farm_id} house_id={house_id} device={device_name} action={action}")
     try:
-        from agri_ai_core.src.postgresql.connection import db_session
-        from agri_ai_core.src.postgresql.queries import GET_ONE_FARM
         from agri_ai_core.src.control.relay_manager import set_relay_value
         from agri_ai_core.src.control.control_common import SEMANTIC_LABELS, set_llm_relay_lock, resolve_device_alias
 
-        if not target_house_id:
-            return {"success": False, "error": "house_id를 확인할 수 없습니다."}
-
-        target_farm_id = _normalize_id(farm_id)
-        if not target_farm_id:
-            with db_session() as database:
-                farm = database.fetch_one(GET_ONE_FARM)
-                if farm and farm.get("farm_id") is not None:
-                    target_farm_id = str(farm.get("farm_id"))
-
-        if not target_farm_id:
-            return {"success": False, "error": "farm_id를 확인할 수 없습니다."}
+        ids = _resolve_relay_ids(house_id, farm_id)
+        if isinstance(ids, dict):
+            return ids
+        target_house_id, target_farm_id = ids
 
         # action 검증
         if action not in ("on", "off"):
@@ -869,29 +876,18 @@ def control_relay(house_id: str, device_name: str = None, action: str = None,
 def control_relays_batch(house_id: str, devices: List[Dict[str, str]] = None,
                          farm_id: str = None, mode: str = None) -> Dict[str, Any]:
     t_start = time.time()
-    target_house_id = _normalize_id(house_id)
-    logger.info(f"[릴레이일괄제어] 시작 farm_id={farm_id} house_id={house_id}→{target_house_id} mode={mode} devices={len(devices or [])}건")
+    logger.info(f"[릴레이일괄제어] 시작 farm_id={farm_id} house_id={house_id} mode={mode} devices={len(devices or [])}건")
     try:
-        from agri_ai_core.src.postgresql.connection import db_session
-        from agri_ai_core.src.postgresql.queries import GET_ONE_FARM
         from agri_ai_core.src.control.relay_manager import set_relay_value
         from agri_ai_core.src.control.control_common import (
             SEMANTIC_LABELS, set_llm_relay_lock, get_pin_map, reverse_pin_map,
         )
         from agri_ai_core.src.postgresql.reader import read_latest_relay_info
 
-        if not target_house_id:
-            return {"success": False, "error": "house_id를 확인할 수 없습니다."}
-
-        target_farm_id = _normalize_id(farm_id)
-        if not target_farm_id:
-            with db_session() as database:
-                farm = database.fetch_one(GET_ONE_FARM)
-                if farm and farm.get("farm_id") is not None:
-                    target_farm_id = str(farm.get("farm_id"))
-
-        if not target_farm_id:
-            return {"success": False, "error": "farm_id를 확인할 수 없습니다."}
+        ids = _resolve_relay_ids(house_id, farm_id)
+        if isinstance(ids, dict):
+            return ids
+        target_house_id, target_farm_id = ids
 
         valid_devices = set(SEMANTIC_LABELS.keys())
         relay_settings = {}
