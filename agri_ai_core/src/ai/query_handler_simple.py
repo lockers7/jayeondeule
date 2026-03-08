@@ -29,6 +29,7 @@ from agri_ai_core.logs import setup_logger, setup_web_logger
 from agri_ai_core.src.ai.llm_client import get_llm_response_with_tools, clean_llm_response
 from agri_ai_core.src.ai.file_processor import process_uploaded_files
 from agri_ai_core.src.ai.conversation_store import get_conversation_store
+from agri_ai_core.src.ai.utils import GREETING_RE as _GREETING_RE_HYBRID
 
 logger = setup_logger(__name__)
 web_logger = setup_web_logger("chat")
@@ -107,9 +108,6 @@ _HYBRID_RECENT_TURNS = int(os.getenv("HYBRID_RECENT_TURNS", "2"))
 _HYBRID_RELATED_RESULTS = int(os.getenv("HYBRID_RELATED_RESULTS", "5"))
 _HYBRID_MAX_RECORDS_PER_FARM = int(os.getenv("HYBRID_MAX_RECORDS", "30"))
 _CONVERSATION_MAX_DISTANCE = float(os.getenv("CONV_VECTOR_MAX_DISTANCE", "16.0"))
-_GREETING_RE_HYBRID = re.compile(
-    r"^(안녕|반가|잘\s*지내|하이|헬로|좋은\s*(아침|저녁|하루)|수고|얀녕|고마워|감사)"
-)
 
 
 # ============================================================

@@ -120,36 +120,23 @@ def initialize_app():
         logger.info("[3/4] PostgreSQL 데이터베이스 연결 확인 중...")
         t0 = time.time()
         try:
-            import psycopg2
-            from agri_ai_core.config import settings as _settings
+            from agri_ai_core.src.postgresql.connection import db_session
             from agri_ai_core.src.postgresql import queries as dbQry
 
-            conn = psycopg2.connect(
-                host=_settings.database.host,
-                port=_settings.database.port,
-                database=_settings.database.database,
-                user=_settings.database.user,
-                password=_settings.database.password,
-                connect_timeout=5,
-            )
-            conn.autocommit = True
-
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT version()")
-                pg_version = cursor.fetchone()[0].split(",")[0]
+            with db_session() as database:
+                row = database.fetch_one("SELECT version()")
+                pg_version = (row.get("version", "") if isinstance(row, dict) else str(row)).split(",")[0]
                 logger.info("[3/4] PostgreSQL 연결 성공 (%.1fs): %s", time.time() - t0, pg_version)
 
                 # AI 학습 상태/패턴 테이블 자동 생성
                 try:
-                    cursor.execute(dbQry.CREATE_AI_LEARNING_STATUS_TABLE)
-                    cursor.execute(dbQry.CREATE_AI_LEARNING_PATTERN_TABLE)
-                    cursor.execute(dbQry.CREATE_AI_LEARNING_PATTERN_INDEX)
-                    cursor.execute(dbQry.ALTER_CROPS_ADD_GROWTH_DETAIL_COLUMNS)
+                    database.execute_query(dbQry.CREATE_AI_LEARNING_STATUS_TABLE)
+                    database.execute_query(dbQry.CREATE_AI_LEARNING_PATTERN_TABLE)
+                    database.execute_query(dbQry.CREATE_AI_LEARNING_PATTERN_INDEX)
+                    database.execute_query(dbQry.ALTER_CROPS_ADD_GROWTH_DETAIL_COLUMNS)
                     logger.info("[3/4] AI 학습 테이블 초기화 + 생육 컬럼 확장 완료")
                 except Exception as e2:
                     logger.warning("[3/4] AI 학습 테이블 초기화 실패: %s", e2)
-
-            conn.close()
 
         except Exception as e:
             logger.warning("[3/4] PostgreSQL 연결 실패 (%.1fs): %s", time.time() - t0, e)
