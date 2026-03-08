@@ -1782,8 +1782,7 @@ def _finalize_user_facing_answer(
 
     _strip_ms = (time.time() - _t_strip) * 1000
     logger.debug(
-        f"[PERF:대화] 후처리-텍스트필터={_filter_ms:.0f}ms, "
-        f"클린={_clean_ms:.0f}ms, 추론제거={_strip_ms:.0f}ms"
+        f"[PERF:대화] 후처리-클린={_clean_ms:.0f}ms, 추론제거={_strip_ms:.0f}ms"
     )
 
     if not _contains_reasoning_trace(candidate):
@@ -2141,7 +2140,7 @@ def _build_structured_result(
     tools_used: list,
 ) -> Dict[str, Any]:
     # LLM 답변 또는 _append_source_urls()가 이미 텍스트에 출처를 포함한 경우 메타데이터 sources를 비움 (프론트엔드 중복 표시 방지)
-    if response_text and ("**출처:**" in response_text or "출처 링크" in response_text):
+    if response_text and ("**출처:**" in response_text or "출처 링크" in response_text or "참고 링크" in response_text):
         return {
             "response": response_text,
             "sources": [],
