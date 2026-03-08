@@ -60,10 +60,8 @@ def _parse_scores(response_text: str, expected_count: int) -> List[int]:
         return []
 
     # <think>...</think> 태그 제거 (qwen3 모델이 /no_think 무시하는 경우 대응)
-    cleaned = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL).strip()
-    if not cleaned:
-        # think 태그가 닫히지 않은 경우 (아직 think 중인 응답)
-        cleaned = re.sub(r'<think>.*', '', response_text, flags=re.DOTALL).strip()
+    from agri_ai_core.src.ai.utils import strip_think_tags
+    cleaned = strip_think_tags(response_text)
     if cleaned:
         response_text = cleaned
 

@@ -28,12 +28,7 @@ ENRICHMENT_TIMEOUT_QA = int(os.getenv("ENRICHMENT_TIMEOUT_QA", "180"))
 ENRICHMENT_MAX_INPUT_CHARS = int(os.getenv("ENRICHMENT_MAX_INPUT_CHARS", "5000"))
 ENRICHMENT_MAX_QA_PAIRS = int(os.getenv("ENRICHMENT_MAX_QA_PAIRS", "5"))
 
-# 문서 유형 한글 라벨
-_DOC_TYPE_LABELS = {
-    "crop_info": "작물 정보",
-    "disease_info": "병해충 정보",
-    "general": "일반 문서",
-}
+from agri_ai_core.src.ai.rag.document_processor import DOC_TYPE_LABELS as _DOC_TYPE_LABELS
 
 
 # ============================================================
