@@ -10,6 +10,7 @@
 # _json_default: json.dumps 기본 직렬화로 처리할 수 없는 타입 변환.
 # search_farm_knowledge: 농장 지식 검색
 # get_farm_realtime_data: 농장 실시간 데이터 가져오기
+# control_relay: 릴레이(장치) 제어
 # _auto_fetch_urls: 웹 검색
 # search_web: MCP를 통한 웹 검색 + 상위 URL 본문 자동 읽기
 # _cache_web_results_to_vectordb: 웹 검색 결과를 web_knowledge 컬렉션에 임베딩 저장 (URL 해시 기반 중복 방지)
@@ -33,6 +34,26 @@ from typing import Dict, Any, List, Optional
 from agri_ai_core.logs import setup_logger
 
 logger = setup_logger(__name__)
+
+
+def _normalize_id(value):
+    """LLM이 전달한 ID에서 숫자만 추출. 숫자가 없으면 None 반환.
+    예: '자연들에 농장' → None, '1' → '1', '상황버섯1호재배사' → '1'
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
+    # 이미 순수 숫자면 그대로
+    try:
+        int(s)
+        return s
+    except (ValueError, TypeError):
+        pass
+    # 한글 등이 섞여 있으면 숫자만 추출
+    digits = re.findall(r'\d+', s)
+    return digits[0] if digits else None
+
+
 _WEB_SEARCH_RESULT_LIMIT = max(3, int(os.getenv("WEB_SEARCH_RESULT_LIMIT", "8")))
 _WEB_SEARCH_AUTO_FETCH_MAX = max(1, int(os.getenv("WEB_SEARCH_AUTO_FETCH_MAX", "3")))
 _WEB_SEARCH_CONTENT_MAX_CHARS = max(500, int(os.getenv("WEB_SEARCH_CONTENT_MAX_CHARS", "2000")))
@@ -408,8 +429,13 @@ def search_farm_knowledge(
             # file_name이 지정된 경우 해당 파일 청크만 검색하는 where 필터 적용
             doc_where = None
             if file_name:
-                doc_where = {"file_name": {"$eq": file_name}}
-                logger.info(f"[VectorDB검색] file_name 필터 적용: {file_name}")
+                # UUID 접두사(8자리hex_) 제거하여 원본 파일명으로 검색
+                _fn = file_name
+                _fn_match = re.match(r'^[0-9a-f]{8}_(.+)$', file_name)
+                if _fn_match:
+                    _fn = _fn_match.group(1)
+                doc_where = {"file_name": {"$eq": _fn}}
+                logger.info(f"[VectorDB검색] file_name 필터 적용: {_fn} (입력: {file_name})")
             collection_plans.append({
                 "label": "document",
                 "name": doc_collection_name,
@@ -519,12 +545,23 @@ def search_farm_knowledge(
             deduped_results.append(item)
 
         # LLM 기반 Reranker 적용 (관련성 판단을 LLM에 위임, 무관한 결과 필터링)
-        try:
-            from agri_ai_core.src.ai.rag.reranker import rerank_results
-            deduped_results = rerank_results(query, deduped_results, top_k=max_results)
-        except Exception as e:
-            logger.warning(f"[VectorDB검색] Reranker 예외: {e} → 거리 기반 상위 {max_results}건 폴백")
-            deduped_results = deduped_results[:max_results]
+        # file_name 필터 시 Reranker 바이패스 (파일명 쿼리는 내용과 관련성 낮아 Reranker가 오판)
+        if file_name:
+            # file_name 필터로 검색한 document_collection 결과를 우선 반환
+            doc_results = [r for r in deduped_results if r.get("collection") == "document"]
+            if doc_results:
+                deduped_results = doc_results[:max_results]
+                logger.info(f"[VectorDB검색] file_name 필터 → Reranker 바이패스, document 결과 {len(deduped_results)}건")
+            else:
+                deduped_results = deduped_results[:max_results]
+                logger.info(f"[VectorDB검색] file_name 필터 → document 결과 없음, 전체 {len(deduped_results)}건 폴백")
+        else:
+            try:
+                from agri_ai_core.src.ai.rag.reranker import rerank_results
+                deduped_results = rerank_results(query, deduped_results, top_k=max_results)
+            except Exception as e:
+                logger.warning(f"[VectorDB검색] Reranker 예외: {e} → 거리 기반 상위 {max_results}건 폴백")
+                deduped_results = deduped_results[:max_results]
 
         total_elapsed = time.time() - t_start
         skip_info = f" (거리필터 제외={skipped_count}건)" if skipped_count else ""
@@ -593,7 +630,7 @@ def get_farm_realtime_data(house_id: str = None, farm_id: str = None, data_type:
             read_latest_relay_info,
         )
 
-        target_farm_id = farm_id
+        target_farm_id = _normalize_id(farm_id)
         if not target_farm_id:
             t_farm = time.time()
             with db_session() as database:
@@ -609,7 +646,7 @@ def get_farm_realtime_data(house_id: str = None, farm_id: str = None, data_type:
                 "house_id": house_id
             }
 
-        target_house_id = house_id
+        target_house_id = _normalize_id(house_id)
         if not target_house_id:
             t_house = time.time()
             with db_session() as database:
@@ -654,6 +691,23 @@ def get_farm_realtime_data(house_id: str = None, farm_id: str = None, data_type:
             relay_keys = list((relay or {}).keys())[:8]
             logger.info(f"[PostgreSQL조회] 릴레이데이터 ({relay_elapsed:.1f}s) keys={relay_keys}")
 
+            # 릴레이 시멘틱 매핑 정보 추가 (LLM이 각 릴레이의 실제 기능을 알 수 있도록)
+            if relay:
+                from agri_ai_core.src.control.control_common import reverse_pin_map, SEMANTIC_LABELS
+                rev_map = reverse_pin_map(target_house_id)
+                relay_mapping = {}
+                for pin_key, value in relay.items():
+                    if pin_key.startswith("relay_") and pin_key.endswith("_flag"):
+                        semantic_name = rev_map.get(pin_key)
+                        if semantic_name:
+                            label = SEMANTIC_LABELS.get(semantic_name, semantic_name)
+                            relay_mapping[pin_key] = {
+                                "value": bool(value),
+                                "device": semantic_name,
+                                "name": label,
+                            }
+                result["relay_mapping"] = relay_mapping
+
         if (
             (data_type in ["sensor", "all"] and not result.get("sensor"))
             and (data_type in ["relay", "all"] and not result.get("relay"))
@@ -676,6 +730,268 @@ def get_farm_realtime_data(house_id: str = None, farm_id: str = None, data_type:
             "error": str(e),
             "house_id": house_id
         }
+
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 릴레이(장치) 제어
+# LLM이 호출하여 특정 재배사의 장치를 켜거나 끈다.
+# relay_manager.set_relay_value를 통해 실제 DB에 릴레이 값을 설정한다.
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def _get_ai_judgment_safe(farm_id, house_id):
+    """AI 환경 판단을 안전하게 호출 (실패해도 None 반환)"""
+    try:
+        from agri_ai_core.src.control.manual_control import get_ai_environment_judgment
+        return get_ai_environment_judgment(farm_id, house_id)
+    except Exception as e:
+        logger.warning(f"[AI판단] 조회 실패: {e}")
+        return None
+
+
+def _build_ai_conflict(ai_judgment, user_relay_settings):
+    """사용자 수동 제어와 AI 권장 사이의 차이점을 비교하여 반환"""
+    if not ai_judgment or not user_relay_settings:
+        return None
+    ai_devices = ai_judgment.get("devices") or {}
+    if not ai_devices:
+        return None
+
+    from agri_ai_core.src.control.control_common import SEMANTIC_LABELS
+    conflicts = []
+    for device_name, user_value in user_relay_settings.items():
+        if device_name in ai_devices:
+            ai_value = ai_devices[device_name]
+            if bool(user_value) != bool(ai_value):
+                label = SEMANTIC_LABELS.get(device_name, device_name)
+                user_str = "ON" if user_value else "OFF"
+                ai_str = "ON" if ai_value else "OFF"
+                conflicts.append(f"{label}: 수동={user_str}, AI권장={ai_str}")
+
+    if not conflicts:
+        return None
+    return conflicts
+
+
+def control_relay(house_id: str, device_name: str = None, action: str = None,
+                   farm_id: str = None, mode: str = None) -> Dict[str, Any]:
+    # mode가 지정된 경우 일괄 제어로 위임
+    if mode in ("reverse_all", "all_on", "all_off"):
+        return control_relays_batch(house_id=house_id, farm_id=farm_id, mode=mode)
+
+    t_start = time.time()
+    target_house_id = _normalize_id(house_id)
+    logger.info(f"[릴레이제어] 시작 farm_id={farm_id} house_id={house_id}→{target_house_id} device={device_name} action={action}")
+    try:
+        from agri_ai_core.src.postgresql.connection import db_session
+        from agri_ai_core.src.postgresql.queries import GET_ONE_FARM
+        from agri_ai_core.src.control.relay_manager import set_relay_value
+        from agri_ai_core.src.control.control_common import SEMANTIC_LABELS, set_llm_relay_lock, resolve_device_alias
+
+        if not target_house_id:
+            return {"success": False, "error": "house_id를 확인할 수 없습니다."}
+
+        target_farm_id = _normalize_id(farm_id)
+        if not target_farm_id:
+            with db_session() as database:
+                farm = database.fetch_one(GET_ONE_FARM)
+                if farm and farm.get("farm_id") is not None:
+                    target_farm_id = str(farm.get("farm_id"))
+
+        if not target_farm_id:
+            return {"success": False, "error": "farm_id를 확인할 수 없습니다."}
+
+        # action 검증
+        if action not in ("on", "off"):
+            return {"success": False, "error": f"잘못된 action입니다: {action} (on 또는 off만 가능)"}
+
+        # device_name 별칭 해소 및 검증
+        device_name = resolve_device_alias(device_name)
+        valid_devices = set(SEMANTIC_LABELS.keys())
+        if device_name not in valid_devices:
+            return {
+                "success": False,
+                "error": f"잘못된 device_name입니다: {device_name}",
+                "valid_devices": list(valid_devices),
+            }
+
+        # ── AI 환경 판단 (제어 전 센서 기반) ──
+        ai_judgment = _get_ai_judgment_safe(target_farm_id, target_house_id)
+
+        # 릴레이 값 설정
+        relay_value = (action == "on")
+        relay_settings = {device_name: relay_value}
+        result = set_relay_value(target_farm_id, target_house_id, relay_settings)
+
+        elapsed = time.time() - t_start
+        device_label = SEMANTIC_LABELS.get(device_name, device_name)
+        action_label = "켜기(ON)" if relay_value else "끄기(OFF)"
+
+        # ── AI 판단과 수동 제어 차이점 비교 ──
+        ai_conflict = _build_ai_conflict(ai_judgment, relay_settings)
+
+        if result.get("success"):
+            # LLM 제어 잠금 설정 (자동제어 스케줄러 충돌 방지)
+            set_llm_relay_lock(target_farm_id, target_house_id)
+            logger.info(f"[릴레이제어] 완료 ({elapsed:.1f}s) {device_label} → {action_label} (LLM 잠금 설정)")
+            return {
+                "success": True,
+                "message": f"{target_house_id}호 재배사의 {device_label}을(를) {action_label} 처리했습니다.",
+                "farm_id": target_farm_id,
+                "house_id": target_house_id,
+                "device_name": device_name,
+                "device_label": device_label,
+                "action": action,
+                "applied_value": relay_value,
+                "ai_judgment": ai_judgment,
+                "ai_conflict": ai_conflict,
+            }
+        else:
+            logger.warning(f"[릴레이제어] 실패 ({elapsed:.1f}s): {result.get('message')}")
+            return {
+                "success": False,
+                "error": result.get("message", "릴레이 값 설정에 실패했습니다."),
+                "farm_id": target_farm_id,
+                "house_id": target_house_id,
+                "device_name": device_name,
+            }
+
+    except Exception as e:
+        elapsed = time.time() - t_start
+        logger.error(f"[릴레이제어] 오류 ({elapsed:.1f}s): {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return {"success": False, "error": str(e)}
+
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 릴레이 다중 일괄 제어
+# 여러 장치를 한 번에 제어한다 (LLM의 반복 tool call 횟수 절감).
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def control_relays_batch(house_id: str, devices: List[Dict[str, str]] = None,
+                         farm_id: str = None, mode: str = None) -> Dict[str, Any]:
+    t_start = time.time()
+    target_house_id = _normalize_id(house_id)
+    logger.info(f"[릴레이일괄제어] 시작 farm_id={farm_id} house_id={house_id}→{target_house_id} mode={mode} devices={len(devices or [])}건")
+    try:
+        from agri_ai_core.src.postgresql.connection import db_session
+        from agri_ai_core.src.postgresql.queries import GET_ONE_FARM
+        from agri_ai_core.src.control.relay_manager import set_relay_value
+        from agri_ai_core.src.control.control_common import (
+            SEMANTIC_LABELS, set_llm_relay_lock, get_pin_map, reverse_pin_map,
+        )
+        from agri_ai_core.src.postgresql.reader import read_latest_relay_info
+
+        if not target_house_id:
+            return {"success": False, "error": "house_id를 확인할 수 없습니다."}
+
+        target_farm_id = _normalize_id(farm_id)
+        if not target_farm_id:
+            with db_session() as database:
+                farm = database.fetch_one(GET_ONE_FARM)
+                if farm and farm.get("farm_id") is not None:
+                    target_farm_id = str(farm.get("farm_id"))
+
+        if not target_farm_id:
+            return {"success": False, "error": "farm_id를 확인할 수 없습니다."}
+
+        valid_devices = set(SEMANTIC_LABELS.keys())
+        relay_settings = {}
+        results_detail = []
+
+        # mode 기반 자동 제어 (reverse_all / all_on / all_off)
+        if mode in ("reverse_all", "all_on", "all_off"):
+            current = read_latest_relay_info(target_farm_id, target_house_id)
+            if not current:
+                return {"success": False, "error": "현재 릴레이 상태를 조회할 수 없습니다."}
+
+            rev_map = reverse_pin_map(target_house_id)
+            for pin_key, semantic_name in rev_map.items():
+                if semantic_name not in valid_devices:
+                    continue
+                current_value = bool(current.get(pin_key, False))
+                label = SEMANTIC_LABELS.get(semantic_name, semantic_name)
+
+                if mode == "reverse_all":
+                    new_value = not current_value
+                elif mode == "all_on":
+                    new_value = True
+                else:  # all_off
+                    new_value = False
+
+                relay_settings[semantic_name] = new_value
+                prev_status = "ON(작동중)" if current_value else "OFF(미작동)"
+                new_status = "ON(작동중)" if new_value else "OFF(미작동)"
+                action_label = "켜기(ON)" if new_value else "끄기(OFF)"
+                results_detail.append({
+                    "device": semantic_name,
+                    "label": label,
+                    "pin": pin_key,
+                    "action": action_label,
+                    "prev_status": prev_status,
+                    "new_status": new_status,
+                    "success": True,
+                })
+            logger.info(f"[릴레이일괄제어] mode={mode} → {len(relay_settings)}개 장치 설정 생성")
+
+        # devices 배열 기반 개별 제어
+        elif devices and isinstance(devices, list):
+            for item in devices:
+                device_name = item.get("device_name", "")
+                action = item.get("action", "")
+
+                if device_name not in valid_devices:
+                    results_detail.append({"device": device_name, "success": False, "error": "잘못된 device_name"})
+                    continue
+                if action not in ("on", "off"):
+                    results_detail.append({"device": device_name, "success": False, "error": "잘못된 action"})
+                    continue
+
+                relay_settings[device_name] = (action == "on")
+                label = SEMANTIC_LABELS.get(device_name, device_name)
+                action_label = "켜기(ON)" if action == "on" else "끄기(OFF)"
+                results_detail.append({"device": device_name, "label": label, "action": action_label, "success": True})
+        else:
+            return {"success": False, "error": "mode 또는 devices 파라미터가 필요합니다."}
+
+        if not relay_settings:
+            return {"success": False, "error": "유효한 장치 설정이 없습니다.", "details": results_detail}
+
+        # ── AI 환경 판단 (제어 전 센서 기반) ──
+        ai_judgment = _get_ai_judgment_safe(target_farm_id, target_house_id)
+
+        result = set_relay_value(target_farm_id, target_house_id, relay_settings)
+
+        # ── AI 판단과 수동 제어 차이점 비교 ──
+        ai_conflict = _build_ai_conflict(ai_judgment, relay_settings)
+
+        elapsed = time.time() - t_start
+        if result.get("success"):
+            set_llm_relay_lock(target_farm_id, target_house_id)
+            controlled_labels = [d["label"] for d in results_detail if d.get("success")]
+            logger.info(f"[릴레이일괄제어] 완료 ({elapsed:.1f}s) {len(controlled_labels)}건 (LLM 잠금 설정)")
+            return {
+                "success": True,
+                "message": f"{target_house_id}호 재배사의 {len(controlled_labels)}개 장치를 일괄 제어했습니다.",
+                "farm_id": target_farm_id,
+                "house_id": target_house_id,
+                "controlled_count": len(controlled_labels),
+                "details": results_detail,
+                "ai_judgment": ai_judgment,
+                "ai_conflict": ai_conflict,
+            }
+        else:
+            logger.warning(f"[릴레이일괄제어] 실패 ({elapsed:.1f}s): {result.get('message')}")
+            return {
+                "success": False,
+                "error": result.get("message", "릴레이 일괄 설정에 실패했습니다."),
+                "details": results_detail,
+            }
+
+    except Exception as e:
+        elapsed = time.time() - t_start
+        logger.error(f"[릴레이일괄제어] 오류 ({elapsed:.1f}s): {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return {"success": False, "error": str(e)}
 
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1044,6 +1360,15 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
                 house_id=tool_args.get("house_id"),
                 farm_id=tool_args.get("farm_id"),
                 data_type=tool_args.get("data_type", "all")
+            )
+
+        elif tool_name == "control_relay":
+            result = control_relay(
+                house_id=tool_args.get("house_id"),
+                device_name=tool_args.get("device_name"),
+                action=tool_args.get("action"),
+                farm_id=tool_args.get("farm_id"),
+                mode=tool_args.get("mode"),
             )
 
         elif tool_name == "search_web":

@@ -77,6 +77,10 @@ def _build_default_tool_args(user_query, farm_id, house_id):
     match = _FILE_NAME_RE.search(user_query or "")
     if match:
         detected_file_name = match.group(1)
+        # UUID 접두사(8자리hex_) 제거하여 원본 파일명으로 정규화
+        _fn_m = re.match(r'^[0-9a-f]{8}_(.+)$', detected_file_name)
+        if _fn_m:
+            detected_file_name = _fn_m.group(1)
         logger.info(f"[기본인자] 파일명 감지: {detected_file_name}")
 
     return {

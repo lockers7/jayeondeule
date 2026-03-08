@@ -1523,6 +1523,79 @@ def _refine_fetch_url(tool_result: str, user_query: str) -> str:
     return "\n".join(lines)
 
 
+# 센서 필드 한글 약어 매핑 (토큰 절감)
+_SENSOR_SHORT = {
+    "indoor_temperature": "실내온도",
+    "indoor_humidity": "실내습도",
+    "outdoor_temperature": "외부온도",
+    "outdoor_humidity": "외부습도",
+    "co2": "CO2",
+    "water_temperature": "수온",
+    "light_level": "조도",
+    "water_level": "수위",
+}
+
+
+def _refine_realtime_data(tool_result: str) -> str:
+    """get_farm_realtime_data 결과를 컴팩트 텍스트로 변환.
+    ~1.5KB JSON → ~200~400자 텍스트로 압축하여 LLM 컨텍스트 절감.
+    """
+    try:
+        data = json.loads(tool_result)
+    except (json.JSONDecodeError, TypeError):
+        return tool_result
+
+    if not data.get("success"):
+        return tool_result
+
+    house_id = data.get("house_id", "?")
+    parts = [f"[{house_id}호재배사]"]
+
+    # 센서 데이터 압축
+    sensor = data.get("sensor")
+    if sensor and isinstance(sensor, dict):
+        sensor_items = []
+        for key, label in _SENSOR_SHORT.items():
+            val = sensor.get(key)
+            if val is not None:
+                sensor_items.append(f"{label}={val}")
+        if sensor_items:
+            parts.append("센서: " + ", ".join(sensor_items))
+
+    # 릴레이 데이터 압축 (relay_mapping 사용 → ON/OFF 장치명만)
+    relay_mapping = data.get("relay_mapping")
+    if relay_mapping and isinstance(relay_mapping, dict):
+        on_devices = []
+        off_devices = []
+        for pin_key, info in relay_mapping.items():
+            if isinstance(info, dict):
+                label = info.get("name", info.get("device", pin_key))
+                if info.get("value"):
+                    on_devices.append(label)
+                else:
+                    off_devices.append(label)
+        if on_devices:
+            parts.append("ON: " + ", ".join(on_devices))
+        if off_devices:
+            parts.append("OFF: " + ", ".join(off_devices))
+    elif data.get("relay") and isinstance(data["relay"], dict):
+        # relay_mapping이 없는 경우 raw relay fallback
+        on_pins = [k for k, v in data["relay"].items()
+                   if k.startswith("relay_") and k.endswith("_flag") and v]
+        off_pins = [k for k, v in data["relay"].items()
+                    if k.startswith("relay_") and k.endswith("_flag") and not v]
+        if on_pins:
+            parts.append(f"ON: {', '.join(on_pins)}")
+        if off_pins:
+            parts.append(f"OFF: {', '.join(off_pins)}")
+
+    timestamp = data.get("data_retrieved_at", "")
+    if timestamp:
+        parts.append(f"조회시각: {timestamp}")
+
+    return " | ".join(parts)
+
+
 # ============================================================
 # 도구 결과를 LLM 메시지에 넣기 전에 도구별 지능형 정제를 수행한다.
 # ============================================================
@@ -1533,9 +1606,76 @@ def _refine_tool_result(tool_name: str, tool_result: str, user_query: str) -> st
         return _refine_search_web(tool_result, user_query)
     if tool_name == "fetch_url_content":
         return _refine_fetch_url(tool_result, user_query)
-    # search_farm_knowledge: content 700자 제한 → 정제 불필요
-    # get_farm_realtime_data: 구조화된 센서 데이터 → 정제 불필요
+    if tool_name == "search_farm_knowledge":
+        return _refine_farm_knowledge(tool_result)
+    if tool_name == "get_farm_realtime_data":
+        return _refine_realtime_data(tool_result)
     return tool_result
+
+
+# 네비게이션 잡음 패턴 (웹 스크래핑 아티팩트)
+_NAV_NOISE_RE = re.compile(
+    r"(본문\s*바로가기|주메뉴\s*바로가기|태극기\s*이\s*누리집|국가상징\s*알아보기"
+    r"|화면크기\s*작게|통합로그인|전체메뉴|로그인\s*로그아웃|로그인\s*회원가입"
+    r"|내\s*검색\s*검색\s*관리\s*글쓰기|메뉴\s*홈\s*태그\s*방명록"
+    r"|반응형\s*&nbsp;|본문\s*바로가기\s*글루타민)"
+)
+
+
+def _strip_nav_noise(text: str) -> str:
+    """웹 스크래핑 네비게이션 잡음을 제거한다."""
+    if not text:
+        return text
+    # 네비게이션 패턴 이후 텍스트를 잘라냄
+    parts = _NAV_NOISE_RE.split(text)
+    if len(parts) <= 1:
+        return text
+    # 네비게이션 시작 전까지만 유지
+    cleaned = parts[0].rstrip()
+    return cleaned if len(cleaned) > 30 else text
+
+
+# LLM 답변 생성에 불필요한 metadata 키 (출처 표시에 필요한 title, url은 유지)
+_UNNECESSARY_META_KEYS = {
+    "record_datetime", "data_kind", "distance", "collection", "query",
+    "learning_date", "chunk_id", "file_size", "total_chunks",
+    "is_learned_flag", "processing_time", "processing_date", "farm_id",
+    "file_extension", "document_type", "crop_name",
+}
+
+
+def _refine_farm_knowledge(tool_result: str) -> str:
+    """search_farm_knowledge 결과를 경량화한다.
+    - description이 content와 중복이면 제거
+    - 불필요한 metadata 키 제거
+    - 네비게이션 잡음 제거
+    """
+    try:
+        data = json.loads(tool_result)
+    except (json.JSONDecodeError, TypeError):
+        return tool_result
+
+    results = data.get("results")
+    if not results or not isinstance(results, list):
+        return tool_result
+
+    for item in results:
+        # 1) 네비게이션 잡음 제거
+        content = item.get("content", "")
+        if content:
+            item["content"] = _strip_nav_noise(content)
+
+        # 2) description이 content와 중복이면 제거
+        meta = item.get("metadata", {})
+        desc = meta.get("description", "")
+        if desc and content and desc[:50] in content:
+            del meta["description"]
+
+        # 3) 불필요한 metadata 키 제거
+        for key in _UNNECESSARY_META_KEYS:
+            meta.pop(key, None)
+
+    return json.dumps(data, ensure_ascii=False)
 
 
 _HONORIFIC_ENDINGS = re.compile(
@@ -2080,11 +2220,47 @@ def _sanitize_markdown_links(text: str) -> str:
     return re.sub(r'\[([^\]]*)\]\(([^)]*)\)', _replace_bad_link, text)
 
 
+_HALLUCINATED_URL_RE = re.compile(
+    r'\[([^\]]*)\]\(https?://(?:example\.com|placeholder|dummy|fake|localhost)[^\)]*\)',
+)
+_MARKDOWN_URL_RE = re.compile(
+    r'\[([^\]]*출처[^\]]*|[^\]]*)\]\(https?://[^\)]+\)',
+)
+
+
+def _strip_hallucinated_urls(answer: str, verified_urls: set) -> str:
+    """LLM이 만든 가짜 URL을 제거. verified_urls는 도구가 반환한 실제 URL 집합."""
+    if not answer or ("http://" not in answer and "https://" not in answer):
+        return answer
+
+    # 1단계: example.com 등 명백한 가짜 도메인 제거
+    answer = _HALLUCINATED_URL_RE.sub(r'\1', answer)
+
+    # 2단계: 모든 마크다운 링크를 검증된 URL과 대조
+    def _check_url(match):
+        full = match.group(0)
+        url_match = re.search(r'\((https?://[^\)]+)\)', full)
+        if url_match:
+            url = url_match.group(1)
+            # verified_urls가 있으면 도메인 일치 여부로 판단
+            if verified_urls:
+                for verified in verified_urls:
+                    if url.split('/')[2] == verified.split('/')[2]:
+                        return full  # 검증된 URL → 유지
+            # verified_urls가 비어있으면 = 도구 호출 없이 LLM이 생성한 URL → 제거
+        # 링크 텍스트만 남기고 URL 제거
+        return match.group(1)
+    answer = _MARKDOWN_URL_RE.sub(_check_url, answer)
+
+    return answer
+
+
 def _append_source_urls(answer: str, sources: list) -> str:
     if not sources:
         return answer
-    # 답변에 이미 URL이 포함되어 있으면 추가하지 않음
-    if "http://" in answer or "https://" in answer:
+    # 답변에 이미 검증된 URL이 포함되어 있으면 추가하지 않음
+    source_urls = {s.get("url", "") for s in sources if s.get("url")}
+    if source_urls and any(url in answer for url in source_urls):
         return answer
     lines = [f"- [{s['title']}]({s['url']})" for s in sources]
     return answer.rstrip() + "\n\n**출처:**\n" + "\n".join(lines)
@@ -2111,6 +2287,15 @@ def _build_structured_result(
     sources: list,
     tools_used: list,
 ) -> Dict[str, Any]:
+    # LLM 답변 또는 _append_source_urls()가 이미 텍스트에 출처를 포함한 경우 메타데이터 sources를 비움 (프론트엔드 중복 표시 방지)
+    if response_text and ("**출처:**" in response_text or "출처 링크" in response_text):
+        return {
+            "response": response_text,
+            "sources": [],
+            "tools_used": tools_used if tools_used else [],
+            "response_type": _determine_response_type(tools_used),
+        }
+
     # LLM이 실제 인용한 출처만 필터 (답변에 URL이 포함된 출처만 유지)
     cited_sources = sources
     if sources and response_text and ("http://" in response_text or "https://" in response_text):
@@ -2208,7 +2393,7 @@ def _build_farm_info_text() -> str:
 def get_llm_response_with_tools(
     user_query: str,
     farm_name: str = None,
-    temperature: float = 0.7,
+    temperature: float = 0.5,
     max_tool_iterations: int = 8,
     default_tool_args: Optional[Dict[str, Dict[str, Any]]] = None,
     conversation_history: Optional[List[Dict[str, str]]] = None,
@@ -2283,9 +2468,17 @@ def get_llm_response_with_tools(
                 messages.append({"role": "system", "content": content})
 
             # 최근 턴 주입 (user/assistant, 500자 제한)
+            # 빈/실패 assistant 메시지는 LLM이 패턴을 따라 동일 응답을 반복하므로 제거
             for turn in filtered_turns:
                 role = turn.get("role", "user")
                 content = turn.get("content", "")
+                if role == "assistant" and not content.strip():
+                    continue
+                # "확인이 필요합니다" 등 실패 패턴만 있는 짧은 assistant 응답 제거
+                if role == "assistant" and len(content.strip()) < 30:
+                    _stripped = content.strip().rstrip(".")
+                    if _stripped in ("확인이 필요합니다", "확인이 필요해요", "정보가 없습니다"):
+                        continue
                 if len(content) > 500:
                     content = content[:500] + "..."
                 messages.append({"role": role, "content": content})
@@ -2311,18 +2504,26 @@ def get_llm_response_with_tools(
         _t_tooluse_start = time.time()
 
         # 도구 호출 반복 (최대 max_tool_iterations회)
+        _prev_had_tool_calls = True  # 첫 반복은 항상 도구 제공
+        _control_retry_count = 0  # 제어 재시도 횟수 (무한 루프 방지)
+        _empty_response_count = 0  # 빈 응답 연속 횟수
         for iteration in range(max_tool_iterations):
             logger.info(f"[Tool Use] --- 반복 {iteration + 1}/{max_tool_iterations} ---")
 
-            # LLM 호출 (도구 포함)
-            # 반복1: 도구 결정 → 긴 응답 허용 (NUM_PREDICT)
-            # 반복2+: 도구 결과 기반 답변 → 1536 토큰으로 제한
-            iter_num_predict = NUM_PREDICT if iteration == 0 else min(NUM_PREDICT, 1536)
+            # LLM 호출
+            # 이전 반복에서 도구 호출이 있었으면 → 다음에도 도구 제공 (다단계 호출 지원)
+            # 이전 반복에서 도구 호출이 없었으면 → 도구 제거 (최종 답변 생성)
+            if _prev_had_tool_calls:
+                iter_num_predict = 768 if iteration == 0 else min(NUM_PREDICT, 2048)
+                iter_tools = tools
+            else:
+                iter_num_predict = min(NUM_PREDICT, 2048)
+                iter_tools = None
             t_iter = time.time()
             response = _ollama_chat(
                 model=model_name,
                 messages=messages,
-                tools=tools,
+                tools=iter_tools,
                 options={
                     "temperature": temperature,
                     "top_p": 0.9,
@@ -2347,9 +2548,11 @@ def get_llm_response_with_tools(
             # 메시지 히스토리에 추가
             messages.append(assistant_message)
 
-            # 도구 호출이 없으면 최종 답변 반환
+            # 도구 호출 추출 및 상태 추적
             tool_calls = _extract_tool_calls(assistant_message)
             iter_elapsed = time.time() - t_iter
+            _prev_had_tool_calls = bool(tool_calls)
+
             if not tool_calls:
                 final_answer = assistant_message.get("content", "")
                 _tooluse_total_s = time.time() - _t_tooluse_start
@@ -2361,6 +2564,35 @@ def get_llm_response_with_tools(
                     f"[PERF:대화] ToolUse루프-LLM호출={iter_elapsed:.1f}s, "
                     f"ToolUse루프-전체={_tooluse_total_s:.1f}s (반복{iteration + 1})"
                 )
+
+                # 빈 응답 감지 (qwen3 thinking 모드에서 content="" 반환하는 경우)
+                if not final_answer.strip():
+                    _empty_response_count += 1
+                    if _empty_response_count <= 1 and iteration < max_tool_iterations - 1:
+                        logger.warning(
+                            f"[Tool Use] 빈 응답 감지 (반복{iteration + 1}) → 도구 호출 재시도 "
+                            f"(빈응답횟수={_empty_response_count})"
+                        )
+                        # 빈 응답 메시지 제거 후 도구 호출 유도
+                        messages.pop()  # 빈 assistant 메시지 제거
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                "도구를 호출하여 요청을 처리하세요. "
+                                "반드시 적절한 도구를 선택하고 호출해야 합니다."
+                            ),
+                        })
+                        _prev_had_tool_calls = True
+                        continue
+                    elif _empty_response_count > 1:
+                        logger.warning(
+                            f"[Tool Use] 빈 응답 {_empty_response_count}회 연속 → 루프 종료"
+                        )
+                        final_answer = "죄송합니다. 요청을 처리하지 못했습니다. 다시 시도해 주세요."
+                        return _build_structured_result(final_answer, _collected_sources, _tools_used)
+                else:
+                    _empty_response_count = 0  # 유효한 응답이면 카운터 리셋
+
                 _t_final = time.time()
                 finalized = _finalize_user_facing_answer(
                     model_name=model_name,
@@ -2370,6 +2602,46 @@ def get_llm_response_with_tools(
                 )
                 _final_s = time.time() - _t_final
                 logger.debug(f"[PERF:대화] 후처리(_finalize)={_final_s:.1f}s")
+
+                # 제어 키워드 검증: 제어 요청인데 control_relay가 호출되지 않은 경우
+                _control_keywords = ("제어", "켜", "끄", "중지", "가동", "작동", "동작", "정지", "on", "off")
+                # 파일/문서 관련 질문에서 제어 키워드가 파일명에 포함된 경우 오탐 방지
+                _file_context_keywords = ("파일", "학습", "요약", "내용", "문서", ".csv", ".txt", ".pdf", ".xlsx")
+                _is_file_query = any(fk in user_query for fk in _file_context_keywords)
+                _control_tools = {"control_relay"}
+                _has_control_intent = (
+                    any(kw in user_query for kw in _control_keywords)
+                    and not _is_file_query
+                )
+                _control_not_called = _has_control_intent and not _control_tools.intersection(_tools_used)
+
+                # 제어 미호출 + 아직 반복 여유 있고 + 재시도 2회 미만이면 → 재시도 지시
+                if _control_not_called and iteration < max_tool_iterations - 2 and _control_retry_count < 2:
+                    _control_retry_count += 1
+                    logger.warning(
+                        f"[Tool Use] 제어 키워드 감지({user_query[:50]}...) "
+                        f"그러나 control_relay 미호출 → 재시도 지시 (반복{iteration + 1}, "
+                        f"재시도횟수={_control_retry_count}/2)"
+                    )
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "위 답변에서 장치 제어를 수행했다고 했지만, 실제로 control_relay 도구가 호출되지 않았습니다. "
+                            "반드시 control_relay 또는 control_relays_batch 도구를 호출하여 실제로 장치를 제어하세요. "
+                            "도구를 호출하지 않고 제어했다고 답변하는 것은 금지입니다."
+                        ),
+                    })
+                    _prev_had_tool_calls = True  # 다음 반복에서 도구 제공
+                    continue
+                elif _control_not_called:
+                    logger.warning(
+                        f"[Tool Use] 제어 키워드 감지({user_query[:50]}...) "
+                        f"그러나 control_relay 미호출 → 할루시네이션 가능성 "
+                        f"(재시도 한도 초과: {_control_retry_count}회)"
+                    )
+
+                _verified_urls = {s.get("url", "") for s in _collected_sources if s.get("url")}
+                finalized = _strip_hallucinated_urls(finalized, _verified_urls)
                 text_with_sources = _append_source_urls(finalized, _collected_sources)
                 return _build_structured_result(text_with_sources, _collected_sources, _tools_used)
 
@@ -2443,6 +2715,8 @@ def get_llm_response_with_tools(
                     farm_name=farm_name,
                     raw_answer=msg.get("content", "죄송합니다. 응답을 완료할 수 없습니다."),
                 )
+                _verified_urls = {s.get("url", "") for s in _collected_sources if s.get("url")}
+                finalized = _strip_hallucinated_urls(finalized, _verified_urls)
                 text_with_sources = _append_source_urls(finalized, _collected_sources)
                 return _build_structured_result(text_with_sources, _collected_sources, _tools_used)
             elif hasattr(msg, 'content') and hasattr(msg, 'role'):
@@ -2453,6 +2727,8 @@ def get_llm_response_with_tools(
                         farm_name=farm_name,
                         raw_answer=msg.content,
                     )
+                    _verified_urls = {s.get("url", "") for s in _collected_sources if s.get("url")}
+                    finalized = _strip_hallucinated_urls(finalized, _verified_urls)
                     text_with_sources = _append_source_urls(finalized, _collected_sources)
                     return _build_structured_result(text_with_sources, _collected_sources, _tools_used)
 

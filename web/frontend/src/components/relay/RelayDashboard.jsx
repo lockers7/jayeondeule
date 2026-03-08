@@ -2,17 +2,36 @@ import {useQuery, useMutation, useQueryClient} from "@tanstack/react-query";
 import {useEffect, useState} from "react";
 import {Row, Col, Card, Form, OverlayTrigger, Tooltip} from "react-bootstrap";
 import {InfoCircle} from "react-bootstrap-icons";
+import axios from "axios";
 
 import {getRelayStatus, patchRelayStatus} from "../../utils/relayUtil.js";
 import {patchHouse} from "../../utils/houseUtil.js";
 import RelayCard from "./RelayCard.jsx";
+import AiJudgmentModal from "./AiJudgmentModal.jsx";
 import LoadingPage from "../../pages/common/LoadingPage.jsx";
 import ErrorPage from "../../pages/common/ErrorPage.jsx";
+
+const AI_API_BASE = "/ai-api";
+
+async function fetchAiJudgment(farmId, houseId) {
+    try {
+        const res = await axios.get(`${AI_API_BASE}/api/v1/ai-judgment/${farmId}/${houseId}`, {timeout: 5000});
+        if (res.data && res.data.success) {
+            return res.data;
+        }
+    } catch (e) {
+        console.warn("AI 판단 조회 실패:", e.message);
+    }
+    return null;
+}
 
 export default function RelayDashboard({farmId, house, setSelectedHouse}) {
     const queryClient = useQueryClient();
 
     const [relayLabels, setRelayLabels] = useState([]);
+    const [showAiModal, setShowAiModal] = useState(false);
+    const [aiJudgment, setAiJudgment] = useState(null);
+    const [toggledDeviceLabel, setToggledDeviceLabel] = useState("");
 
     useEffect(() => {
         if (farmId == 1 && house.housId == 2) {
@@ -64,11 +83,30 @@ export default function RelayDashboard({farmId, house, setSelectedHouse}) {
         onSuccess: () => queryClient.invalidateQueries(["relayStatus", farmId, house.housId]),
     });
 
-    const handleToggleRelay = (relayNum) => {
+    const handleToggleRelay = async (relayNum) => {
         const key = `relay${relayNum}stFlag`;
-        const updatedStatus = {...relayStatus, [key]: !relayStatus[key]};
+        const currentValue = relayStatus[key];
+        const newValue = !currentValue;
+        const updatedStatus = {...relayStatus, [key]: newValue};
+
+        // 토글된 장치 라벨 찾기
+        const item = relayLabels.find(r => r.num === relayNum);
+        const deviceLabel = item ? item.label : `릴레이 ${relayNum}`;
+        const actionLabel = newValue ? "ON" : "OFF";
+
+        // 낙관적 업데이트 + 릴레이 토글
         queryClient.setQueryData(["relayStatus", farmId, house.housId], updatedStatus);
         toggleRelayMutation.mutate(updatedStatus);
+
+        // 수동 모드에서만 AI 판단 팝업 표시
+        if (!house.mnulCtrlFlag) {
+            setToggledDeviceLabel(`${deviceLabel} → ${actionLabel}`);
+            const judgment = await fetchAiJudgment(farmId, house.housId);
+            if (judgment) {
+                setAiJudgment(judgment);
+                setShowAiModal(true);
+            }
+        }
     };
 
     // 수동/자동 모드 mutation
@@ -125,6 +163,14 @@ export default function RelayDashboard({farmId, house, setSelectedHouse}) {
                     />
                 ))}
             </Row>
+
+            {/* AI 판단 팝업 모달 */}
+            <AiJudgmentModal
+                show={showAiModal}
+                onHide={() => setShowAiModal(false)}
+                judgment={aiJudgment}
+                toggledDevice={toggledDeviceLabel}
+            />
         </div>
     );
 }

@@ -257,7 +257,7 @@ def _background_enrich(document_content, metadata, document_type, crop_name, fil
 # Returns:
 # dict: 처리 결과
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def llm_document_process(file_path=None, text_content=None, farm_id=None):
+def llm_document_process(file_path=None, text_content=None, farm_id=None, original_name=None):
     import time as _time
     _t_doc_start = _time.time()
 
@@ -309,10 +309,18 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None):
 
         logger.debug(f"문서 유형 감지: {document_type}" + (f", 작물: {crop_name}" if crop_name else ""))
 
+        # UUID 접두사 제거하여 원본 파일명 추출 (8자리hex_원본명 패턴)
+        _orig_name = original_name
+        if not _orig_name and filename:
+            import re as _re
+            _m = _re.match(r'^[0-9a-f]{8}_(.+)$', filename)
+            _orig_name = _m.group(1) if _m else filename
+
         # 메타데이터 구성
         metadata = {
             "document_type": document_type,
-            "file_name": filename,
+            "file_name": _orig_name or filename,
+            "file_name_stored": filename,
             "file_extension": os.path.splitext(filename)[1].lower() if filename else "",
             "file_size": file_size,
             "processing_date": datetime.now().strftime("%Y-%m-%d"),
@@ -372,7 +380,7 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None):
         if document_type in ('crop_info', 'disease_info'):
             try:
                 _store_crop_chunks_to_farm_knowledge(
-                    document_content, metadata, document_type, crop_name, filename, farm_id
+                    document_content, metadata, document_type, crop_name, _orig_name or filename, farm_id
                 )
             except Exception as e:
                 logger.warning(f"[문서학습] farm_knowledge 이중 저장 실패 (document 저장은 유지): {e}")
@@ -435,7 +443,10 @@ def process_attached_files(file_paths, farm_id):
                 results_summary.append(msg)
                 continue
 
-            result = llm_document_process(file_path=file_path, farm_id=farm_id)
+            result = llm_document_process(
+                file_path=file_path, farm_id=farm_id,
+                original_name=file_info.get("original_name"),
+            )
 
             if result["success"]:
                 success_count += 1
@@ -447,7 +458,9 @@ def process_attached_files(file_paths, farm_id):
 
                 doc_type_label = DOC_TYPE_LABELS.get(doc_type, doc_type)
 
-                msg = f"✓ '{filename}' → {chunks_count}개 청크 저장"
+                # 응답 메시지에는 원본 파일명 표시
+                _display_name = file_info.get("original_name") or filename
+                msg = f"✓ '{_display_name}' → {chunks_count}개 청크 저장"
                 msg += f" | 문서유형: {doc_type_label}"
                 if crop_name:
                     msg += f" | 작물: {crop_name}"
@@ -462,16 +475,18 @@ def process_attached_files(file_paths, farm_id):
                 results_summary.append(msg)
             else:
                 error = result.get("error", "알 수 없는 오류")
-                msg = f"파일 '{filename}' 처리 실패: {error}"
+                _display_name = file_info.get("original_name") or filename
+                msg = f"파일 '{_display_name}' 처리 실패: {error}"
                 logger.error(msg)
-                failed_files.append({"filename": filename, "error": error})
+                failed_files.append({"filename": _display_name, "error": error})
                 results_summary.append(msg)
 
         except Exception as e:
-            msg = f"파일 '{filename}' 처리 중 예외 발생: {str(e)}"
+            _display_name = file_info.get("original_name") or filename
+            msg = f"파일 '{_display_name}' 처리 중 예외 발생: {str(e)}"
             logger.error(msg)
             logger.error(traceback.format_exc())
-            failed_files.append({"filename": filename, "error": str(e)})
+            failed_files.append({"filename": _display_name, "error": str(e)})
             results_summary.append(msg)
 
     # 결과 메시지 생성

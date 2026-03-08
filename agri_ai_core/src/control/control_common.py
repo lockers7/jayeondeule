@@ -13,6 +13,7 @@
 # format_relay_off_str: OFF 상태 릴레이 포맷 문자열
 # format_device_decision: 장치 결정 ON/OFF 문자열
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+import os
 
 
 # ============================================================
@@ -103,6 +104,66 @@ SEMANTIC_LABELS = {
     'radiator_flag': '라디에이터',
 }
 
+# 한글 별칭 → 시멘틱 flag 매핑 (Web UI 이름, 사용자 구어체 등)
+DEVICE_ALIASES = {
+    # water_heater_flag 별칭
+    '수온히터': 'water_heater_flag',
+    '물가열기': 'water_heater_flag',
+    '칠러': 'water_heater_flag',
+    '칠러1': 'water_heater_flag',
+    '칠러Ⅰ': 'water_heater_flag',
+    # fog_occurs_flag 별칭
+    '포그생성': 'fog_occurs_flag',
+    '포그': 'fog_occurs_flag',
+    '분사펌프': 'fog_occurs_flag',
+    '순환모터': 'fog_occurs_flag',
+    # drainage_motor_flag 별칭
+    '배수밸브': 'drainage_motor_flag',
+    '배수': 'drainage_motor_flag',
+    # intake_fan_flag 별칭
+    '흡입팬': 'intake_fan_flag',
+    '흡기팬': 'intake_fan_flag',
+    '흡입': 'intake_fan_flag',
+    # exhaust_fan_flag 별칭
+    '배출팬': 'exhaust_fan_flag',
+    '배기팬': 'exhaust_fan_flag',
+    '배출': 'exhaust_fan_flag',
+    # lighting_flag 별칭
+    '조명': 'lighting_flag',
+    # irrigation_flag 별칭
+    '관수': 'irrigation_flag',
+    # indoor_heater_flag 별칭
+    '실내히터': 'indoor_heater_flag',
+    '열풍기': 'indoor_heater_flag',
+    '히터': 'indoor_heater_flag',
+    # indoor_heater_valve_flag 별칭
+    '히터밸브': 'indoor_heater_valve_flag',
+    '열풍댐퍼': 'indoor_heater_valve_flag',
+    '히터댐퍼': 'indoor_heater_valve_flag',
+    # air_circulation_valve_flag 별칭
+    '순환밸브': 'air_circulation_valve_flag',
+    '순환댐퍼': 'air_circulation_valve_flag',
+    # air_intake_valve_flag 별칭
+    '흡입밸브': 'air_intake_valve_flag',
+    '흡기밸브': 'air_intake_valve_flag',
+    '흡기댐퍼': 'air_intake_valve_flag',
+    # air_exhaust_valve_flag 별칭
+    '배출밸브': 'air_exhaust_valve_flag',
+    '배기밸브': 'air_exhaust_valve_flag',
+    '배기댐퍼': 'air_exhaust_valve_flag',
+    # radiator_flag 별칭
+    '라디에이터': 'radiator_flag',
+}
+
+def resolve_device_alias(name):
+    """장치명 또는 한글 별칭을 시멘틱 flag 이름으로 변환.
+    이미 flag 이름이면 그대로 반환, 한글이면 DEVICE_ALIASES에서 조회."""
+    if not name:
+        return name
+    if name in SEMANTIC_LABELS:
+        return name
+    return DEVICE_ALIASES.get(name, name)
+
 
 # ============================================================
 # 순환 모드 정의 (댐퍼 → 15초 후 → 팬)
@@ -164,6 +225,43 @@ CIRCULATION_MODES = {
         },
     },
 }
+
+
+# ============================================================
+# LLM 제어 잠금 (자동제어 스케줄러 충돌 방지)
+# LLM이 릴레이를 제어한 후 일정 시간 동안 해당 재배사의 자동제어를 억제
+# ============================================================
+import threading
+from datetime import datetime, timedelta
+
+_LLM_LOCK_DURATION_SEC = int(os.environ.get("LLM_RELAY_LOCK_SEC", "60"))
+_llm_relay_locks = {}  # key: (farm_id, house_id) → value: datetime (잠금 만료 시각)
+_llm_lock_mutex = threading.Lock()
+
+
+def set_llm_relay_lock(farm_id, house_id, duration_sec=None):
+    if duration_sec is None:
+        duration_sec = _LLM_LOCK_DURATION_SEC
+    key = (str(farm_id), str(house_id))
+    with _llm_lock_mutex:
+        _llm_relay_locks[key] = datetime.now() + timedelta(seconds=duration_sec)
+
+
+def is_llm_relay_locked(farm_id, house_id):
+    key = (str(farm_id), str(house_id))
+    with _llm_lock_mutex:
+        expire = _llm_relay_locks.get(key)
+        if expire and datetime.now() < expire:
+            return True
+        if expire:
+            del _llm_relay_locks[key]
+        return False
+
+
+def clear_llm_relay_lock(farm_id, house_id):
+    key = (str(farm_id), str(house_id))
+    with _llm_lock_mutex:
+        _llm_relay_locks.pop(key, None)
 
 
 # ============================================================

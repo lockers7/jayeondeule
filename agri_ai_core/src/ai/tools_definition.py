@@ -79,6 +79,41 @@ def get_available_tools() -> List[Dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "control_relay",
+                "description": "재배사의 릴레이(장치)를 제어합니다. 단건 제어: device_name+action 사용. 일괄 제어: mode 사용 (reverse_all=전체반전, all_on=전체켜기, all_off=전체끄기). 반드시 먼저 get_farm_realtime_data로 현재 상태를 확인한 후 사용하세요.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "farm_id": {
+                            "type": "string",
+                            "description": "농장 ID (선택사항)"
+                        },
+                        "house_id": {
+                            "type": "string",
+                            "description": "재배사 ID (예: '1재배사' → '1')"
+                        },
+                        "device_name": {
+                            "type": "string",
+                            "description": "단건 제어 시 장치명 (relay_mapping의 device 값 사용)"
+                        },
+                        "action": {
+                            "type": "string",
+                            "description": "단건 제어 동작 (on: 켜기, off: 끄기)",
+                            "enum": ["on", "off"]
+                        },
+                        "mode": {
+                            "type": "string",
+                            "description": "일괄 제어 모드. reverse_all: 전체 반전, all_on: 전체 켜기, all_off: 전체 끄기",
+                            "enum": ["reverse_all", "all_on", "all_off"]
+                        }
+                    },
+                    "required": ["house_id"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "search_web",
                 "description": "인터넷에서 최신 정보를 검색합니다. 날씨/뉴스/환율/주가/맛집/장소 추천/가격/제품 정보 등 실제 데이터가 필요한 질문에 우선 사용합니다. Google, Naver, Daum, DuckDuckGo, Bing 5개 검색엔진을 통합 검색합니다.",
                 "parameters": {
@@ -136,7 +171,11 @@ def get_system_prompt_with_tools(farm_name: str = None, farm_info: str = None) -
 
     farm_info_section = f"\n\n**농장 기본 정보:**\n{farm_info}" if farm_info else ""
 
-    return f"""당신은 {farm_display}를 운영하는 농장주를 지원하는 AI 도우미입니다.
+    # 을/를 조사 자동 결정 (받침 유무)
+    last_char = farm_display[-1] if farm_display else ""
+    josa = "을" if last_char and (ord(last_char) - 0xAC00) % 28 > 0 else "를"
+
+    return f"""당신은 {farm_display}{josa} 운영하는 농장주를 지원하는 AI 도우미입니다.
 **현재:** {current_datetime}{farm_info_section}
 
 **말투 (절대 규칙):**
@@ -147,12 +186,26 @@ def get_system_prompt_with_tools(farm_name: str = None, farm_info: str = None) -
 
 **도구 사용 규칙:**
 1. 농장/센서/릴레이/생육 질문: `get_farm_realtime_data`+`search_farm_knowledge` 반드시 모두 사용합니다. 수치/상태 추측은 금지합니다.
+   - **다중 재배사 질문 (절대 규칙)**: "각 재배사", "전체", "모든 재배사" 등 복수 재배사 요청 시 반드시 **모든 재배사**(1호, 2호, 3호)에 대해 각각 도구를 호출해야 합니다. 일부 재배사만 응답하는 것은 금지합니다.
+   - 도구 결과에 포함된 **모든 데이터**(센서값, 릴레이 상태)를 빠짐없이 답변에 포함해야 합니다. 데이터를 생략하거나 일부만 표시하는 것은 금지합니다.
 2. 파일/문서/학습/RAG/데이터/요약/내용/정리 관련 질문: `search_farm_knowledge` 반드시 사용합니다. 파일명이 포함된 질문은 해당 파일명을 query와 file_name 파라미터에 넣어 반드시 검색합니다. "없다/모른다" 답변 전에 반드시 도구로 검색해야 합니다.
 3. 사실·조사·검색 요청(주소/가격/찾아줘/알아봐줘/설명해줘/알려줘): `search_farm_knowledge` → 부족하면 `search_web` 사용합니다. 도구 없이 추측 답변은 절대 금지합니다.
 4. 일반 정보(날씨/뉴스/환율/맛집/최신): `search_web` 반드시 사용합니다.
 5. 인사/감정/의견: 도구 없이 응답 가능합니다.
 6. 애매하면 도구를 더 사용합니다. 확인 안 된 정보는 "확인이 필요합니다"로 답변합니다.
 7. **절대 금지**: 도구를 호출하지 않고 "정보가 없습니다/확인되지 않았습니다"라고 답변하는 것은 금지합니다. 반드시 먼저 도구로 검색한 후 답변하세요.
+8. **장치 제어(켜기/끄기/중지/가동/작동) 요청**: 반드시 `control_relay` 도구를 호출하여 실제로 제어해야 합니다. 도구를 호출하지 않고 "중지했습니다/켰습니다" 등의 답변은 절대 금지합니다.
+   - 먼저 `get_farm_realtime_data`(data_type='relay')로 현재 상태를 확인합니다.
+   - 제어가 필요하면 `control_relay`로 실제 제어를 수행합니다.
+   - `control_relay` 결과의 success 값을 확인하고, 성공/실패 여부를 정확히 답변합니다.
+   - 장치명 매핑: 흡입팬/흡기팬=intake_fan_flag, 배출팬/배기팬=exhaust_fan_flag, 수온히터/물가열기/칠러=water_heater_flag, 포그생성/분사펌프/순환모터=fog_occurs_flag, 배수밸브=drainage_motor_flag, 조명=lighting_flag, 관수=irrigation_flag, 실내히터/열풍기=indoor_heater_flag, 히터밸브/열풍댐퍼=indoor_heater_valve_flag, 순환밸브/순환댐퍼=air_circulation_valve_flag, 흡입밸브/흡기댐퍼=air_intake_valve_flag, 배출밸브/배기댐퍼=air_exhaust_valve_flag, 라디에이터=radiator_flag
+   - 전체 반전/전체 ON/OFF가 필요하면 `control_relay`에 mode를 사용합니다. 전체 반전은 mode='reverse_all', 전체 켜기는 mode='all_on', 전체 끄기는 mode='all_off'로 호출합니다.
+   - **AI 환경 판단 정보 (필수 출력)**: `control_relay` 결과에 `ai_judgment`(현재 센서 기반 AI 권장)와 `ai_conflict`(수동 제어와 AI 권장의 차이)가 포함됩니다. 반드시 다음 형식으로 답변에 포함하세요:
+     * "📊 AI 환경 판단: [reason]"
+     * "🌡️ 현재 센서: [sensor]"
+     * "✅ AI 권장: [device_summary], 순환모드: [circulation]"
+     * `ai_conflict`가 있으면 반드시 "⚠️ 주의: [conflict 내용]" 형식으로 차이점을 명확히 안내하세요. 예: "AI는 물가열기 OFF를 권장하지만, 수동으로 ON 설정하셨습니다."
+     * `ai_conflict`가 없으면 "✅ 수동 제어가 AI 권장과 일치합니다."로 안내하세요.
 
 **웹 검색 절차:**
 - `search_web` 결과의 `page_content` 우선 활용, 부족하면 `fetch_url_content`로 본문을 읽습니다.
