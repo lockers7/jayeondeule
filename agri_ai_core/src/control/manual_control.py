@@ -588,116 +588,131 @@ def _control_budding(farm_id, house_id, indoor_temp, current_relay, order_label=
 
 
 # ============================================================
+# 공통 환경판단 로직
+# get_ai_environment_judgment()와 control_manual_environment()가 공유
+# ============================================================
+def _determine_environment_action(sensor_data, growth_stage, farm_id, house_id):
+    """센서 데이터 기반으로 장치/순환모드를 결정하고 판단 결과를 반환한다.
+
+    Returns:
+        dict: {
+            "sensor": str, "growth_stage": str, "reason": str,
+            "devices": dict, "circulation": str|None,
+            "device_summary": str,
+            "is_emergency": bool, "water_temp_only": bool,
+            "in_cooldown": bool,
+        } 또는 센서 부족 시 None
+    """
+    indoor_temp = sensor_data.get('indoor_temperature')
+    indoor_humidity = sensor_data.get('indoor_humidity')
+    outdoor_temp = sensor_data.get('outdoor_temperature')
+    outdoor_humidity = sensor_data.get('outdoor_humidity')
+    co2 = sensor_data.get('co2')
+
+    sensor_str = format_sensor_parts(sensor_data)
+
+    # (1) 비상제어 판단
+    is_emergency, emergency_devices, emergency_circulation, water_temp_only = _check_emergency(sensor_data)
+    if is_emergency:
+        if water_temp_only:
+            water_on = emergency_devices.get('water_heater_flag', False)
+            return {
+                "sensor": sensor_str, "growth_stage": growth_stage,
+                "reason": f"수온비상_물가열기{'ON' if water_on else 'OFF'}",
+                "devices": emergency_devices, "circulation": None,
+                "device_summary": format_device_decision(emergency_devices),
+                "is_emergency": True, "water_temp_only": True, "in_cooldown": False,
+            }
+        return {
+            "sensor": sensor_str, "growth_stage": growth_stage,
+            "reason": "비상제어",
+            "devices": emergency_devices, "circulation": emergency_circulation,
+            "device_summary": format_device_decision(emergency_devices),
+            "is_emergency": True, "water_temp_only": False, "in_cooldown": False,
+        }
+
+    # (2) 발이기 판단
+    if growth_stage == '발이기':
+        if indoor_temp is None:
+            return None
+        if indoor_temp < BUDDING_TEMP_LOW:
+            devices = {'water_heater_flag': True, 'fog_occurs_flag': False, 'indoor_heater_flag': True, 'indoor_heater_valve_flag': True}
+            return {"sensor": sensor_str, "growth_stage": growth_stage, "reason": "발이기_가열", "devices": devices, "circulation": "내부순환", "device_summary": format_device_decision(devices), "is_emergency": False, "water_temp_only": False, "in_cooldown": False}
+        if indoor_temp > BUDDING_TEMP_HIGH:
+            devices = {'water_heater_flag': False, 'fog_occurs_flag': False, 'indoor_heater_flag': False, 'indoor_heater_valve_flag': False}
+            return {"sensor": sensor_str, "growth_stage": growth_stage, "reason": "발이기_냉각", "devices": devices, "circulation": "배기순환", "device_summary": format_device_decision(devices), "is_emergency": False, "water_temp_only": False, "in_cooldown": False}
+        devices = {'water_heater_flag': False, 'fog_occurs_flag': False, 'indoor_heater_flag': False, 'indoor_heater_valve_flag': False}
+        return {"sensor": sensor_str, "growth_stage": growth_stage, "reason": "발이기_정상", "devices": devices, "circulation": "순환정지", "device_summary": format_device_decision(devices), "is_emergency": False, "water_temp_only": False, "in_cooldown": False}
+
+    # (3) 외부정상 + 내부비정상 → 외부순환
+    if _is_external_normal(outdoor_temp, outdoor_humidity) and _is_internal_abnormal(indoor_temp, indoor_humidity, co2):
+        devices = {'water_heater_flag': False, 'fog_occurs_flag': False, 'indoor_heater_flag': False, 'indoor_heater_valve_flag': False}
+        return {"sensor": sensor_str, "growth_stage": growth_stage, "reason": "외부정상+내부비정상", "devices": devices, "circulation": "외부순환", "device_summary": format_device_decision(devices), "is_emergency": False, "water_temp_only": False, "in_cooldown": False}
+
+    # (4) 64케이스
+    temp_state = _classify(indoor_temp, TEMP_LOW, TEMP_HIGH)
+    humidity_state = _classify(indoor_humidity, HUMIDITY_LOW, HUMIDITY_HIGH)
+    co2_state = _classify(co2, CO2_LOW, CO2_HIGH)
+    ext_temp_state = 'normal' if (outdoor_temp is not None and TEMP_LOW <= outdoor_temp <= TEMP_HIGH) else 'abnormal'
+    ext_humidity_state = 'normal' if (outdoor_humidity is not None and HUMIDITY_LOW <= outdoor_humidity <= HUMIDITY_HIGH) else 'abnormal'
+    ext_co2_state = 'normal'
+
+    water_heater, fog_pump, heater, heater_damper = _determine_devices(temp_state, humidity_state)
+
+    heater_available, in_cooldown = _check_heater_cooldown(farm_id, house_id)
+    if not heater_available and heater:
+        heater = False
+        heater_damper = False
+
+    circulation_mode = _determine_circulation(temp_state, ext_temp_state, humidity_state, ext_humidity_state, co2_state, ext_co2_state)
+
+    harvest_mode = (growth_stage == '수확기')
+    if harvest_mode and circulation_mode == '내부순환':
+        circulation_mode = '배기순환'
+
+    devices = {
+        'water_heater_flag': water_heater,
+        'fog_occurs_flag': fog_pump,
+        'indoor_heater_flag': heater,
+        'indoor_heater_valve_flag': heater_damper,
+    }
+
+    reason = f"64케이스(온도:{temp_state},습도:{humidity_state},CO2:{co2_state})"
+    if in_cooldown:
+        reason += " [열풍기쿨다운]"
+
+    return {
+        "sensor": sensor_str, "growth_stage": growth_stage,
+        "reason": reason,
+        "devices": devices, "circulation": circulation_mode,
+        "device_summary": format_device_decision(devices),
+        "is_emergency": False, "water_temp_only": False, "in_cooldown": in_cooldown,
+    }
+
+
+# ============================================================
 # AI 환경 판단 (제어 없이 판단만 수행)
 # 수동 릴레이 제어 시 전/후 AI 판단을 제공하기 위한 함수
 # ============================================================
 def get_ai_environment_judgment(farm_id, house_id):
-    """현재 센서값 기반으로 알고리즘이 판단하는 최적 릴레이 상태를 반환 (실제 제어 없음).
-
-    Returns:
-        dict: {
-            "sensor": "온도 28.5℃, 습도 80%, ...",
-            "growth_stage": "생육기",
-            "reason": "64케이스(온도:normal,...)",
-            "devices": {"water_heater_flag": True, ...},
-            "circulation": "내부순환",
-            "device_summary": "ON=[물가열기], OFF=[분사펌프, ...]",
-        } 또는 실패 시 None
-    """
+    """현재 센서값 기반으로 알고리즘이 판단하는 최적 릴레이 상태를 반환 (실제 제어 없음)."""
     try:
         sensor_data = read_current_sensor_info(farm_id, house_id)
         if not sensor_data:
             return None
 
         growth_stage = read_current_growth_stage(farm_id, house_id) or '생육기'
-
-        indoor_temp = sensor_data.get('indoor_temperature')
-        indoor_humidity = sensor_data.get('indoor_humidity')
-        outdoor_temp = sensor_data.get('outdoor_temperature')
-        outdoor_humidity = sensor_data.get('outdoor_humidity')
-        co2 = sensor_data.get('co2')
-
-        sensor_str = format_sensor_parts(sensor_data)
-
-        # (1) 비상제어 판단
-        is_emergency, emergency_devices, emergency_circulation, water_temp_only = _check_emergency(sensor_data)
-        if is_emergency:
-            if water_temp_only:
-                water_on = emergency_devices.get('water_heater_flag', False)
-                return {
-                    "sensor": sensor_str,
-                    "growth_stage": growth_stage,
-                    "reason": f"수온비상_물가열기{'ON' if water_on else 'OFF'}",
-                    "devices": emergency_devices,
-                    "circulation": None,
-                    "device_summary": format_device_decision(emergency_devices),
-                }
-            return {
-                "sensor": sensor_str,
-                "growth_stage": growth_stage,
-                "reason": "비상제어",
-                "devices": emergency_devices,
-                "circulation": emergency_circulation,
-                "device_summary": format_device_decision(emergency_devices),
-            }
-
-        # (2) 발이기 판단
-        if growth_stage == '발이기':
-            if indoor_temp is None:
-                return None
-            if indoor_temp < BUDDING_TEMP_LOW:
-                devices = {'water_heater_flag': True, 'fog_occurs_flag': False, 'indoor_heater_flag': True, 'indoor_heater_valve_flag': True}
-                return {"sensor": sensor_str, "growth_stage": growth_stage, "reason": "발이기_가열", "devices": devices, "circulation": "내부순환", "device_summary": format_device_decision(devices)}
-            if indoor_temp > BUDDING_TEMP_HIGH:
-                devices = {'water_heater_flag': False, 'fog_occurs_flag': False, 'indoor_heater_flag': False, 'indoor_heater_valve_flag': False}
-                return {"sensor": sensor_str, "growth_stage": growth_stage, "reason": "발이기_냉각", "devices": devices, "circulation": "배기순환", "device_summary": format_device_decision(devices)}
-            devices = {'water_heater_flag': False, 'fog_occurs_flag': False, 'indoor_heater_flag': False, 'indoor_heater_valve_flag': False}
-            return {"sensor": sensor_str, "growth_stage": growth_stage, "reason": "발이기_정상", "devices": devices, "circulation": "순환정지", "device_summary": format_device_decision(devices)}
-
-        # (3) 외부정상 + 내부비정상 → 외부순환
-        if _is_external_normal(outdoor_temp, outdoor_humidity) and _is_internal_abnormal(indoor_temp, indoor_humidity, co2):
-            devices = {'water_heater_flag': False, 'fog_occurs_flag': False, 'indoor_heater_flag': False, 'indoor_heater_valve_flag': False}
-            return {"sensor": sensor_str, "growth_stage": growth_stage, "reason": "외부정상+내부비정상", "devices": devices, "circulation": "외부순환", "device_summary": format_device_decision(devices)}
-
-        # (4) 64케이스
-        temp_state = _classify(indoor_temp, TEMP_LOW, TEMP_HIGH)
-        humidity_state = _classify(indoor_humidity, HUMIDITY_LOW, HUMIDITY_HIGH)
-        co2_state = _classify(co2, CO2_LOW, CO2_HIGH)
-        ext_temp_state = 'normal' if (outdoor_temp is not None and TEMP_LOW <= outdoor_temp <= TEMP_HIGH) else 'abnormal'
-        ext_humidity_state = 'normal' if (outdoor_humidity is not None and HUMIDITY_LOW <= outdoor_humidity <= HUMIDITY_HIGH) else 'abnormal'
-        ext_co2_state = 'normal'
-
-        water_heater, fog_pump, heater, heater_damper = _determine_devices(temp_state, humidity_state)
-
-        heater_available, in_cooldown = _check_heater_cooldown(farm_id, house_id)
-        if not heater_available and heater:
-            heater = False
-            heater_damper = False
-
-        circulation_mode = _determine_circulation(temp_state, ext_temp_state, humidity_state, ext_humidity_state, co2_state, ext_co2_state)
-
-        harvest_mode = (growth_stage == '수확기')
-        if harvest_mode and circulation_mode == '내부순환':
-            circulation_mode = '배기순환'
-
-        devices = {
-            'water_heater_flag': water_heater,
-            'fog_occurs_flag': fog_pump,
-            'indoor_heater_flag': heater,
-            'indoor_heater_valve_flag': heater_damper,
-        }
-
-        reason = f"64케이스(온도:{temp_state},습도:{humidity_state},CO2:{co2_state})"
-        if in_cooldown:
-            reason += " [열풍기쿨다운]"
+        result = _determine_environment_action(sensor_data, growth_stage, farm_id, house_id)
+        if not result:
+            return None
 
         return {
-            "sensor": sensor_str,
-            "growth_stage": growth_stage,
-            "reason": reason,
-            "devices": devices,
-            "circulation": circulation_mode,
-            "device_summary": format_device_decision(devices),
+            "sensor": result["sensor"],
+            "growth_stage": result["growth_stage"],
+            "reason": result["reason"],
+            "devices": result["devices"],
+            "circulation": result["circulation"],
+            "device_summary": result["device_summary"],
         }
 
     except Exception as e:
@@ -711,130 +726,60 @@ def get_ai_environment_judgment(farm_id, house_id):
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 환경제어 메인 함수
-# 제어 흐름:
-# 1. 센서 데이터 조회
-# 2. 비상제어 체크 (모든 생육단계 공통 최우선)
-# 3. 생육단계 분기 (발이기 → 별도 제어)
-# 4. 열풍기 쿨다운 체크
-# 5. 외부정상+내부비정상 → 외부순환
-# 6. 64케이스 진입
-# 7. 2단계 릴레이 쓰기 (댐퍼→15초→팬)
+# 제어 흐름: 센서 조회 → _determine_environment_action() 판단 → _execute_control() 실행
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def control_manual_environment(farm_id, house_id, growth_stage='생육기', order_label=""):
     try:
         scope = _house_prefix(order_label, farm_id, house_id)
-        # 센서 데이터 조회
         sensor_data = read_current_sensor_info(farm_id, house_id)
         if not sensor_data:
             logger.info(f"{scope}: 센서 데이터 없음")
             return {"success": False, "message": "센서 데이터 없음"}
 
-        # 현재 릴레이 상태 조회 (조명/관수 보존용)
         current_relay = read_latest_relay_info(farm_id, house_id)
-
-        # 센서값 추출
-        indoor_temp = sensor_data.get('indoor_temperature')
-        indoor_humidity = sensor_data.get('indoor_humidity')
-        outdoor_temp = sensor_data.get('outdoor_temperature')
-        outdoor_humidity = sensor_data.get('outdoor_humidity')
-        co2 = sensor_data.get('co2')
-
-        # ================================================================
-        # (1) 비상제어 (임계값 이탈) - 모든 생육단계 공통 최우선
-        # ================================================================
-        is_emergency, emergency_devices, emergency_circulation, water_temp_only = _check_emergency(sensor_data)
-
         harvest_mode = (growth_stage == '수확기')
 
-        if is_emergency:
-            if water_temp_only:
+        # 공통 판단 로직 호출
+        action = _determine_environment_action(sensor_data, growth_stage, farm_id, house_id)
+        if not action:
+            logger.info(f"{scope}: 판단 불가 (센서 부족)")
+            return {"success": False, "message": "판단 불가"}
+
+        # 비상제어 처리
+        if action["is_emergency"]:
+            if action["water_temp_only"]:
                 return _execute_water_temp_emergency(
                     farm_id, house_id,
-                    emergency_devices.get('water_heater_flag', False),
+                    action["devices"].get('water_heater_flag', False),
                     current_relay, harvest_mode, order_label=order_label
                 )
-            # 비상제어 시 열풍기 쿨다운 상태 초기화 (비상이 쿨다운보다 우선)
-            if emergency_devices.get('indoor_heater_flag', False):
+            if action["devices"].get('indoor_heater_flag', False):
                 _reset_heater_cooldown(farm_id, house_id, order_label=order_label)
             logger.info(f"{scope}: 비상제어 발동")
             return _execute_control(
-                farm_id, house_id, emergency_devices, emergency_circulation,
+                farm_id, house_id, action["devices"], action["circulation"],
                 current_relay, harvest_mode, reason="비상제어", order_label=order_label
             )
 
-        # ================================================================
-        # (2) 생육단계 분기 (발이기)
-        # ================================================================
+        # 발이기 제어 (별도 실행 로직)
         if growth_stage == '발이기':
+            indoor_temp = sensor_data.get('indoor_temperature')
             return _control_budding(farm_id, house_id, indoor_temp, current_relay, order_label=order_label)
 
-        # ================================================================
-        # (3) 열풍기 쿨다운 체크
-        # ================================================================
-        heater_available, in_cooldown = _check_heater_cooldown(farm_id, house_id)
-        if in_cooldown:
+        # 열풍기 쿨다운 로깅
+        if action["in_cooldown"]:
             logger.info(f"{scope}: 열풍기 쿨다운 중 (5분)")
+            if action["devices"].get('indoor_heater_flag') is False:
+                logger.info(f"{scope}: 열풍기 쿨다운 → 열풍기 제외 제어")
 
-        # ================================================================
-        # (4) 외부정상 + 내부비정상 → 외부순환
-        # ================================================================
-        if _is_external_normal(outdoor_temp, outdoor_humidity) and \
-           _is_internal_abnormal(indoor_temp, indoor_humidity, co2):
+        # 외부순환/64케이스 로깅
+        if action["reason"] == "외부정상+내부비정상":
             logger.info(f"{scope}: 외부정상+내부비정상 → 외부순환")
-            return _execute_control(
-                farm_id, house_id,
-                {
-                    'water_heater_flag': False,
-                    'fog_occurs_flag': False,
-                    'indoor_heater_flag': False,
-                    'indoor_heater_valve_flag': False,
-                },
-                '외부순환', current_relay, harvest_mode,
-                reason="외부정상+내부비정상", order_label=order_label
-            )
-
-        # ================================================================
-        # (5) 64케이스
-        # ================================================================
-        # 센서 상태 분류
-        temp_state = _classify(indoor_temp, TEMP_LOW, TEMP_HIGH)
-        humidity_state = _classify(indoor_humidity, HUMIDITY_LOW, HUMIDITY_HIGH)
-        co2_state = _classify(co2, CO2_LOW, CO2_HIGH)
-
-        # 외부 센서 상태 (정상/비정상)
-        ext_temp_state = 'normal' if (outdoor_temp is not None and TEMP_LOW <= outdoor_temp <= TEMP_HIGH) else 'abnormal'
-        ext_humidity_state = 'normal' if (outdoor_humidity is not None and HUMIDITY_LOW <= outdoor_humidity <= HUMIDITY_HIGH) else 'abnormal'
-        # 외부 CO2 센서: 현재 DB에 별도 컬럼 없음 → 정상으로 기본 처리
-        ext_co2_state = 'normal'
-
-        # 장치 결정
-        water_heater, fog_pump, heater, heater_damper = _determine_devices(temp_state, humidity_state)
-
-        # 열풍기 쿨다운 중이면 열풍기 제외
-        if not heater_available and heater:
-            heater = False
-            heater_damper = False
-            logger.info(f"{scope}: 열풍기 쿨다운 → 열풍기 제외 제어")
-
-        # 순환모드 결정
-        circulation_mode = _determine_circulation(
-            temp_state, ext_temp_state,
-            humidity_state, ext_humidity_state,
-            co2_state, ext_co2_state
-        )
-
-        device_settings = {
-            'water_heater_flag': water_heater,
-            'fog_occurs_flag': fog_pump,
-            'indoor_heater_flag': heater,
-            'indoor_heater_valve_flag': heater_damper,
-        }
 
         return _execute_control(
-            farm_id, house_id, device_settings, circulation_mode,
+            farm_id, house_id, action["devices"], action["circulation"],
             current_relay, harvest_mode,
-            reason=f"64케이스(온도:{temp_state},습도:{humidity_state},CO2:{co2_state})",
-            order_label=order_label,
+            reason=action["reason"], order_label=order_label,
         )
 
     except Exception as e:

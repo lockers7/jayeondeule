@@ -82,8 +82,9 @@ except Exception:
     ollama = None
 
 from agri_ai_core.logs import setup_logger
-from agri_ai_core.config import settings, NUM_PREDICT, NUM_PREDICT_REWRITE, get_ollama_url
+from agri_ai_core.config import settings, NUM_PREDICT, NUM_PREDICT_REWRITE, get_ollama_url, get_model_name
 from agri_ai_core.src.utils.validators import is_true
+from agri_ai_core.src.ai.utils import KOREAN_CHAR_RE as _KOREAN_CHAR_RE, has_korean as _line_has_korean, GREETING_RE as _GREETING_RE
 
 logger = setup_logger(__name__)
 
@@ -670,7 +671,7 @@ def _get_model_name() -> str:
         if _cached_model_name:
             return _cached_model_name
 
-    preferred_model = getattr(settings.model, "name", None) or "qwen3:14b"
+    preferred_model = get_model_name()
     fallback_model = "qwen3:latest"
 
     logger.info(f"[모델선택] 설정 모델: {preferred_model}, 폴백 모델: {fallback_model}")
@@ -773,8 +774,6 @@ _THINKING_PATTERNS = [
     r'^No\s+(immediate\s+)?action\s+(needed|required)',
 ]
 
-_KOREAN_CHAR_RE = re.compile(r"[가-힣]")
-
 _DEFAULT_REASONING_TERMS = [
     "first,", "second,", "third,", "hmm,", "wait,", "so,",
     "that means", "so the main points", "putting it all together",
@@ -829,10 +828,6 @@ _REASONING_TERMS = _load_reasoning_terms()
 def _find_reasoning_terms(text: str) -> List[str]:
     lowered = (text or "").lower()
     return [term for term in _REASONING_TERMS if term in lowered]
-
-
-def _line_has_korean(text: str) -> bool:
-    return bool(_KOREAN_CHAR_RE.search(text or ""))
 
 
 def _count_korean_chars(text: str) -> int:
@@ -1651,7 +1646,6 @@ _NON_PROSE_LINE = re.compile(
     r"|\[출처\]"         # 출처 링크
     r")"
 )
-# _KOREAN_CHAR_RE는 801행에서 이미 정의됨 (중복 제거)
 
 
 # ============================================================
@@ -2168,12 +2162,6 @@ def _build_structured_result(
         "tools_used": tools_used if tools_used else [],
         "response_type": _determine_response_type(tools_used),
     }
-
-
-# 인사/잡담 턴 판별용 패턴 (짧고 인사 키워드만 있는 메시지)
-_GREETING_RE = re.compile(
-    r"^(안녕|반가|잘\s*지내|하이|헬로|좋은\s*(아침|저녁|하루)|수고|얀녕|고마워|감사)",
-)
 
 
 # ============================================================

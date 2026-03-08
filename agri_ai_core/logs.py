@@ -90,7 +90,7 @@ class DailyRotatingFileHandler(logging.FileHandler):
 # 프로젝트 내 모든 파일별 로그 생성
 # 로거 초기화 공통 로직.
 # ============================================================
-def _setup_logger_impl(cache_key, logger_name, file_pattern, error_label):
+def _setup_logger_impl(cache_key, logger_name, file_pattern, error_label, use_plain_file=False):
     log_level_str = (os.getenv("LOG_LEVEL") or settings.logging.level or "INFO").strip().upper()
     log_level = getattr(logging, log_level_str, logging.INFO)
     log_console_enabled = str(os.getenv("LOG_CONSOLE_ENABLED", "false")).strip().lower() in {
@@ -118,7 +118,15 @@ def _setup_logger_impl(cache_key, logger_name, file_pattern, error_label):
         logger.removeHandler(handler)
 
     try:
-        file_handler = DailyRotatingFileHandler(os.path.join(log_dir, file_pattern), encoding='utf-8')
+        if use_plain_file:
+            log_path = os.path.join(log_dir, file_pattern)
+            file_handler = logging.FileHandler(log_path, mode='a', encoding='utf-8')
+            try:
+                os.chmod(log_path, 0o644)
+            except OSError:
+                pass
+        else:
+            file_handler = DailyRotatingFileHandler(os.path.join(log_dir, file_pattern), encoding='utf-8')
         file_handler.setLevel(log_level)
         formatter = logging.Formatter(DEFAULT_LOG_FORMAT)
         file_handler.setFormatter(formatter)
@@ -148,58 +156,9 @@ def setup_web_logger(name=None):
     return _setup_logger_impl(cache_key, cache_key, "web_%Y-%m-%d.log", "웹 로그")
 
 
-# ----------------------------------------------------------------
-# API 전용 로거 (api.log에 기록, Uvicorn 로그와 동일 파일) 
-# ----------------------------------------------------------------
 def setup_api_logger(name=None):
     cache_key = f"_api_{name}"
-    if cache_key in _loggers_initialized:
-        logger = logging.getLogger(cache_key)
-        return logger
-
-    log_level_str = (os.getenv("LOG_LEVEL") or settings.logging.level or "INFO").strip().upper()
-    log_level = getattr(logging, log_level_str, logging.INFO)
-    log_console_enabled = str(os.getenv("LOG_CONSOLE_ENABLED", "false")).strip().lower() in {
-        "1", "true", "yes", "on"
-    }
-
-    log_dir = settings.logging.path or "logs"
-    try:
-        os.makedirs(log_dir, exist_ok=True)
-    except OSError:
-        pass
-
-    logger = logging.getLogger(cache_key)
-    logger.setLevel(log_level)
-
-    for handler in logger.handlers[:]:
-        logger.removeHandler(handler)
-
-    try:
-        api_log_path = os.path.join(log_dir, "api.log")
-        file_handler = logging.FileHandler(api_log_path, mode='a', encoding='utf-8')
-        file_handler.setLevel(log_level)
-        formatter = logging.Formatter(DEFAULT_LOG_FORMAT)
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
-        try:
-            os.chmod(api_log_path, 0o644)
-        except OSError:
-            pass
-        if log_console_enabled:
-            console_handler = logging.StreamHandler()
-            console_handler.setLevel(log_level)
-            console_handler.setFormatter(formatter)
-            logger.addHandler(console_handler)
-    except Exception as e:
-        print(f"API 로그 핸들러 설정 중 오류: {e}", file=sys.stderr)
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(logging.Formatter(DEFAULT_LOG_FORMAT))
-        logger.addHandler(console_handler)
-
-    logger.propagate = False
-    _loggers_initialized[cache_key] = True
-    return logger
+    return _setup_logger_impl(cache_key, cache_key, "api.log", "API 로그", use_plain_file=True)
 
 
 # ============================================================

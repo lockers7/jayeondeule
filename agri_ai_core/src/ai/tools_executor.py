@@ -2,7 +2,7 @@
 # LLM Tool 실행기
 # LLM이 요청한 도구를 실제로 실행하는 모듈
 # --->
-# _is_korean_query: 웹 검색 API 모듈 (Naver / Brave)
+# has_korean (utils): 한국어 포함 여부 판별
 # _search_via_naver_api: Naver 검색 API를 통한 검색 (블로그 + 웹)
 # _search_via_brave_api: Brave Search API를 통한 검색
 # _search_via_searxng: SearXNG 자체 호스팅 메타 검색 엔진을 통한 검색
@@ -32,6 +32,7 @@ from decimal import Decimal
 from typing import Dict, Any, List, Optional
 
 from agri_ai_core.logs import setup_logger
+from agri_ai_core.src.ai.utils import has_korean as _is_korean_query
 
 logger = setup_logger(__name__)
 
@@ -82,10 +83,6 @@ _WEB_SEARCH_CONTENT_MAX_CHARS = max(500, int(os.getenv("WEB_SEARCH_CONTENT_MAX_C
 # API 키가 설정되면 JSON API 우선 사용, 실패 시 MCP fallback
 # 쿼리에 한국어가 포함되어 있는지 판별
 # ============================================================
-
-def _is_korean_query(query: str) -> bool:
-    korean_chars = sum(1 for c in query if '\uac00' <= c <= '\ud7a3' or '\u3131' <= c <= '\u3163')
-    return korean_chars > 0
 
 
 # ============================================================
