@@ -281,8 +281,7 @@ def _chunk_cleanup_job():
 
 
 def setup_default_jobs(learning_func=None, stats_func=None,
-                       manual_control_func=None,
-                       ai_control_func=None, growth_rag_func=None):
+                       manual_control_func=None, growth_rag_func=None):
     try:
         # 학습 작업 (매일 지정 시간)
         if learning_func:
@@ -314,16 +313,8 @@ def setup_default_jobs(learning_func=None, stats_func=None,
                 seconds=10
             )
 
-        # AI 인공지능 환경제어 (매 5분)
-        # AI 모드 재배사만 대상, LLM 정기 호출
-        # max_instances=1 설정으로 이전 실행 미완료 시 다음 실행 스킵
-        if ai_control_func:
-            add_job(
-                job_id="ai_control_job",
-                func=ai_control_func,
-                trigger_type="interval",
-                minutes=5
-            )
+        # AI 인공지능 환경제어: 별도 순환 루프 스레드로 운영 (startup.py에서 시작)
+        # 재배사 순환 + 30초 delay 방식으로 변경되어 스케줄러 등록 불필요
 
         # 생육 RAG 작업 (일 2회: 12:00, 00:00)
         # 생육 데이터 입력 시점 기반으로 센서/릴레이 환경 통계를 RAG 데이터로 저장

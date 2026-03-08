@@ -310,6 +310,18 @@ async def health_check():
     return {"status": "ok"}
 
 
+@app.get("/api/v1/ai-judgment/{farm_id}/{house_id}")
+async def get_ai_judgment(farm_id: str, house_id: str):
+    """현재 센서값 기반 AI 환경 판단 조회 (실제 제어 없음)"""
+    from agri_ai_core.src.control.manual_control import get_ai_environment_judgment
+    import asyncio
+
+    result = await asyncio.to_thread(get_ai_environment_judgment, farm_id, house_id)
+    if result is None:
+        return {"success": False, "message": "AI 판단을 수행할 수 없습니다. (센서 데이터 없음)"}
+    return {"success": True, **result}
+
+
 @app.get("/api/v1/stats")
 async def get_stats(_=Depends(verify_api_key)):
     from agri_ai_core.src.ai.stats_collector import get_stats_collector
@@ -474,7 +486,7 @@ async def rag_perform(
                         raise HTTPException(413, f"파일 크기 초과: {upload_file.filename} ({total_size // (1024*1024)}MB > {MAX_UPLOAD_SIZE // (1024*1024)}MB)")
                     f.write(chunk)
 
-            file_paths.append({"filename": safe_name, "path": file_path})
+            file_paths.append({"filename": safe_name, "path": file_path, "original_name": base_name})
 
         api_json_logger.info(
             "[REST API 요청] POST /api/v1/rag/perform\n%s",

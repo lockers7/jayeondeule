@@ -82,7 +82,12 @@ def set_relay_value(farm_id, house_id, relay_settings, raw_mode=False):
                 # 별칭을 실제 relay flag로 변환
                 actual_key = alias_mapping.get(key, key)
                 if actual_key in relay_values:
+                    prev = relay_values[actual_key]
                     relay_values[actual_key] = value
+                    label = SEMANTIC_LABELS.get(key, key)
+                    logger.info(f"[릴레이설정] {label}({key}) → {actual_key}: {prev} → {value}")
+                else:
+                    logger.warning(f"[릴레이설정] 매핑 실패: {key} → {actual_key} (relay_values에 없음)")
 
         # SQL 파라미터 준비 (farm_id, hous_id, recd_dttm, relay flags...)
         from datetime import datetime
@@ -92,11 +97,12 @@ def set_relay_value(farm_id, house_id, relay_settings, raw_mode=False):
         # 모든 재배사에 대해 동일한 쿼리 사용
         query = dbQry.SET_RELAY_VALUE
 
+        logger.info(f"[릴레이설정] DB쓰기 farm_id={farm_id} house_id={house_id} params_count={len(params)}")
         with db_session() as database:
             result = database.execute_query(query, params)
 
             if result:
-                logger.debug(f"릴레이 값 설정 완료: farm_id={farm_id}, house_id={house_id}")
+                logger.info(f"[릴레이설정] DB쓰기 성공: farm_id={farm_id}, house_id={house_id}")
                 return {
                     "success": True,
                     "message": "릴레이 값이 성공적으로 설정되었습니다.",

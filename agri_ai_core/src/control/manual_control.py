@@ -40,8 +40,10 @@ from agri_ai_core.src.control.control_common import (
     house_prefix as _house_prefix,
     get_pin_map as _get_pin_map,
     format_sensor_parts,
+    format_device_decision,
     format_relay_on_str,
     format_relay_off_str,
+    is_llm_relay_locked,
     CIRCULATION_MODES,
     TEMP_LOW, TEMP_HIGH, TEMP_CRITICAL_LOW, TEMP_CRITICAL_HIGH,
     HUMIDITY_LOW, HUMIDITY_HIGH, HUMIDITY_CRITICAL_LOW, HUMIDITY_CRITICAL_HIGH,
@@ -586,6 +588,124 @@ def _control_budding(farm_id, house_id, indoor_temp, current_relay, order_label=
 
 
 # ============================================================
+# AI 환경 판단 (제어 없이 판단만 수행)
+# 수동 릴레이 제어 시 전/후 AI 판단을 제공하기 위한 함수
+# ============================================================
+def get_ai_environment_judgment(farm_id, house_id):
+    """현재 센서값 기반으로 알고리즘이 판단하는 최적 릴레이 상태를 반환 (실제 제어 없음).
+
+    Returns:
+        dict: {
+            "sensor": "온도 28.5℃, 습도 80%, ...",
+            "growth_stage": "생육기",
+            "reason": "64케이스(온도:normal,...)",
+            "devices": {"water_heater_flag": True, ...},
+            "circulation": "내부순환",
+            "device_summary": "ON=[물가열기], OFF=[분사펌프, ...]",
+        } 또는 실패 시 None
+    """
+    try:
+        sensor_data = read_current_sensor_info(farm_id, house_id)
+        if not sensor_data:
+            return None
+
+        growth_stage = read_current_growth_stage(farm_id, house_id) or '생육기'
+
+        indoor_temp = sensor_data.get('indoor_temperature')
+        indoor_humidity = sensor_data.get('indoor_humidity')
+        outdoor_temp = sensor_data.get('outdoor_temperature')
+        outdoor_humidity = sensor_data.get('outdoor_humidity')
+        co2 = sensor_data.get('co2')
+
+        sensor_str = format_sensor_parts(sensor_data)
+
+        # (1) 비상제어 판단
+        is_emergency, emergency_devices, emergency_circulation, water_temp_only = _check_emergency(sensor_data)
+        if is_emergency:
+            if water_temp_only:
+                water_on = emergency_devices.get('water_heater_flag', False)
+                return {
+                    "sensor": sensor_str,
+                    "growth_stage": growth_stage,
+                    "reason": f"수온비상_물가열기{'ON' if water_on else 'OFF'}",
+                    "devices": emergency_devices,
+                    "circulation": None,
+                    "device_summary": format_device_decision(emergency_devices),
+                }
+            return {
+                "sensor": sensor_str,
+                "growth_stage": growth_stage,
+                "reason": "비상제어",
+                "devices": emergency_devices,
+                "circulation": emergency_circulation,
+                "device_summary": format_device_decision(emergency_devices),
+            }
+
+        # (2) 발이기 판단
+        if growth_stage == '발이기':
+            if indoor_temp is None:
+                return None
+            if indoor_temp < BUDDING_TEMP_LOW:
+                devices = {'water_heater_flag': True, 'fog_occurs_flag': False, 'indoor_heater_flag': True, 'indoor_heater_valve_flag': True}
+                return {"sensor": sensor_str, "growth_stage": growth_stage, "reason": "발이기_가열", "devices": devices, "circulation": "내부순환", "device_summary": format_device_decision(devices)}
+            if indoor_temp > BUDDING_TEMP_HIGH:
+                devices = {'water_heater_flag': False, 'fog_occurs_flag': False, 'indoor_heater_flag': False, 'indoor_heater_valve_flag': False}
+                return {"sensor": sensor_str, "growth_stage": growth_stage, "reason": "발이기_냉각", "devices": devices, "circulation": "배기순환", "device_summary": format_device_decision(devices)}
+            devices = {'water_heater_flag': False, 'fog_occurs_flag': False, 'indoor_heater_flag': False, 'indoor_heater_valve_flag': False}
+            return {"sensor": sensor_str, "growth_stage": growth_stage, "reason": "발이기_정상", "devices": devices, "circulation": "순환정지", "device_summary": format_device_decision(devices)}
+
+        # (3) 외부정상 + 내부비정상 → 외부순환
+        if _is_external_normal(outdoor_temp, outdoor_humidity) and _is_internal_abnormal(indoor_temp, indoor_humidity, co2):
+            devices = {'water_heater_flag': False, 'fog_occurs_flag': False, 'indoor_heater_flag': False, 'indoor_heater_valve_flag': False}
+            return {"sensor": sensor_str, "growth_stage": growth_stage, "reason": "외부정상+내부비정상", "devices": devices, "circulation": "외부순환", "device_summary": format_device_decision(devices)}
+
+        # (4) 64케이스
+        temp_state = _classify(indoor_temp, TEMP_LOW, TEMP_HIGH)
+        humidity_state = _classify(indoor_humidity, HUMIDITY_LOW, HUMIDITY_HIGH)
+        co2_state = _classify(co2, CO2_LOW, CO2_HIGH)
+        ext_temp_state = 'normal' if (outdoor_temp is not None and TEMP_LOW <= outdoor_temp <= TEMP_HIGH) else 'abnormal'
+        ext_humidity_state = 'normal' if (outdoor_humidity is not None and HUMIDITY_LOW <= outdoor_humidity <= HUMIDITY_HIGH) else 'abnormal'
+        ext_co2_state = 'normal'
+
+        water_heater, fog_pump, heater, heater_damper = _determine_devices(temp_state, humidity_state)
+
+        heater_available, in_cooldown = _check_heater_cooldown(farm_id, house_id)
+        if not heater_available and heater:
+            heater = False
+            heater_damper = False
+
+        circulation_mode = _determine_circulation(temp_state, ext_temp_state, humidity_state, ext_humidity_state, co2_state, ext_co2_state)
+
+        harvest_mode = (growth_stage == '수확기')
+        if harvest_mode and circulation_mode == '내부순환':
+            circulation_mode = '배기순환'
+
+        devices = {
+            'water_heater_flag': water_heater,
+            'fog_occurs_flag': fog_pump,
+            'indoor_heater_flag': heater,
+            'indoor_heater_valve_flag': heater_damper,
+        }
+
+        reason = f"64케이스(온도:{temp_state},습도:{humidity_state},CO2:{co2_state})"
+        if in_cooldown:
+            reason += " [열풍기쿨다운]"
+
+        return {
+            "sensor": sensor_str,
+            "growth_stage": growth_stage,
+            "reason": reason,
+            "devices": devices,
+            "circulation": circulation_mode,
+            "device_summary": format_device_decision(devices),
+        }
+
+    except Exception as e:
+        logger.error(f"AI 환경 판단 오류: {e}")
+        return None
+
+
+# ============================================================
 # 메인 제어 함수
 # ============================================================
 
@@ -862,6 +982,14 @@ def control_all_manual():
                 if mode_label != "알고리즘 수동제어":
                     _log_house_status(farm_id, house_id, order_label)
                     continue
+
+                # LLM 제어 잠금 체크 (LLM이 릴레이를 제어한 후 일정 시간 동안 자동제어 억제)
+                if is_llm_relay_locked(farm_id, house_id):
+                    scope = _house_prefix(order_label, farm_id, house_id)
+                    logger.info(f"{scope}: LLM 제어 잠금 활성 → 자동제어 스킵")
+                    _log_house_status(farm_id, house_id, order_label)
+                    continue
+
                 result = control_manual_environment(
                     farm_id,
                     house_id,
@@ -903,24 +1031,36 @@ def control_all_manual():
 
 
 # ============================================================
-# 5분 주기 AI 환경제어 (LLM 정기 호출)
-# AI 모드 재배사만 대상, 항상 LLM 호출
+# AI 환경제어 순환 루프 (재배사 순환 + 30초 delay)
+# 재배사를 ascending 순으로 순환하며 LLM 정기 호출
+# 1재배사 제어 → 30초 대기 → 2재배사 → 30초 대기 → ... → 마지막 → 1재배사
 # ============================================================
-def control_all_ai():
-    try:
-        with db_session() as database:
-            houses = database.fetch_all(
-                query=dbQry.GET_HOUSE_NAME,
-                vals=(None, None, None, None),
-                as_dict=True
-            )
+from agri_ai_core.config import AI_CONTROL_LOOP_DELAY_SEC as _AI_LOOP_DELAY_SEC
+_ai_loop_running = False
+_ai_loop_thread = None
+
+
+def _ai_control_loop():
+    """AI 재배사 순환 제어 루프 (별도 스레드에서 실행)"""
+    global _ai_loop_running
+    _ai_loop_running = True
+    logger.info(f"[AI순환루프] 시작 (재배사 간 {_AI_LOOP_DELAY_SEC}초 대기)")
+
+    while _ai_loop_running:
+        try:
+            # 매 순환마다 AI 재배사 목록을 새로 조회 (모드 변경 반영)
+            with db_session() as database:
+                houses = database.fetch_all(
+                    query=dbQry.GET_HOUSE_NAME,
+                    vals=(None, None, None, None),
+                    as_dict=True
+                )
 
             if not houses:
-                return {"success": True, "total": 0, "results": []}
+                time.sleep(_AI_LOOP_DELAY_SEC)
+                continue
 
             ordered_houses = _sort_houses(houses)
-
-            # AI 모드 재배사만 필터
             ai_houses = [
                 h for h in ordered_houses
                 if h.get("mnul_ctrl_flag") and h.get("ctrl_type") == "ai"
@@ -928,16 +1068,16 @@ def control_all_ai():
             ]
 
             if not ai_houses:
-                return {"success": True, "total": 0, "results": []}
+                time.sleep(_AI_LOOP_DELAY_SEC)
+                continue
 
             ai_order = ", ".join(str(h.get("hous_id")) for h in ai_houses)
-            logger.info(f"인공지능 환경제어 시작: 대상 재배사 {ai_order}")
-
-            results = []
-            success_count = 0
-            fail_count = 0
+            logger.info(f"[AI순환루프] 순환 시작: 대상 재배사 {ai_order} ({len(ai_houses)}개)")
 
             for index, house in enumerate(ai_houses, start=1):
+                if not _ai_loop_running:
+                    break
+
                 farm_id = house.get("farm_id")
                 house_id = house.get("hous_id")
                 order_label = f"[AI {index}/{len(ai_houses)}]"
@@ -950,37 +1090,52 @@ def control_all_ai():
                     # 비상제어 체크 (AI보다 우선)
                     result, handled = _handle_ai_emergency(farm_id, house_id, growth_stage, order_label)
                     if handled:
-                        results.append({"farm_id": farm_id, "house_id": house_id, "result": result})
-                        if result.get("success"):
-                            success_count += 1
-                        else:
-                            fail_count += 1
-                        continue
-
-                    # AI LLM 정기 호출 (항상 실행)
-                    result = control_ai_environment(farm_id, house_id, growth_stage, order_label)
-                    results.append({"farm_id": farm_id, "house_id": house_id, "result": result})
-                    if result.get("success"):
-                        success_count += 1
+                        action = result.get("action", result.get("reason", "비상"))
+                        logger.info(f"{order_label} 재배사 {house_id}: 비상제어 완료 → {action}")
                     else:
-                        fail_count += 1
+                        # AI LLM 정기 호출
+                        result = control_ai_environment(farm_id, house_id, growth_stage, order_label)
+                        action = result.get("action", "unknown")
+                        logger.info(f"{order_label} 재배사 {house_id}: AI 제어 완료 → {action}")
 
                 except Exception as e:
                     logger.error(f"{order_label} AI 제어 예외: {e}")
-                    fail_count += 1
+                    logger.error(traceback.format_exc())
 
-            if results:
-                logger.info(f"인공지능 환경제어 완료: 총 {len(results)}개 재배사 (성공: {success_count}, 실패: {fail_count})")
+                # 다음 재배사 전 30초 대기
+                if _ai_loop_running:
+                    logger.info(f"{order_label} 재배사 {house_id}: 제어 완료, {_AI_LOOP_DELAY_SEC}초 대기 후 다음 재배사")
+                    time.sleep(_AI_LOOP_DELAY_SEC)
 
-            return {
-                "success": fail_count == 0,
-                "total": len(results),
-                "success_count": success_count,
-                "fail_count": fail_count,
-                "results": results
-            }
+            # 마지막 재배사 완료 후 다시 1재배사부터 순환
+            if _ai_loop_running:
+                logger.info(f"[AI순환루프] 전체 순환 완료 ({len(ai_houses)}개 재배사), 다시 처음부터 순환")
 
-    except Exception as e:
-        logger.error(f"인공지능 환경제어 오류: {e}")
-        logger.error(traceback.format_exc())
-        return {"success": False, "message": f"오류 발생: {str(e)}"}
+        except Exception as e:
+            logger.error(f"[AI순환루프] 루프 오류: {e}")
+            logger.error(traceback.format_exc())
+            if _ai_loop_running:
+                time.sleep(_AI_LOOP_DELAY_SEC)
+
+    logger.info("[AI순환루프] 종료")
+
+
+def start_ai_control_loop():
+    """AI 순환 제어 루프를 별도 스레드로 시작"""
+    global _ai_loop_thread, _ai_loop_running
+    if _ai_loop_thread and _ai_loop_thread.is_alive():
+        logger.warning("[AI순환루프] 이미 실행 중")
+        return
+
+    import threading
+    _ai_loop_running = True
+    _ai_loop_thread = threading.Thread(target=_ai_control_loop, daemon=True, name="ai_control_loop")
+    _ai_loop_thread.start()
+    logger.info("[AI순환루프] 스레드 시작됨")
+
+
+def stop_ai_control_loop():
+    """AI 순환 제어 루프 정지"""
+    global _ai_loop_running
+    _ai_loop_running = False
+    logger.info("[AI순환루프] 정지 요청됨")

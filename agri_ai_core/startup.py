@@ -13,7 +13,7 @@ import traceback
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.chroma import heartbeat, ensure_required_collections_exist
-from agri_ai_core.src.control import setup_scheduler, start_scheduler, stop_scheduler, setup_default_jobs, control_all_manual, control_all_ai
+from agri_ai_core.src.control import setup_scheduler, start_scheduler, stop_scheduler, setup_default_jobs, control_all_manual, start_ai_control_loop, stop_ai_control_loop
 
 logger = setup_logger(__name__)
 
@@ -165,11 +165,14 @@ def initialize_app():
             setup_scheduler()
             setup_default_jobs(
                 manual_control_func=control_all_manual,
-                ai_control_func=control_all_ai,
                 growth_rag_func=run_growth_rag,
             )
             start_scheduler()
-            logger.info("[4/4] 스케줄러 시작됨 (%.1fs) - 수동/알고리즘 (10초) + AI (5분) + 생육RAG (12:00/00:00)", time.time() - t0)
+            logger.info("[4/4] 스케줄러 시작됨 (%.1fs) - 수동/알고리즘 (10초) + 생육RAG (12:00/00:00)", time.time() - t0)
+
+            # AI 순환 제어 루프 시작 (재배사 순환 + 30초 delay)
+            start_ai_control_loop()
+            logger.info("[4/4] AI 순환 제어 루프 시작됨 (재배사 간 30초 대기)")
         except Exception as e:
             logger.warning("[4/4] 스케줄러 설정 실패 (%.1fs): %s", time.time() - t0, e)
 
@@ -196,29 +199,38 @@ def shutdown_app():
         logger.info("AgriAI Core 종료 처리 시작")
         logger.info("=" * 60)
 
-        # [1/3] 스케줄러 중지
-        logger.info("[1/3] 스케줄러 중지 중...")
+        # [1/4] AI 순환 루프 정지
+        logger.info("[1/4] AI 순환 제어 루프 정지 중...")
+        t0 = time.time()
+        try:
+            stop_ai_control_loop()
+            logger.info("[1/4] AI 순환 제어 루프 정지 완료 (%.1fs)", time.time() - t0)
+        except Exception as e:
+            logger.warning("[1/4] AI 순환 제어 루프 정지 실패 (%.1fs): %s", time.time() - t0, e)
+
+        # [2/4] 스케줄러 중지
+        logger.info("[2/4] 스케줄러 중지 중...")
         t0 = time.time()
         try:
             stop_scheduler()
-            logger.info("[1/3] 스케줄러 중지 완료 (%.1fs)", time.time() - t0)
+            logger.info("[2/4] 스케줄러 중지 완료 (%.1fs)", time.time() - t0)
         except Exception as e:
-            logger.warning("[1/3] 스케줄러 중지 실패 (%.1fs): %s", time.time() - t0, e)
+            logger.warning("[2/4] 스케줄러 중지 실패 (%.1fs): %s", time.time() - t0, e)
 
-        # [2/3] ChromaDB 연결 정리
-        logger.info("[2/3] ChromaDB 연결 정리 중...")
+        # [3/4] ChromaDB 연결 정리
+        logger.info("[3/4] ChromaDB 연결 정리 중...")
         t0 = time.time()
         try:
             status = heartbeat()
             if "error" not in status:
-                logger.info("[2/3] ChromaDB 정상 상태로 종료 (%.1fs)", time.time() - t0)
+                logger.info("[3/4] ChromaDB 정상 상태로 종료 (%.1fs)", time.time() - t0)
             else:
-                logger.warning("[2/3] ChromaDB 이미 연결 해제 (%.1fs)", time.time() - t0)
+                logger.warning("[3/4] ChromaDB 이미 연결 해제 (%.1fs)", time.time() - t0)
         except Exception as e:
-            logger.info("[2/3] ChromaDB 연결 해제됨 (%.1fs)", time.time() - t0)
+            logger.info("[3/4] ChromaDB 연결 해제됨 (%.1fs)", time.time() - t0)
 
-        # [3/3] 기타 리소스 정리
-        logger.info("[3/3] 리소스 정리 완료")
+        # [4/4] 기타 리소스 정리
+        logger.info("[4/4] 리소스 정리 완료")
 
         logger.info("=" * 60)
         logger.info("AgriAI Core 종료 처리 완료")
