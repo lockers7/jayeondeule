@@ -26,7 +26,7 @@ import traceback
 from datetime import datetime
 
 from agri_ai_core.logs import setup_logger, setup_web_logger
-from agri_ai_core.src.ai.llm_client import get_llm_response_with_tools, clean_llm_response
+from agri_ai_core.src.ai.llm_client import get_llm_response_with_tools
 from agri_ai_core.src.ai.file_processor import process_uploaded_files
 from agri_ai_core.src.ai.conversation_store import get_conversation_store
 from agri_ai_core.src.ai.utils import GREETING_RE as _GREETING_RE_HYBRID
@@ -35,7 +35,7 @@ logger = setup_logger(__name__)
 web_logger = setup_web_logger("chat")
 
 _LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT_SECONDS", "600"))
-_STREAM_HEARTBEAT_SECONDS = max(5, int(os.getenv("STREAM_HEARTBEAT_SECONDS", "15")))
+_STREAM_HEARTBEAT_SECONDS = max(3, int(os.getenv("STREAM_HEARTBEAT_SECONDS", "5")))
 
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -354,7 +354,8 @@ def _prune_old_conversations(collection_name, farm_id):
         logger.debug(f"[하이브리드] 대화 수명관리 실패: {e}")
 
 
-async def _call_llm_with_timeout(full_query, farm_name, default_tool_args, conversation_history):
+async def _call_llm_with_timeout(full_query, farm_name, default_tool_args, conversation_history,
+                                  speech_style=None, progress_queue=None):
     return await asyncio.wait_for(
         asyncio.to_thread(
             get_llm_response_with_tools,
@@ -362,6 +363,8 @@ async def _call_llm_with_timeout(full_query, farm_name, default_tool_args, conve
             farm_name=farm_name,
             default_tool_args=default_tool_args,
             conversation_history=conversation_history,
+            speech_style=speech_style,
+            progress_queue=progress_queue,
         ),
         timeout=_LLM_TIMEOUT,
     )
@@ -396,9 +399,10 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
 #       farm_name: 농장명
 #       house_name: 재배사명
 #       session_id: 대화 세션 ID (멀티턴 대화용)
+#       speech_style: 대화체 (male/female)
 # Returns: dict: 구조화된 응답 {response, sources, tools_used, response_type}
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-                           farm_name=None, house_name=None, session_id=None):
+                           farm_name=None, house_name=None, session_id=None, speech_style=None):
     start_time = datetime.now()
 
     try:
@@ -440,7 +444,7 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
         llm_start = datetime.now()
         logger.info("[LLM시작] 모드=Tool Use (LLM 자율 도구 선택)")
         try:
-            result = await _call_llm_with_timeout(full_query, farm_name, default_tool_args, conversation_history)
+            result = await _call_llm_with_timeout(full_query, farm_name, default_tool_args, conversation_history, speech_style=speech_style)
         except asyncio.TimeoutError:
             logger.error(f"[LLM타임아웃] {_LLM_TIMEOUT}초 초과")
             yield {
@@ -541,7 +545,7 @@ def _split_for_streaming(text, target_size=30):
 
 
 async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
-                                   farm_name=None, house_name=None, session_id=None):
+                                   farm_name=None, house_name=None, session_id=None, speech_style=None):
     start_time = datetime.now()
 
     try:
@@ -569,13 +573,29 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
         _ctx_ms = (time.time() - _t_ctx) * 1000
         logger.debug(f"[PERF:대화] 스트리밍-하이브리드컨텍스트로드={_ctx_ms:.0f}ms")
 
-        # [3] LLM 답변 생성
+        # [3] LLM 답변 생성 (progress_queue로 상세 진행 상태 수신)
+        from queue import Queue as ThreadQueue, Empty as QueueEmpty
+        progress_queue = ThreadQueue()
+
         yield {"type": "status", "content": "답변을 생성하고 있습니다..."}
 
         llm_start = datetime.now()
         llm_task = asyncio.create_task(
-            _call_llm_with_timeout(full_query, farm_name, default_tool_args, conversation_history)
+            _call_llm_with_timeout(full_query, farm_name, default_tool_args, conversation_history,
+                                   speech_style=speech_style, progress_queue=progress_queue)
         )
+        # 진행 상태 이력 (도구 호출 정보 등)을 수집하여 대기 중 순환 표시
+        _progress_history = []  # 도구/단계 메시지 이력
+        _last_progress_msg = ""
+        _idle_cycle = 0  # 새 이벤트 없이 반복된 횟수
+
+        # LLM 대기 중 순환 표시할 기본 메시지
+        _waiting_messages = [
+            "AI가 질문을 분석하고 있습니다...",
+            "최적의 답변을 준비하고 있습니다...",
+            "정보를 종합하여 답변을 구성하고 있습니다...",
+        ]
+
         while True:
             try:
                 result = await asyncio.wait_for(
@@ -590,8 +610,37 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
                     yield {"type": "error", "content": f"응답 생성 시간이 초과되었습니다. ({_LLM_TIMEOUT}초)"}
                     return
 
+                # progress_queue에서 모든 이벤트를 꺼냄
+                new_events = []
+                try:
+                    while True:
+                        new_events.append(progress_queue.get_nowait())
+                except QueueEmpty:
+                    pass
+
                 elapsed_wait = int((datetime.now() - llm_start).total_seconds())
-                yield {"type": "status", "content": f"답변 생성 중입니다... ({elapsed_wait}초 경과)"}
+
+                if new_events:
+                    # 새 이벤트가 있으면 최신 것을 표시하고 이력에 추가
+                    _idle_cycle = 0
+                    for evt in new_events:
+                        msg = evt.get("message", "")
+                        if msg and msg not in [h.get("message") for h in _progress_history]:
+                            _progress_history.append(evt)
+                    latest = new_events[-1]
+                    _last_progress_msg = latest.get("message", "")
+                    yield {
+                        "type": "status",
+                        "content": f"{_last_progress_msg} ({elapsed_wait}초 경과)",
+                        "phase": latest.get("phase", "processing"),
+                    }
+                else:
+                    # 새 이벤트 없음 → 이력/기본 메시지를 순환하며 표시
+                    _idle_cycle += 1
+                    all_messages = [h.get("message", "") for h in _progress_history if h.get("message")]
+                    all_messages.extend(_waiting_messages)
+                    cycle_msg = all_messages[_idle_cycle % len(all_messages)] if all_messages else "답변 생성 중입니다..."
+                    yield {"type": "status", "content": f"{cycle_msg} ({elapsed_wait}초 경과)"}
 
         response_text, sources, tools_used, response_type = _unpack_llm_result(result)
 
@@ -600,9 +649,8 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
         logger.info(f"[스트리밍][LLM완료] 답변생성={llm_elapsed:.1f}s type={response_type} tools={tools_used}")
         logger.debug(f"[PERF:대화] 스트리밍-전체파이프라인={total_elapsed:.1f}s (LLM={llm_elapsed:.1f}s, 전처리={total_elapsed - llm_elapsed:.1f}s)")
 
-        # [4] 응답 텍스트를 청크 단위로 전송
-        cleaned = clean_llm_response(response_text)
-        for chunk in _split_for_streaming(cleaned):
+        # [4] 응답 텍스트를 청크 단위로 전송 (clean_llm_response는 llm_client 내부에서 이미 처리됨)
+        for chunk in _split_for_streaming(response_text):
             yield {"type": "token", "content": chunk}
 
         # [5] 완료 이벤트

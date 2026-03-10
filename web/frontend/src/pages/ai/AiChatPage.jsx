@@ -21,6 +21,8 @@ export default function AiChatPage() {
     const [ragLoading, setRagLoading] = useState("");
     const [selectedFarm, setSelectedFarm] = useState(null);
     const [selectedHouse, setSelectedHouse] = useState(null);
+    const [speechStyle, setSpeechStyle] = useState(() => localStorage.getItem("ai_chat_speech_style") || "male");
+    const [modelAlert, setModelAlert] = useState(null);
     const fileInputRef = useRef(null);
     const contentRef = useRef(null);
     const abortControllerRef = useRef(null);
@@ -38,6 +40,10 @@ export default function AiChatPage() {
             localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
         }
     }, [sessionId]);
+
+    useEffect(() => {
+        localStorage.setItem("ai_chat_speech_style", speechStyle);
+    }, [speechStyle]);
 
     useEffect(() => {
         return () => {
@@ -80,6 +86,7 @@ export default function AiChatPage() {
             selectedFarm?.farmName || null,
             selectedHouse?.housName || null,
             sessionId,
+            speechStyle,
             {
                 onStatus: (text) => {
                     if (!tokenStarted) {
@@ -136,6 +143,8 @@ export default function AiChatPage() {
                     });
                     setIsLoading(false);
                     abortControllerRef.current = null;
+                    // 모델 변경 알림이 있으면 응답 완료 시 자동 제거
+                    setModelAlert(null);
                 },
                 onError: (errMsg) => {
                     setMessages((prev) => {
@@ -277,6 +286,10 @@ export default function AiChatPage() {
                     selectedHouse={selectedHouse}
                     setSelectedHouse={setSelectedHouse}
                     onClearMessages={handleClearMessages}
+                    speechStyle={speechStyle}
+                    setSpeechStyle={setSpeechStyle}
+                    modelAlert={modelAlert}
+                    setModelAlert={setModelAlert}
                 />
                 <div ref={contentRef} style={{flex: 1, display: "flex", flexDirection: "column"}}>
                     <ChatMessageList messages={messages}/>

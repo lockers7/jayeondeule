@@ -54,11 +54,13 @@ def get_ollama_url() -> str:
 
 
 # ============================================================
-# LLM 모델명 반환 (설정 > 환경변수 > 기본값 우선순위)
+# LLM 모델명 반환 (환경변수 > 설정 > 기본값 우선순위)
+# 런타임 모델 변경을 즉시 반영하기 위해 os.environ을 최우선으로 읽는다.
 # ============================================================
 def get_model_name() -> str:
     return (
-        getattr(settings.model, "name", None)
+        os.getenv("MODEL_NAME")
         or os.getenv("LLM_MODEL_NAME")
+        or getattr(settings.model, "name", None)
         or "qwen3:32b"
     )

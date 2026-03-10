@@ -20,6 +20,7 @@ class QueryRequest(BaseModel):
     house_id: Optional[str] = Field(default=None, description="재배사 ID")
     farm_name: Optional[str] = Field(default=None, description="농장명")
     house_name: Optional[str] = Field(default=None, description="재배사명")
+    speech_style: Optional[str] = Field(default=None, description="대화체 (male: 사무적, female: 부드러운)")
 
 
 class SourceItem(BaseModel):

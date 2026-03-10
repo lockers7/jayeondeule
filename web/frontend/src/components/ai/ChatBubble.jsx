@@ -130,21 +130,6 @@ export default function ChatBubble({role, content, sources = [], toolsUsed = [],
                 {!isUser && <VoiceTtsButton text={content}/>}
                 {showMeta && (
                     <div className="chat-response-meta">
-                        {responseType && (
-                            <div className="chat-meta-row">
-                                <span className="chat-meta-label">유형</span>
-                                <span className="chat-meta-value">
-                                    {responseType}
-                                    {elapsedSec != null && ` (${elapsedSec} sec)`}
-                                </span>
-                            </div>
-                        )}
-                        {toolsUsed.length > 0 && (
-                            <div className="chat-meta-row">
-                                <span className="chat-meta-label">도구</span>
-                                <span className="chat-meta-value">{toolsUsed.join(", ")}</span>
-                            </div>
-                        )}
                         {sources.length > 0 && (
                             <div className="chat-meta-row">
                                 <span className="chat-meta-label">출처</span>
@@ -160,6 +145,21 @@ export default function ChatBubble({role, content, sources = [], toolsUsed = [],
                                         </a>
                                     ))}
                                 </span>
+                            </div>
+                        )}
+                        {responseType && (
+                            <div className="chat-meta-row">
+                                <span className="chat-meta-label">유형</span>
+                                <span className="chat-meta-value">
+                                    {responseType}
+                                    {elapsedSec != null && ` (${elapsedSec} sec)`}
+                                </span>
+                            </div>
+                        )}
+                        {toolsUsed.length > 0 && (
+                            <div className="chat-meta-row">
+                                <span className="chat-meta-label">도구</span>
+                                <span className="chat-meta-value">{toolsUsed.join(", ")}</span>
                             </div>
                         )}
                     </div>
