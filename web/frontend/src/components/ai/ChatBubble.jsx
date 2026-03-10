@@ -1,5 +1,6 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import VoiceTtsButton from "./voice/VoiceTtsButton.jsx";
 import "./ChatBubble.css";
 
@@ -10,6 +11,7 @@ function preserveLineBreaksForMarkdown(text) {
 
     // 코드 펜스(```...```) 내부는 원문 그대로 유지하고,
     // 일반 텍스트 구간의 단일 개행만 markdown hard break("  \n")로 변환한다.
+    // 마크다운 표 행(| 로 시작)도 원문 그대로 유지한다.
     const parts = normalized.split(/(```[\s\S]*?```)/g);
     return parts
         .map((part) => {
@@ -33,7 +35,9 @@ function preserveLineBreaksForMarkdown(text) {
 
                 const next = lines[i + 1];
                 const hasBlankBoundary = current.trim() === "" || next.trim() === "";
-                output += hasBlankBoundary ? "\n" : "  \n";
+                // 마크다운 표 행은 hard break 없이 그대로 유지 (remark-gfm 테이블 파싱 보호)
+                const isTableRow = current.trim().startsWith("|") || next.trim().startsWith("|");
+                output += (hasBlankBoundary || isTableRow) ? "\n" : "  \n";
             }
 
             return output;
@@ -109,6 +113,7 @@ export default function ChatBubble({role, content, sources = [], toolsUsed = [],
                     renderContentWithLinks(content)
                 ) : (
                     <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
                         components={{
                             a: ({href, children}) => {
                                 const isValidUrl = href && /^https?:\/\/.+\..+/.test(href);
