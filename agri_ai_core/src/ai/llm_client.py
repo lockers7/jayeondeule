@@ -33,15 +33,18 @@
 # initialize_background_warmup: 백그라운드 워밍업 초기화
 # _emit_question_log_once: 질문 로그 1회 출력
 # _clean_page_content: 페이지 본문에서 노이즈 제거 후 도입부 추출
-# _refine_search_web: search_web 결과를 구조적으로 정제
+# _refine_search_web: search_web 결과를 구조적으로 정제 + LLM이 보는 결과와 동일한 출처 목록 반환 (tuple: 정제텍스트, 출처리스트)
 # _refine_fetch_url: fetch_url_content 결과를 구조적으로 정제
+# _refine_realtime_data: get_farm_realtime_data 결과를 컴팩트 텍스트로 변환 (조회시각 생략, sensor+relay 동시 처리)
 # _refine_tool_result: 도구 결과를 LLM 메시지에 넣기 전에 도구별 지능형 정제
 # _finalize_user_facing_answer: 최종 사용자 응답 생성 (think 태그 제거 + 기본 정리)
-# clean_llm_response: LLM 응답 기본 정리
-# (삭제됨: _append_source_urls — 출처는 메타데이터로만 전달)
+# _align_markdown_tables: LLM 응답 내 마크다운 표의 컬럼 구분자(|)를 정렬 (한글 너비 고려)
+# clean_llm_response: LLM 응답 기본 정리 + 표 정렬
 # _determine_response_type: 사용된 도구 목록으로 응답 유형 결정.
-# _build_structured_result: 구조화된 응답 결과 생성.
+# _build_structured_result: 구조화된 응답 결과 생성 (출처 URL 중복 제거 포함).
 # _filter_greeting_turns: 인사/잡담만으로 구성된 턴 쌍(user+assistant)을 제외한다.
+# get_llm_response_with_tools 내 턴 주입: 중복 user 턴 제거 시 대응 assistant 턴도 함께 제거 (고아 assistant → LLM 패턴 복사 방지)
+# get_llm_response_with_tools 내 출처 수집: _refine_search_web 정제 후 LLM이 보는 결과와 동일한 출처만 수집 (별도 키워드 필터 없음)
 # _coerce_numeric_id: LLM이 비정수 값을 ID로 넣는 경우 기본값(정수)으로 교정
 # get_llm_response_with_tools: Tool Use 지원 LLM 응답 생성 (LLM이 도구 자율 선택)
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -51,6 +54,7 @@ import time
 import json
 import threading
 import traceback
+import unicodedata
 from typing import Any, Dict, List, Optional
 from queue import Queue as ThreadQueue
 from urllib import error as urlerror
@@ -62,7 +66,7 @@ except Exception:
     ollama = None
 
 from agri_ai_core.logs import setup_logger
-from agri_ai_core.config import settings, NUM_PREDICT, get_ollama_url, get_model_name
+from agri_ai_core.config import settings, NUM_PREDICT, NUM_CTX, get_ollama_url, get_model_name
 from agri_ai_core.src.utils.validators import is_true
 from agri_ai_core.src.ai.utils import GREETING_RE as _GREETING_RE
 
@@ -843,18 +847,32 @@ def _clean_page_content(text: str, max_chars: int) -> str:
 
 # ============================================================
 # search_web 결과를 구조적으로 정제하여 간결한 텍스트로 변환한다 (LLM이 관련성 판단).
+# 출처 목록은 LLM이 보는 결과와 동일하게 구성 (별도 키워드 필터 없음).
+# Returns: tuple(정제된 텍스트, 출처 리스트[{title, url}])
 # ============================================================
-def _refine_search_web(tool_result: str, user_query: str) -> str:
+def _refine_search_web(tool_result: str, user_query: str) -> tuple:
+    empty_sources = []
     try:
         data = json.loads(tool_result)
     except (json.JSONDecodeError, TypeError):
-        return tool_result
+        return tool_result, empty_sources
 
     results = data.get("results", [])
     if not results:
-        return tool_result
+        return tool_result, empty_sources
 
     selected_results = results[:_SEARCH_WEB_REFINE_MAX_RESULTS]
+
+    # 출처 목록 = LLM이 보는 selected_results와 동일 (별도 키워드 필터 없음)
+    filtered_sources = []
+    for item in selected_results:
+        if not isinstance(item, dict):
+            continue
+        title = (item.get("title") or "").strip()
+        url = (item.get("url") or "").strip()
+        if title and url:
+            filtered_sources.append({"title": title, "url": url})
+
     lines = [f"[웹검색 결과 {len(results)}건 중 상위 {len(selected_results)}건]", ""]
 
     for idx, item in enumerate(selected_results, 1):
@@ -877,14 +895,15 @@ def _refine_search_web(tool_result: str, user_query: str) -> str:
         lines.append("")
 
     lines.append(
-        "지시: 위 검색 결과의 본문 내용을 종합하여 구체적이고 자세한 답변을 작성하세요. "
-        "핵심 요약 + 세부 항목 정리 + 출처 링크 형식으로 답변하세요."
+        "지시: 위 검색 결과를 종합하여 사용자의 원래 질문에 정확히 맞는 답변을 작성하세요. "
+        "사용자가 'N곳/N개' 등 구체적 개수를 요청했다면 반드시 해당 개수만큼 번호를 매겨 리스트로 답변하세요. "
+        "검색 결과에서 핵심 수치, 날짜, 사실 정보를 추출하여 답변에 반드시 포함하세요."
     )
 
     refined_text = "\n".join(lines)
     if len(refined_text) > _SEARCH_WEB_REFINE_TOTAL_CHARS:
         refined_text = refined_text[:_SEARCH_WEB_REFINE_TOTAL_CHARS].rstrip() + "\n...(중략)..."
-    return refined_text
+    return refined_text, filtered_sources
 
 
 # ============================================================
@@ -927,7 +946,9 @@ _SENSOR_SHORT = {
 
 def _refine_realtime_data(tool_result: str) -> str:
     """get_farm_realtime_data 결과를 컴팩트 텍스트로 변환.
-    ~1.5KB JSON → ~200~400자 텍스트로 압축하여 LLM 컨텍스트 절감.
+    ~1.5KB JSON → ~100~200자 텍스트로 압축하여 LLM 컨텍스트 절감.
+    - 조회시각 생략 (모든 재배사 동일하므로 중복 제거)
+    - OFF 장치 목록 생략 (ON만 표시, 나머지는 OFF로 추론 가능)
     """
     try:
         data = json.loads(tool_result)
@@ -951,7 +972,7 @@ def _refine_realtime_data(tool_result: str) -> str:
         if sensor_items:
             parts.append("센서: " + ", ".join(sensor_items))
 
-    # 릴레이 데이터 압축 (relay_mapping 사용 → ON/OFF 장치명만)
+    # 릴레이 데이터 압축 (relay_mapping 사용 → ON/OFF 장치명)
     relay_mapping = data.get("relay_mapping")
     if relay_mapping and isinstance(relay_mapping, dict):
         on_devices = []
@@ -968,7 +989,6 @@ def _refine_realtime_data(tool_result: str) -> str:
         if off_devices:
             parts.append("OFF: " + ", ".join(off_devices))
     elif data.get("relay") and isinstance(data["relay"], dict):
-        # relay_mapping이 없는 경우 raw relay fallback
         on_pins = [k for k, v in data["relay"].items()
                    if k.startswith("relay_") and k.endswith("_flag") and v]
         off_pins = [k for k, v in data["relay"].items()
@@ -977,10 +997,6 @@ def _refine_realtime_data(tool_result: str) -> str:
             parts.append(f"ON: {', '.join(on_pins)}")
         if off_pins:
             parts.append(f"OFF: {', '.join(off_pins)}")
-
-    timestamp = data.get("data_retrieved_at", "")
-    if timestamp:
-        parts.append(f"조회시각: {timestamp}")
 
     return " | ".join(parts)
 
@@ -992,7 +1008,8 @@ def _refine_tool_result(tool_name: str, tool_result: str, user_query: str) -> st
     if not tool_result:
         return tool_result or ""
     if tool_name == "search_web":
-        return _refine_search_web(tool_result, user_query)
+        refined_text, _ = _refine_search_web(tool_result, user_query)
+        return refined_text
     if tool_name == "fetch_url_content":
         return _refine_fetch_url(tool_result, user_query)
     if tool_name == "search_farm_knowledge":
@@ -1086,6 +1103,95 @@ def _finalize_user_facing_answer(
 
 
 
+# ============================================================
+# 마크다운 표 정렬 유틸리티 (한글 너비 고려)
+# ============================================================
+def _display_width(text: str) -> int:
+    """문자열의 터미널 표시 너비를 계산한다 (한글=2, 영문=1)."""
+    width = 0
+    for ch in text:
+        eaw = unicodedata.east_asian_width(ch)
+        width += 2 if eaw in ('W', 'F') else 1
+    return width
+
+
+def _pad_to_width(text: str, target_width: int) -> str:
+    """문자열을 target_width 너비로 패딩한다."""
+    current = _display_width(text)
+    pad = target_width - current
+    return text + (' ' * max(0, pad))
+
+
+# ============================================================
+# LLM 응답 내 마크다운 표의 컬럼 구분자(|)를 정렬한다 (한글 너비 고려).
+# ============================================================
+def _align_markdown_tables(text: str) -> str:
+    """텍스트 내 모든 마크다운 표의 | 구분자 위치를 정렬한다."""
+    if '|' not in text:
+        return text
+
+    lines = text.split('\n')
+    result = []
+    i = 0
+
+    while i < len(lines):
+        if lines[i].strip().startswith('|') and lines[i].strip().endswith('|'):
+            table_lines = []
+            while i < len(lines) and lines[i].strip().startswith('|') and lines[i].strip().endswith('|'):
+                table_lines.append(lines[i])
+                i += 1
+
+            if len(table_lines) < 2:
+                result.extend(table_lines)
+                continue
+
+            parsed_rows = []
+            separator_indices = []
+            for row_idx, row in enumerate(table_lines):
+                stripped = row.strip()
+                inner = stripped[1:-1] if stripped.startswith('|') and stripped.endswith('|') else stripped
+                cells = [c.strip() for c in inner.split('|')]
+
+                is_sep = all(re.match(r'^:?-+:?$', c) for c in cells if c)
+                if is_sep:
+                    separator_indices.append(row_idx)
+
+                parsed_rows.append(cells)
+
+            if not parsed_rows:
+                result.extend(table_lines)
+                continue
+
+            max_cols = max(len(row) for row in parsed_rows)
+            for row in parsed_rows:
+                while len(row) < max_cols:
+                    row.append('')
+
+            col_widths = [0] * max_cols
+            for row_idx, row in enumerate(parsed_rows):
+                if row_idx in separator_indices:
+                    continue
+                for col_idx, cell in enumerate(row):
+                    w = _display_width(cell)
+                    if w > col_widths[col_idx]:
+                        col_widths[col_idx] = w
+
+            col_widths = [max(w, 3) for w in col_widths]
+
+            for row_idx, row in enumerate(parsed_rows):
+                if row_idx in separator_indices:
+                    sep_cells = ['-' * col_widths[c] for c in range(max_cols)]
+                    result.append('| ' + ' | '.join(sep_cells) + ' |')
+                else:
+                    padded_cells = [_pad_to_width(row[c], col_widths[c]) for c in range(max_cols)]
+                    result.append('| ' + ' | '.join(padded_cells) + ' |')
+        else:
+            result.append(lines[i])
+            i += 1
+
+    return '\n'.join(result)
+
+
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # LLM 응답 필터링
 # LLM 응답 필터링
@@ -1099,7 +1205,7 @@ def _finalize_user_facing_answer(
 #     str: 필터링된 텍스트
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def clean_llm_response(response_text):
-    """LLM 응답 기본 정리: Think 태그 제거, 마크다운 헤더/코드블록 제거, 빈 줄 정리."""
+    """LLM 응답 기본 정리: Think 태그 제거, 마크다운 헤더/코드블록 제거, 빈 줄 정리, 표 정렬."""
     if not response_text:
         return response_text
 
@@ -1134,11 +1240,14 @@ def clean_llm_response(response_text):
     response_text = re.sub(r'[ \t]{2,}(?!\n)', ' ', response_text)
     response_text = response_text.strip()
 
-    # 5. 최종 빈 줄 정리
+    # 5-2. 최종 빈 줄 정리
     response_text = re.sub(r'(\n\s*){3,}', '\n\n', response_text)
     response_text = response_text.strip()
 
-    # 6. 과도한 제거 검사 (90% 이상 제거 시 폴백)
+    # 6. 마크다운 표 정렬 (한글 너비 고려, | 위치 일치)
+    response_text = _align_markdown_tables(response_text)
+
+    # 7. 과도한 제거 검사 (90% 이상 제거 시 폴백)
     final_length = len(response_text)
     if original_length > 0:
         removal_ratio = (original_length - final_length) / original_length
@@ -1227,11 +1336,20 @@ def _build_structured_result(
     sources: list,
     tools_used: list,
 ) -> Dict[str, Any]:
-    # 출처 중복 방지: clean_llm_response에서 이미 출처 섹션을 정규식으로 제거함
-    # 메타데이터 sources는 항상 전달 → 프론트엔드가 점선 아래에 구조화하여 표시
+    # 출처 URL 기반 중복 제거 (동일 URL 최초 1건만 유지)
+    deduped_sources: list = []
+    seen_urls: set = set()
+    for src in (sources or []):
+        url = (src.get("url") or "").strip()
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            deduped_sources.append(src)
+        elif not url:
+            deduped_sources.append(src)
+
     return {
         "response": response_text,
-        "sources": sources if sources else [],
+        "sources": deduped_sources,
         "tools_used": tools_used if tools_used else [],
         "response_type": _determine_response_type(tools_used),
     }
@@ -1384,27 +1502,44 @@ def get_llm_response_with_tools(
             filtered_turns = _filter_greeting_turns(actual_turns)
             skipped = len(actual_turns) - len(filtered_turns)
 
-            # 관련 과거 대화 주입 (system role, 800자 제한)
+            # 관련 과거 대화 주입 (system role, 400자 제한)
             for ctx in system_context:
                 content = ctx.get("content", "")
-                if len(content) > 800:
-                    content = content[:800] + "..."
+                if len(content) > 400:
+                    content = content[:400] + "..."
                 messages.append({"role": "system", "content": content})
 
-            # 최근 턴 주입 (user/assistant, 500자 제한)
+            # 최근 턴 주입 (user 400자/assistant 300자)
             # 빈/실패 assistant 메시지는 LLM이 패턴을 따라 동일 응답을 반복하므로 제거
+            # [FIX] 중복 user 턴 제거 시 대응하는 assistant 턴도 함께 제거 (고아 assistant → LLM 패턴 복사 방지)
+            _user_query_stripped = (user_query or "").strip()
+            _skip_next_assistant = False
             for turn in filtered_turns:
                 role = turn.get("role", "user")
                 content = turn.get("content", "")
                 if role == "assistant" and not content.strip():
+                    _skip_next_assistant = False
                     continue
                 # "확인이 필요합니다" 등 실패 패턴만 있는 짧은 assistant 응답 제거
                 if role == "assistant" and len(content.strip()) < 30:
                     _stripped = content.strip().rstrip(".")
                     if _stripped in ("확인이 필요합니다", "확인이 필요해요", "정보가 없습니다"):
+                        _skip_next_assistant = False
                         continue
-                if len(content) > 500:
-                    content = content[:500] + "..."
+                # [FIX] 중복 user 턴 제거 후 대응 assistant 턴도 함께 스킵
+                if _skip_next_assistant and role == "assistant":
+                    _skip_next_assistant = False
+                    continue
+                # 현재 질문과 동일한 과거 user 턴 제거 (중복 컨텍스트 방지)
+                if role == "user" and content.strip() == _user_query_stripped:
+                    _skip_next_assistant = True
+                    continue
+                _skip_next_assistant = False
+                # assistant 답변은 짧게 제한 (과거 답변 복사 방지 + 도구 결과 공간 확보)
+                if role == "assistant" and len(content) > 300:
+                    content = content[:300] + "..."
+                elif role == "user" and len(content) > 400:
+                    content = content[:400] + "..."
                 messages.append({"role": role, "content": content})
 
             logger.info(
@@ -1460,6 +1595,7 @@ def get_llm_response_with_tools(
                     "top_p": 0.9,
                     "top_k": 40,
                     "num_predict": iter_num_predict,
+                    "num_ctx": NUM_CTX,
                     "think": False,
                 },
                 keep_alive='1h'
@@ -1504,13 +1640,14 @@ def get_llm_response_with_tools(
                             f"[Tool Use] 빈 응답 감지 (반복{iteration + 1}) → 도구 호출 재시도 "
                             f"(빈응답횟수={_empty_response_count})"
                         )
-                        # 빈 응답 메시지 제거 후 도구 호출 유도
+                        # 빈 응답 메시지 제거 후 도구 호출 유도 (원본 질문 포함)
                         messages.pop()  # 빈 assistant 메시지 제거
                         messages.append({
                             "role": "user",
                             "content": (
-                                "도구를 호출하여 요청을 처리하세요. "
-                                "반드시 적절한 도구를 선택하고 호출해야 합니다."
+                                f"사용자의 원래 요청: \"{user_query}\"\n"
+                                f"도구를 호출하여 위 요청을 처리하세요. "
+                                f"반드시 적절한 도구를 선택하고 호출해야 합니다."
                             ),
                         })
                         _prev_had_tool_calls = True
@@ -1539,8 +1676,9 @@ def get_llm_response_with_tools(
                 finalized = _strip_hallucinated_urls(finalized, _verified_urls)
                 return _build_structured_result(finalized, _collected_sources, _tools_used)
 
-            # 도구 호출 처리
+            # 도구 호출 처리 (같은 반복의 결과는 병합하여 1개 메시지로 추가)
             logger.info(f"[Tool Use] 도구호출 {len(tool_calls)}건 감지 (반복{iteration + 1})")
+            _iteration_tool_results = []
             for tc_idx, tool_call in enumerate(tool_calls, start=1):
                 tool_name = _extract_tool_name(tool_call)
                 tool_args = _extract_tool_arguments(tool_call)
@@ -1587,16 +1725,13 @@ def get_llm_response_with_tools(
                 )
                 logger.info(f"[도구결과데이터] {tool_name}:\n{tool_result}")
 
-                # 도구 결과에서 출처 수집 (정제 전 원본 JSON에서 파싱)
+                # 도구 결과에서 출처 수집 (search_web: 정제 후 LLM이 보는 결과와 동일한 출처만 수집)
                 if tool_result:
                     try:
                         parsed_result = json.loads(tool_result)
                         if tool_name == "search_web":
-                            for item in parsed_result.get("results", []):
-                                title = (item.get("title") or "").strip()
-                                url = (item.get("url") or "").strip()
-                                if title and url:
-                                    _collected_sources.append({"title": title, "url": url})
+                            _, _filtered_sources = _refine_search_web(tool_result, user_query)
+                            _collected_sources.extend(_filtered_sources)
                         elif tool_name == "search_farm_knowledge":
                             for item in parsed_result.get("results", []):
                                 meta = item.get("metadata", {})
@@ -1607,15 +1742,21 @@ def get_llm_response_with_tools(
                     except (json.JSONDecodeError, TypeError):
                         pass
 
-                # 도구 결과를 정제 후 메시지에 추가
+                # 도구 결과를 정제하여 수집 (반복 완료 후 병합하여 메시지 1건으로 추가)
                 refined_result = _refine_tool_result(tool_name, tool_result, user_query)
                 logger.info(
                     f"[도구정제] {tool_name} 원본={len(tool_result or '')}자 → 정제={len(refined_result)}자"
                 )
+                _iteration_tool_results.append(refined_result)
+
+            # 같은 반복의 모든 도구 결과를 하나의 tool 메시지로 병합 (메시지 수 절감 → 컨텍스트 절약)
+            if _iteration_tool_results:
+                merged_result = "\n".join(_iteration_tool_results)
                 messages.append({
                     "role": "tool",
-                    "content": refined_result
+                    "content": merged_result
                 })
+                logger.info(f"[도구결과병합] {len(_iteration_tool_results)}건 → 1메시지 ({len(merged_result)}자)")
 
         # 최대 반복 횟수 도달
         logger.warning(f"[Tool Use] 최대 반복 횟수({max_tool_iterations}) 도달")

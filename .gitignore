@@ -2,6 +2,8 @@
 assets/external/
 .web
 .states
+.ollama/
+.backup/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
