@@ -355,6 +355,7 @@ async def query_llm(request: QueryRequest, _=Depends(verify_api_key)):
             farm_name=request.farm_name,
             house_name=request.house_name,
             session_id=session_id,
+            speech_style=request.speech_style or "male",
         ):
             result_data = chunk
             break
@@ -434,6 +435,7 @@ async def query_llm_stream(request: QueryRequest, _=Depends(verify_api_key)):
             farm_name=request.farm_name,
             house_name=request.house_name,
             session_id=session_id,
+            speech_style=request.speech_style or "male",
         ):
             yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
@@ -567,3 +569,111 @@ async def rag_save(request: RagSaveRequest, _=Depends(verify_api_key)):
             message=f"RAG 저장 중 오류: {str(e)}",
             processing_time=round(time.time() - start, 3),
         )
+
+
+# ============================================================
+# 관리자 전용: LLM 모델 관리 API
+# ============================================================
+
+@app.get("/api/v1/admin/models")
+async def get_available_models(_=Depends(verify_api_key)):
+    """Ollama에 설치된 모델 목록과 현재 선택된 모델을 반환합니다."""
+    import httpx
+
+    ollama_url = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
+    current_model = os.getenv("MODEL_NAME", "")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{ollama_url}/api/tags")
+            resp.raise_for_status()
+            data = resp.json()
+
+        models = []
+        for m in data.get("models", []):
+            name = m.get("name", "")
+            size_bytes = m.get("size", 0)
+            size_gb = round(size_bytes / (1024 ** 3), 1) if size_bytes else 0
+            param_size = m.get("details", {}).get("parameter_size", "")
+            models.append({
+                "name": name,
+                "size_gb": size_gb,
+                "parameter_size": param_size,
+            })
+
+        # 임베딩 모델 제외 (bge, nomic 등)
+        embedding_keywords = ["bge", "nomic", "embed"]
+        models = [m for m in models if not any(kw in m["name"].lower() for kw in embedding_keywords)]
+
+        return {
+            "success": True,
+            "current_model": current_model,
+            "models": sorted(models, key=lambda x: x["name"]),
+        }
+    except Exception as e:
+        logger.error(f"Ollama 모델 목록 조회 실패: {e}")
+        return {"success": False, "error": str(e), "current_model": current_model, "models": []}
+
+
+@app.post("/api/v1/admin/models")
+async def change_model(request: Request, _=Depends(verify_api_key)):
+    """관리자 전용: .env 파일의 MODEL_NAME을 변경합니다."""
+    body = await request.json()
+    new_model = (body.get("model_name") or "").strip()
+
+    if not new_model:
+        raise HTTPException(400, "model_name이 필요합니다.")
+
+    env_path = os.path.join(PROJECT_ROOT, ".env")
+
+    try:
+        with open(env_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        # MODEL_NAME 라인을 찾아서 교체
+        found = False
+        new_lines = []
+        # MODEL_PREFIX도 자동 갱신 (콜론 앞 부분)
+        new_prefix = new_model.split(":")[0] if ":" in new_model else new_model
+        for line in lines:
+            if line.startswith("MODEL_NAME="):
+                new_lines.append(f"MODEL_NAME={new_model}\n")
+                found = True
+            elif line.startswith("MODEL_PREFIX="):
+                new_lines.append(f"MODEL_PREFIX={new_prefix}\n")
+            else:
+                new_lines.append(line)
+
+        if not found:
+            new_lines.append(f"MODEL_NAME={new_model}\n")
+
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+
+        old_model = os.getenv("MODEL_NAME", "")
+
+        # 런타임 환경변수 즉시 갱신 (get_model_name()이 os.environ을 최우선 참조)
+        os.environ["MODEL_NAME"] = new_model
+        os.environ["MODEL_PREFIX"] = new_prefix
+
+        # LLM 클라이언트 모델 캐시 초기화 (다음 호출 시 새 모델 사용)
+        try:
+            from agri_ai_core.src.ai import llm_client as _llm
+            with _llm._model_cache_lock:
+                _llm._cached_model_name = None
+            logger.info(f"[관리자] 모델 캐시 초기화 완료")
+        except Exception as cache_err:
+            logger.warning(f"[관리자] 모델 캐시 초기화 실패: {cache_err}")
+
+        logger.info(f"[관리자] LLM 모델 변경: {old_model} → {new_model} (즉시 적용)")
+        api_logger.info(f"[admin/models] 모델 변경: {old_model} → {new_model}")
+
+        return {
+            "success": True,
+            "message": f"모델이 '{new_model}'로 변경되었습니다. 즉시 적용됩니다.",
+            "old_model": old_model,
+            "new_model": new_model,
+        }
+    except Exception as e:
+        logger.error(f"모델 변경 실패: {e}")
+        raise HTTPException(500, f"모델 변경 실패: {str(e)}")

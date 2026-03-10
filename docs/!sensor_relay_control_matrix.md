@@ -103,49 +103,85 @@ M-2,열풍기쿨다운,-,모두,*,*,*,*,*,*,-,유지,유지,강제OFF,강제OFF,
 미사용(relay_4/12/13/16),항상 OFF,사용하지 않는 릴레이 슬롯
 
 ========================================
-[5] 릴레이 핀 매핑 (Standard: 재배사 1/3/4)
+[5] 릴레이 핀 매핑 (Standard v2: 재배사 1/3)
 ========================================
-릴레이번호,영문명,한글명,수동환경제어_역할
-relay_1st_flag,water_heater_flag,물가열기,온도 가열용 수중 히터
-relay_2st_flag,fog_occurs_flag,분사펌프,습도 상승용 안개 분사
-relay_3st_flag,drainage_motor_flag,배수밸브,항상 ON (배수)
-relay_4st_flag,unused,미사용,-
-relay_5st_flag,intake_fan_flag,흡기팬,순환모드에 따라 제어
-relay_6st_flag,exhaust_fan_flag,배기팬,순환모드에 따라 제어
-relay_7st_flag,lighting_flag,조명토글,스케줄제어에서 관리
-relay_8st_flag,irrigation_flag,관수밸브,스케줄제어에서 관리
-relay_9st_flag,indoor_heater_flag,열풍기,저온+고습 시 가온/제습
-relay_10st_flag,air_circulation_valve_flag,순환댐퍼,순환모드에 따라 제어
-relay_11st_flag,air_intake_valve_flag,흡기댐퍼,순환모드에 따라 제어
-relay_12st_flag,unused,미사용,-
-relay_13st_flag,unused,미사용,-
-relay_14st_flag,air_exhaust_valve_flag,배기댐퍼,순환모드에 따라 제어
-relay_15st_flag,indoor_heater_valve_flag,열풍댐퍼,열풍기와 연동 (ON 시퀀스: 열풍댐퍼→열풍기)
-relay_16st_flag,unused,미사용,-
+소스: control_common.py RELAY_PIN_MAP_STANDARD + raspi/v2/gpio/gpio_config.py
+GPIO 신호: False=릴레이ON / True=릴레이OFF (반전)
+릴레이번호,영문명,한글명,GPIO(BCM),물리핀,수동환경제어_역할
+relay_1st_flag,water_heater_flag,물가열기,22,15,온도 가열용 수중 히터
+relay_2st_flag,fog_occurs_flag,분사펌프,23,16,습도 상승용 안개 분사
+relay_3st_flag,drainage_motor_flag,배수밸브,9,21,항상 ON (배수)
+relay_4st_flag,unused,미사용,25,22,-
+relay_5st_flag,intake_fan_flag,흡기팬,11,23,순환모드에 따라 제어
+relay_6st_flag,exhaust_fan_flag,배기팬,8,24,순환모드에 따라 제어
+relay_7st_flag,lighting_flag,조명토글,5,29,스케줄제어에서 관리
+relay_8st_flag,irrigation_flag,관수밸브,7,26,스케줄제어에서 관리
+relay_9st_flag,indoor_heater_flag,열풍기,6,31,저온+고습 시 가온/제습
+relay_10st_flag,air_circulation_valve_flag,순환댐퍼,12,32,순환모드에 따라 제어
+relay_11st_flag,air_intake_valve_flag,흡기댐퍼,20,38,순환모드에 따라 제어
+relay_12st_flag,unused,미사용,16,36,-
+relay_13st_flag,unused,미사용,19,35,-
+relay_14st_flag,air_exhaust_valve_flag,배기댐퍼,13,33,순환모드에 따라 제어
+relay_15st_flag,indoor_heater_valve_flag,열풍댐퍼,26,37,열풍기와 연동 (ON 시퀀스: 열풍댐퍼→열풍기)
+relay_16st_flag,unused,미사용,21,40,-
 
 ========================================
-[6] 릴레이 핀 매핑 (E-Version: 재배사 2)
+[6] 릴레이 핀 매핑 (E-Version v1: 재배사 2)
 ========================================
-릴레이번호,영문명,한글명,수동환경제어_역할
-relay_1st_flag,water_heater_flag,물가열기,온도 가열용 수중 히터
-relay_2st_flag,fog_occurs_flag,분사펌프,습도 상승용 안개 분사
-relay_3st_flag,radiator_flag,라디에터,-
-relay_4st_flag,unused,미사용,-
-relay_5st_flag,lighting_flag,조명토글,스케줄제어에서 관리
-relay_6st_flag,irrigation_flag,관수밸브,스케줄제어에서 관리
-relay_7st_flag,intake_fan_flag,흡기팬,순환모드에 따라 제어
-relay_8st_flag,exhaust_fan_flag,배기팬,순환모드에 따라 제어
-relay_9st_flag,air_circulation_valve_flag,순환댐퍼,순환모드에 따라 제어
-relay_10st_flag,air_intake_valve_flag,흡기댐퍼,순환모드에 따라 제어
-relay_11st_flag,air_exhaust_valve_flag,배기댐퍼,순환모드에 따라 제어
-relay_12st_flag,drainage_motor_flag,배수밸브,항상 ON (배수)
-relay_13st_flag,indoor_heater_flag,열풍기,저온+고습 시 가온/제습
-relay_14st_flag,indoor_heater_valve_flag,열풍댐퍼,열풍기와 연동
-relay_15st_flag,unused,미사용,-
-relay_16st_flag,unused,미사용,-
+소스: control_common.py RELAY_PIN_MAP_E + raspi/v1/gpio/gpio_config.py
+GPIO 신호: False=릴레이ON / True=릴레이OFF (반전)
+릴레이번호,영문명,한글명,GPIO(BCM),물리핀,수동환경제어_역할
+relay_1st_flag,water_heater_flag,물가열기,0,27,온도 가열용 수중 히터
+relay_2st_flag,fog_occurs_flag,분사펌프,5,29,습도 상승용 안개 분사
+relay_3st_flag,radiator_flag,라디에터,6,31,-
+relay_4st_flag,unused,미사용,13,33,-
+relay_5st_flag,lighting_flag,조명토글,19,35,스케줄제어에서 관리
+relay_6st_flag,irrigation_flag,관수밸브,26,37,스케줄제어에서 관리
+relay_7st_flag,intake_fan_flag,흡기팬,23,16,순환모드에 따라 제어
+relay_8st_flag,exhaust_fan_flag,배기팬,24,18,순환모드에 따라 제어
+relay_9st_flag,air_circulation_valve_flag,순환댐퍼,25,22,순환모드에 따라 제어
+relay_10st_flag,air_intake_valve_flag,흡기댐퍼,16,36,순환모드에 따라 제어
+relay_11st_flag,air_exhaust_valve_flag,배기댐퍼,20,38,순환모드에 따라 제어
+relay_12st_flag,drainage_motor_flag,배수밸브,21,40,항상 ON (배수)
+relay_13st_flag,indoor_heater_flag,열풍기,17,11,저온+고습 시 가온/제습
+relay_14st_flag,indoor_heater_valve_flag,열풍댐퍼,27,13,열풍기와 연동
+relay_15st_flag,unused,미사용,22,15,-
+relay_16st_flag,unused,미사용,-,-,-
 
 ========================================
-[7] 제어 흐름 요약 (control_manual_environment 의사결정 순서)
+[6-2] 릴레이 핀 매핑 (Standard v3: 재배사 99 테스트)
+========================================
+소스: control_common.py RELAY_PIN_MAP_STANDARD + raspi/v3/gpio/gpio_config.py
+GPIO 배열 v3: [10,24,9,25,11,8,5,7,6,12,13,16,19,20,26,21]
+릴레이번호,영문명,한글명,GPIO(BCM),물리핀,수동환경제어_역할
+relay_1st_flag,water_heater_flag,물가열기,10,19,온도 가열용 수중 히터
+relay_2st_flag,fog_occurs_flag,분사펌프,24,18,습도 상승용 안개 분사
+relay_3st_flag,drainage_motor_flag,배수밸브,9,21,항상 ON (배수)
+relay_4st_flag,unused,미사용,25,22,-
+relay_5st_flag,intake_fan_flag,흡기팬,11,23,순환모드에 따라 제어
+relay_6st_flag,exhaust_fan_flag,배기팬,8,24,순환모드에 따라 제어
+relay_7st_flag,lighting_flag,조명토글,5,29,스케줄제어에서 관리
+relay_8st_flag,irrigation_flag,관수밸브,7,26,스케줄제어에서 관리
+relay_9st_flag,indoor_heater_flag,열풍기,6,31,저온+고습 시 가온/제습
+relay_10st_flag,air_circulation_valve_flag,순환댐퍼,12,32,순환모드에 따라 제어
+relay_11st_flag,air_intake_valve_flag,흡기댐퍼,13,33,순환모드에 따라 제어
+relay_12st_flag,unused,미사용,16,36,-
+relay_13st_flag,unused,미사용,19,35,-
+relay_14st_flag,air_exhaust_valve_flag,배기댐퍼,20,38,순환모드에 따라 제어
+relay_15st_flag,indoor_heater_valve_flag,열풍댐퍼,26,37,열풍기와 연동 (ON 시퀀스: 열풍댐퍼→열풍기)
+relay_16st_flag,unused,미사용,21,40,-
+
+========================================
+[7] 재배사별 raspi 버전 요약
+========================================
+재배사,raspi버전,핀매핑,GPIO배열,비고
+재배사 1,v2,STANDARD,"[22,23,9,25,11,8,5,7,6,12,20,16,19,13,26,21]",운영중
+재배사 2,v1,E-VERSION,"[0,5,6,13,19,26,23,24,25,16,20,21,17,27,22]",E버전 (릴레이 배치 다름)
+재배사 3,v2,STANDARD,"[22,23,9,25,11,8,5,7,6,12,20,16,19,13,26,21]",운영중
+재배사 99,v3,STANDARD,"[10,24,9,25,11,8,5,7,6,12,13,16,19,20,26,21]",테스트용 (GPIO 1/2번 변경)
+
+========================================
+[8] 제어 흐름 요약 (control_manual_environment 의사결정 순서)
 ========================================
 순서,판단항목,조건,동작,비고
 1,비상제어,온도<25 또는 >33 또는 습도<70 또는 >95 또는 CO2>1500 또는 수온<35 또는 >60,즉시 비상 릴레이 설정,모든 생육단계 공통 최우선
@@ -156,7 +192,7 @@ relay_16st_flag,unused,미사용,-
 6,2단계제어,모든 릴레이 쓰기 시,Phase1(댐퍼) → 15초 대기 → Phase2(팬),하드웨어 보호용 시퀀스
 
 ========================================
-[8] 센서 상태 분류 기준 (_classify 함수)
+[9] 센서 상태 분류 기준 (_classify 함수)
 ========================================
 센서,상태,범위,비상 제외 후 실효범위
 내부온도,low (저온),<27℃,25~27℃

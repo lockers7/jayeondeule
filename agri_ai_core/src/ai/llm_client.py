@@ -31,35 +31,14 @@
 # _get_model_name: 환경 설정에서 모델명을 가져오거나 기본값을 반환
 # _perform_llm_warmup: LLM 워밍업 수행
 # initialize_background_warmup: 백그라운드 워밍업 초기화
-# _load_reasoning_terms: reasoning/독백 탐지용 용어 목록.
-# _find_reasoning_terms: 텍스트에서 추론 용어 탐색
-# _line_has_korean: 한국어 포함 라인 여부
-# _count_korean_chars: 한국어 문자 수 카운트
-# _looks_like_reasoning_line: 추론 라인 패턴 판단
-# _extract_measure_tokens: 측정값 토큰 추출
-# _extract_sensor_concepts: 센서 관련 개념 추출
-# _is_english_korean_overlap: 영한 혼합 여부 판단
-# _snapshot_answer_stage: 응답 단계별 스냅샷 로깅
 # _emit_question_log_once: 질문 로그 1회 출력
-# _is_reasoning_paragraph: 추론 단락 여부 판단
-# _strip_reasoning_paragraphs: 추론 단락 제거
-# _strip_non_korean_reasoning_for_korean_query: 한국어 질문에 대한 비한국어 추론 제거
-# _force_korean_surface_for_korean_query: 한국어 질문에 대한 한국어 표면 강제
-# _contains_reasoning_trace: 추론 흔적 포함 여부 판단
-# _rewrite_without_reasoning: 추론 제거 후 텍스트 재작성
-# _force_honorific_response_enabled: 존댓말 강제 변환 활성 여부
-# _rewrite_to_honorific: 존댓말로 변환
-# _clean_page_content: 페이지 본문에서 노이즈 제거 후 도입부 추출 (키워드 불필요, LLM이 관련성 판단).
-# _refine_search_web: search_web 결과를 구조적으로 정제하여 간결한 텍스트로 변환한다 (LLM이 관련성 판단).
-# _refine_fetch_url: fetch_url_content 결과를 구조적으로 정제한다 (LLM이 관련성 판단).
-# _refine_tool_result: 도구 결과를 LLM 메시지에 넣기 전에 도구별 지능형 정제를 수행한다.
-# _needs_honorific_rewrite: 반말이 감지되면 True, 산문 문장이 모두 존댓말이면 False
-# _enforce_honorific_response: 존댓말 응답 강제 적용
-# _finalize_user_facing_answer: 최종 사용자 응답 생성
-# filter_llm_response: LLM 응답 필터링
-# clean_llm_response: LLM 응답 정리
-# _sanitize_markdown_links: Tool Use 지원 LLM 응답 생성
-# _append_source_urls: 출처 URL 추가
+# _clean_page_content: 페이지 본문에서 노이즈 제거 후 도입부 추출
+# _refine_search_web: search_web 결과를 구조적으로 정제
+# _refine_fetch_url: fetch_url_content 결과를 구조적으로 정제
+# _refine_tool_result: 도구 결과를 LLM 메시지에 넣기 전에 도구별 지능형 정제
+# _finalize_user_facing_answer: 최종 사용자 응답 생성 (think 태그 제거 + 기본 정리)
+# clean_llm_response: LLM 응답 기본 정리
+# (삭제됨: _append_source_urls — 출처는 메타데이터로만 전달)
 # _determine_response_type: 사용된 도구 목록으로 응답 유형 결정.
 # _build_structured_result: 구조화된 응답 결과 생성.
 # _filter_greeting_turns: 인사/잡담만으로 구성된 턴 쌍(user+assistant)을 제외한다.
@@ -72,7 +51,8 @@ import time
 import json
 import threading
 import traceback
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
+from queue import Queue as ThreadQueue
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
@@ -82,11 +62,66 @@ except Exception:
     ollama = None
 
 from agri_ai_core.logs import setup_logger
-from agri_ai_core.config import settings, NUM_PREDICT, NUM_PREDICT_REWRITE, get_ollama_url, get_model_name
+from agri_ai_core.config import settings, NUM_PREDICT, get_ollama_url, get_model_name
 from agri_ai_core.src.utils.validators import is_true
-from agri_ai_core.src.ai.utils import KOREAN_CHAR_RE as _KOREAN_CHAR_RE, has_korean as _line_has_korean, GREETING_RE as _GREETING_RE
+from agri_ai_core.src.ai.utils import GREETING_RE as _GREETING_RE
 
 logger = setup_logger(__name__)
+
+# 도구 한국어 표시명 매핑
+_TOOL_DISPLAY_NAMES = {
+    "get_farm_realtime_data": "센서/릴레이 데이터 조회",
+    "search_farm_knowledge": "농장 지식 검색",
+    "search_web": "웹 검색",
+    "fetch_url_content": "웹페이지 내용 수집",
+    "control_relay": "장치 제어",
+}
+
+
+def _build_tool_detail_message(tool_name: str, tool_args: dict) -> str:
+    """도구 호출 시 사용자에게 보여줄 상세 정보 메시지 생성."""
+    if tool_name == "get_farm_realtime_data":
+        house_id = tool_args.get("house_id", "")
+        data_type = tool_args.get("data_type", "all")
+        type_label = {"sensor": "센서", "relay": "릴레이", "all": "센서/릴레이"}.get(data_type, data_type)
+        return f"{house_id}호 재배사 {type_label} (PostgreSQL)"
+    elif tool_name == "search_web":
+        query = tool_args.get("query", "")[:30]
+        return f"'{query}' 검색 (SearXNG)"
+    elif tool_name == "search_farm_knowledge":
+        query = tool_args.get("query", "")[:30]
+        file_name = tool_args.get("file_name", "")
+        if file_name:
+            return f"'{file_name}' 문서 검색 (ChromaDB)"
+        return f"'{query}' 지식 검색 (ChromaDB)"
+    elif tool_name == "fetch_url_content":
+        url = tool_args.get("url", "")[:40]
+        return f"{url}"
+    elif tool_name == "control_relay":
+        device = tool_args.get("device_flag", "")
+        action = tool_args.get("action", "")
+        return f"{device} {action}"
+    return ""
+
+
+def _report_progress(progress_queue: Optional[ThreadQueue], message: str, phase: str = "processing",
+                     tool_name: str = None, iteration: int = None, max_iterations: int = None):
+    """Tool Use 루프 내부에서 진행 상태를 외부(스트리밍 핸들러)로 보고합니다."""
+    if progress_queue is None:
+        return
+    event = {"message": message, "phase": phase}
+    if tool_name:
+        event["tool_name"] = tool_name
+        event["tool_display"] = _TOOL_DISPLAY_NAMES.get(tool_name, tool_name)
+    if iteration is not None:
+        event["iteration"] = iteration
+    if max_iterations is not None:
+        event["max_iterations"] = max_iterations
+    try:
+        progress_queue.put_nowait(event)
+    except Exception:
+        pass  # 큐 오류 시 무시 (진행 상태 누락은 치명적이지 않음)
+
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 워밍업 관련 전역 변수
@@ -750,164 +785,6 @@ def initialize_background_warmup(farm_id=None, house_id=None, farm_name=None, ho
 
 
 
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 생각 과정 정규식 패턴 (공통)
-# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-_THINKING_PATTERNS = [
-    r'^(Okay|Well|So|Now),?\s+.*?(user said|need to|should|I need|I should)',
-    r'^(Okay|Well|So|Hmm),?\s+that means\b',
-    r'^(Okay|Well|So|Now),?\s+(let\'s see|let me)',
-    r'^Let (me|\'s)\s+(think|see|check|figure|understand)',
-    r'^(First|Hmm|Wait),?\s+(I|let|the)',
-    r'^I (need to|should|will|\'ll)\s+',
-    r'^The user (is|provided|asked|wants|mentioned|has|said)',
-    r'^Looking at (this|the|what)',
-    r'^Based on (this|the|what)',
-    # 데이터 검증/확인 패턴 (사용자 요청 추가)
-    r'^Double-check\s+',
-    r'^Checking\s+(if|the|that)',
-    r'^Verify\s+(if|the|that)',
-    r'^\w+\s+\d+(\.\d+)?\s*(°C|°F|%|ppm)\s+(is|are)\s+(okay|good|fine|normal|comfortable|acceptable)',
-    r'^(Temperature|Humidity|CO2|Pressure|Level)\s+\d+',
-    r'^Relays?:\s+',
-    r'^So\s+(the|this|it)\s+(system|environment|condition)',
-    r'^No\s+(immediate\s+)?action\s+(needed|required)',
-]
-
-_DEFAULT_REASONING_TERMS = [
-    "first,", "second,", "third,", "hmm,", "wait,", "so,",
-    "that means", "so the main points", "putting it all together",
-    "here's the answer", "in a clear, concise", "in korean sentence",
-    "let me think", "based on",
-    "relay statuses", "sensor data",
-    "advise checking", "the system expects",
-    "can't be converted to json", "json serializable",
-    "maybe it's", "might be a problem",
-]
-# 하위 호환 별칭
-_REASONING_HINT_KEYWORDS = _DEFAULT_REASONING_TERMS
-
-_MEASURE_TOKEN_PATTERN = re.compile(
-    r"[-+]?\d+(?:\.\d+)?\s*(?:°c|°f|%|ppm|m|lux|루멘|도|℃|℉)?",
-    re.IGNORECASE,
-)
-
-_SENSOR_CONCEPT_MAP = {
-    "temperature": ("temperature", "temp", "온도", "기온", "실내 온도", "외부 기온"),
-    "humidity": ("humidity", "습도"),
-    "co2": ("co2", "이산화탄소"),
-    "light": ("light", "조도", "루멘"),
-    "water_level": ("water level", "수위"),
-    "water_temp": ("water temp", "수온"),
-    "relay": ("relay", "릴레이"),
-}
-
-
-# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# reasoning/독백 탐지용 용어 목록.
-# 환경변수 LLM_REASONING_EXTRA_TERMS로 추가 term을 주입할 수 있다.
-# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def _load_reasoning_terms() -> List[str]:
-    extra_raw = os.getenv("LLM_REASONING_EXTRA_TERMS", "")
-    extra_terms = [term.strip().lower() for term in extra_raw.split(",") if term and term.strip()]
-
-    merged = []
-    seen = set()
-    for term in [*_DEFAULT_REASONING_TERMS, *extra_terms]:
-        normalized = term.strip().lower()
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        merged.append(normalized)
-    return merged
-
-
-_REASONING_TERMS = _load_reasoning_terms()
-
-
-def _find_reasoning_terms(text: str) -> List[str]:
-    lowered = (text or "").lower()
-    return [term for term in _REASONING_TERMS if term in lowered]
-
-
-def _count_korean_chars(text: str) -> int:
-    return len(_KOREAN_CHAR_RE.findall(text or ""))
-
-
-def _looks_like_reasoning_line(line: str) -> bool:
-    stripped = (line or "").strip()
-    if not stripped:
-        return False
-
-    lowered = stripped.lower()
-    for pattern in _THINKING_PATTERNS:
-        if re.match(pattern, stripped, re.IGNORECASE):
-            return True
-
-    if any(keyword in lowered for keyword in _REASONING_HINT_KEYWORDS):
-        return True
-
-    return bool(_find_reasoning_terms(stripped))
-
-
-def _extract_measure_tokens(text: str) -> Set[str]:
-    tokens = set()
-    for token in _MEASURE_TOKEN_PATTERN.findall((text or "").lower()):
-        normalized = " ".join(token.split())
-        if not normalized:
-            continue
-        # 숫자만 있는 토큰은 정보량이 낮아 과탐 방지를 위해 제외
-        if re.fullmatch(r"[-+]?\d+(?:\.\d+)?", normalized):
-            continue
-        tokens.add(normalized)
-    return tokens
-
-
-def _extract_sensor_concepts(text: str) -> Set[str]:
-    lowered = (text or "").lower()
-    concepts = set()
-    for concept, aliases in _SENSOR_CONCEPT_MAP.items():
-        if any(alias in lowered for alias in aliases):
-            concepts.add(concept)
-    return concepts
-
-
-def _is_english_korean_overlap(english_paragraph: str, korean_paragraph: str) -> bool:
-    eng_measures = _extract_measure_tokens(english_paragraph)
-    kor_measures = _extract_measure_tokens(korean_paragraph)
-    shared_measures = eng_measures & kor_measures
-
-    eng_concepts = _extract_sensor_concepts(english_paragraph)
-    kor_concepts = _extract_sensor_concepts(korean_paragraph)
-    shared_concepts = eng_concepts & kor_concepts
-
-    # 값(측정치)와 개념(온도/습도/릴레이 등)이 함께 겹치면 중복 번역 블록으로 본다.
-    if len(shared_measures) >= 2 and len(shared_concepts) >= 1:
-        return True
-    if len(shared_concepts) >= 3:
-        return True
-    return False
-
-
-def _snapshot_answer_stage(stage: str, text: str) -> Dict[str, Any]:
-    raw = text or ""
-    try:
-        max_chars = max(0, int(os.getenv("LLM_VERBOSE_ANSWER_LOG_MAX_CHARS", "12000")))
-    except Exception:
-        max_chars = 12000
-
-    if max_chars and len(raw) > max_chars:
-        shown = raw[:max_chars] + "\n...(truncated)..."
-    else:
-        shown = raw
-
-    return {
-        "stage": stage,
-        "length": len(raw),
-        "text": shown,
-    }
-
-
 def _emit_question_log_once(
     user_query: str,
     farm_name: Optional[str],
@@ -928,437 +805,6 @@ def _emit_question_log_once(
     )
 
 
-def _is_reasoning_paragraph(paragraph: str, korean_present_in_response: bool = False) -> bool:
-    text = (paragraph or "").strip()
-    if not text:
-        return False
-
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not lines:
-        return False
-
-    if any(_looks_like_reasoning_line(line) for line in lines):
-        return True
-
-    has_korean = _line_has_korean(text)
-    ascii_alpha_count = sum(1 for c in text if c.isascii() and c.isalpha())
-    non_space_count = sum(1 for c in text if not c.isspace())
-    ascii_ratio = (ascii_alpha_count / non_space_count) if non_space_count else 0.0
-    lowered = text.lower()
-
-    # 한글 답변에 섞인 영문 reasoning block 제거를 우선한다.
-    if korean_present_in_response and not has_korean and ascii_ratio >= 0.60:
-        if any(keyword in lowered for keyword in ("sensor data", "relay statuses", "main points")):
-            return True
-        if len(text) >= 120:
-            return True
-
-    return False
-
-
-def _strip_reasoning_paragraphs(text: str, dropped_details_out: Optional[List[str]] = None) -> str:
-    raw = (text or "").strip()
-    if not raw:
-        return raw
-
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", raw) if p.strip()]
-    if not paragraphs:
-        return raw
-
-    korean_present = _line_has_korean(raw)
-    kept: List[str] = []
-    dropped_details: List[str] = []
-
-    # 한글 단락이 존재하면, 그 이전의 영문 단락은 모두 제거한다.
-    first_korean_idx = None
-    for idx, paragraph in enumerate(paragraphs):
-        if _line_has_korean(paragraph):
-            first_korean_idx = idx
-            break
-
-    korean_paragraphs = [p for p in paragraphs if _line_has_korean(p)]
-
-    for idx, paragraph in enumerate(paragraphs):
-        if first_korean_idx is not None and idx < first_korean_idx and not _line_has_korean(paragraph):
-            dropped_details.append(f"idx={idx} reason=pre_korean_english text={paragraph[:120]}")
-            continue
-
-        if korean_paragraphs and not _line_has_korean(paragraph):
-            if any(_is_english_korean_overlap(paragraph, korean_paragraph) for korean_paragraph in korean_paragraphs):
-                dropped_details.append(f"idx={idx} reason=english_korean_overlap text={paragraph[:120]}")
-                continue
-
-        # 응답 첫머리의 reasoning은 우선 제거한다.
-        is_leading_reasoning = (idx == 0 and _is_reasoning_paragraph(paragraph, korean_present))
-        is_mixed_reasoning = _is_reasoning_paragraph(paragraph, korean_present)
-
-        if is_leading_reasoning or is_mixed_reasoning:
-            matched_terms = ",".join(_find_reasoning_terms(paragraph)[:6]) or "pattern_match"
-            dropped_details.append(
-                f"idx={idx} reason=reasoning_block terms={matched_terms} text={paragraph[:120]}"
-            )
-            continue
-        kept.append(paragraph)
-
-    if dropped_details_out is not None and dropped_details:
-        dropped_details_out.extend(dropped_details)
-
-    if kept:
-        if dropped_details and dropped_details_out is None:
-            logger.debug(f"[필터] reasoning/중복 단락 {len(dropped_details)}개 제거")
-            for detail in dropped_details:
-                logger.debug(f"[필터] {detail}")
-        return "\n\n".join(kept).strip()
-
-    return raw
-
-
-def _strip_non_korean_reasoning_for_korean_query(
-    text: str,
-    user_query: str,
-    dropped_details_out: Optional[List[str]] = None,
-
-# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 한국어 질문에서는 최종 답변에서 영어 reasoning/메타 라인을 강제로 제거한다.
-# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-) -> str:
-    raw = (text or "").strip()
-    if not raw:
-        return raw
-    if not _line_has_korean(user_query or ""):
-        return raw
-
-    lines = raw.splitlines()
-    if not any(_line_has_korean(line) for line in lines):
-        return raw
-
-    first_korean_idx: Optional[int] = None
-    for idx, line in enumerate(lines):
-        if _count_korean_chars(line) >= 3:
-            first_korean_idx = idx
-            break
-
-    kept: List[str] = []
-    dropped_details: List[str] = []
-
-    for idx, line in enumerate(lines):
-        stripped = (line or "").strip()
-        if not stripped:
-            if kept and kept[-1] != "":
-                kept.append("")
-            continue
-
-        if first_korean_idx is not None and idx < first_korean_idx and not _line_has_korean(stripped):
-            dropped_details.append(f"idx={idx} reason=korean_guard_pre_english text={stripped[:120]}")
-            continue
-
-        korean_count = _count_korean_chars(stripped)
-        ascii_alpha_count = sum(1 for c in stripped if c.isascii() and c.isalpha())
-        non_space_count = sum(1 for c in stripped if not c.isspace())
-        ascii_ratio = (ascii_alpha_count / non_space_count) if non_space_count else 0.0
-
-        if korean_count == 0 and ascii_alpha_count >= 3:
-            dropped_details.append(f"idx={idx} reason=korean_guard_english_only text={stripped[:120]}")
-            continue
-
-        # 영어 접두부 뒤에 한국어가 이어지는 혼합 라인은 한국어 시작 지점부터 보존
-        first_korean_pos = None
-        for char_pos, ch in enumerate(stripped):
-            if _KOREAN_CHAR_RE.match(ch):
-                first_korean_pos = char_pos
-                break
-
-        # 첫 한글 앞이 마크다운 서식(*, -, #, 숫자, ., 공백 등)으로만 구성되면 자르지 않음
-        _prefix_is_markdown = False
-        if first_korean_pos is not None and first_korean_pos > 0:
-            prefix_before_korean = stripped[:first_korean_pos]
-            _prefix_is_markdown = bool(re.fullmatch(r'[\s\*\-\#\d\.\)\(>\|\[\]]+', prefix_before_korean))
-
-        if first_korean_pos is not None and first_korean_pos > 0 and ascii_ratio >= 0.35 and not _prefix_is_markdown:
-            original = stripped
-            stripped = stripped[first_korean_pos:].strip()
-            if line.lstrip().startswith(("-", "*")) and not stripped.startswith(("-", "*")):
-                stripped = f"- {stripped}"
-            dropped_details.append(
-                f"idx={idx} reason=korean_guard_trim_prefix text={original[:120]}"
-            )
-            korean_count = _count_korean_chars(stripped)
-            ascii_alpha_count = sum(1 for c in stripped if c.isascii() and c.isalpha())
-            non_space_count = sum(1 for c in stripped if not c.isspace())
-            ascii_ratio = (ascii_alpha_count / non_space_count) if non_space_count else 0.0
-
-        lowered = stripped.lower()
-        if ascii_ratio >= 0.60 and korean_count <= 3:
-            dropped_details.append(f"idx={idx} reason=korean_guard_mixed_english_dominant text={stripped[:120]}")
-            continue
-
-        if any(
-            lowered.startswith(prefix)
-            for prefix in ("but the main instruction", "recommendation:", "so the core info", "today (")
-        ):
-            dropped_details.append(f"idx={idx} reason=korean_guard_meta_prefix text={stripped[:120]}")
-            continue
-
-        if ascii_ratio >= 0.35 and any(
-            keyword in lowered
-            for keyword in (
-                "instruction says",
-                "so even if",
-                "the question is",
-                "provide a practical tip",
-                "the main points are",
-                "i'll use",
-                "let's see",
-            )
-        ):
-            dropped_details.append(f"idx={idx} reason=korean_guard_meta_english text={stripped[:120]}")
-            continue
-
-        kept.append(stripped)
-
-    result = "\n".join(kept).strip()
-    if dropped_details_out is not None and dropped_details:
-        dropped_details_out.extend(dropped_details)
-
-    if result and _line_has_korean(result):
-        return result
-    return raw
-
-
-def _force_korean_surface_for_korean_query(
-    text: str,
-    user_query: str,
-    dropped_details_out: Optional[List[str]] = None,
-
-# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 한국어 질문의 최종 응답에서 혼합 영문 꼬리/번역 괄호를 제거해
-# 사용자 노출 텍스트를 한국어 중심으로 강제 정리한다.
-# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-) -> str:
-    raw = (text or "").strip()
-    if not raw:
-        return raw
-    if not _line_has_korean(user_query or ""):
-        return raw
-    if not _line_has_korean(raw):
-        return raw
-
-    lines = raw.splitlines()
-    kept: List[str] = []
-    dropped_details: List[str] = []
-
-    for idx, line in enumerate(lines):
-        stripped = (line or "").strip()
-        if not stripped:
-            if kept and kept[-1] != "":
-                kept.append("")
-            continue
-
-        # 한국어가 전혀 없는 라인은 제거 (단, 마크다운 구조 요소는 보존)
-        if not _line_has_korean(stripped):
-            # 마크다운 수평선 (---, ***, ___) 보존
-            if re.match(r'^[-*_]{3,}\s*$', stripped):
-                kept.append(line)
-                continue
-            # 마크다운 테이블 구분선 (|---|---|) 보존
-            if re.match(r'^\|[-:\s|]+\|$', stripped):
-                kept.append(line)
-                continue
-            dropped_details.append(f"idx={idx} reason=surface_guard_non_korean text={stripped[:120]}")
-            continue
-
-        normalized = stripped
-        has_url = ("http://" in normalized) or ("https://" in normalized)
-
-        # URL이 없는 경우, 영문 번역 괄호를 제거한다.
-        # 단, 한글이 포함된 짧은 출처명은 보존 (예: MBC뉴스, KBS, SBS뉴스)
-        if not has_url:
-            before_paren = normalized
-
-            def _should_remove_paren(m):
-                inner = m.group(0)[1:-1]  # 괄호 안 내용
-                korean_count = sum(1 for c in inner if '\uac00' <= c <= '\ud7a3')
-                if korean_count > 0 and len(inner) <= 15:
-                    return m.group(0)  # 한글 포함 짧은 괄호 → 보존
-                return ""  # 영문만 또는 긴 괄호 → 삭제
-
-            normalized = re.sub(
-                r"\((?=[^)]*[A-Za-z])[^)]*\)",
-                _should_remove_paren,
-                normalized,
-            ).strip()
-            if normalized != before_paren:
-                dropped_details.append(
-                    f"idx={idx} reason=surface_guard_drop_english_parentheses text={before_paren[:120]}"
-                )
-
-        # 마지막 한글 뒤에 긴 영문 꼬리가 붙은 경우 절단
-        if not has_url:
-            korean_positions = [m.start() for m in _KOREAN_CHAR_RE.finditer(normalized)]
-            if korean_positions:
-                last_korean_pos = korean_positions[-1]
-                tail = normalized[last_korean_pos + 1:]
-                tail_ascii_alpha = sum(1 for c in tail if c.isascii() and c.isalpha())
-                if tail_ascii_alpha >= 10 and len(tail.strip()) >= 12:
-                    before_tail_trim = normalized
-                    normalized = normalized[:last_korean_pos + 1].rstrip()
-                    normalized = re.sub(r"[\"'`\)\]\}]+$", "", normalized).strip()
-                    dropped_details.append(
-                        f"idx={idx} reason=surface_guard_trim_english_tail text={before_tail_trim[:120]}"
-                    )
-
-        # 여전히 영어 비중이 과도하고 메타/설명형 라인이면 제거
-        korean_count = _count_korean_chars(normalized)
-        ascii_alpha_count = sum(1 for c in normalized if c.isascii() and c.isalpha())
-        non_space_count = sum(1 for c in normalized if not c.isspace())
-        ascii_ratio = (ascii_alpha_count / non_space_count) if non_space_count else 0.0
-        lowered = normalized.lower()
-        if ascii_ratio >= 0.45 and any(
-            marker in lowered
-            for marker in (
-                "result ",
-                "title says",
-                "search was done",
-                "most recent news",
-                "the date in the title",
-                "can't be used",
-                "news to report",
-            )
-        ):
-            dropped_details.append(f"idx={idx} reason=surface_guard_meta_english text={normalized[:120]}")
-            continue
-
-        if korean_count == 0:
-            dropped_details.append(f"idx={idx} reason=surface_guard_empty_korean text={normalized[:120]}")
-            continue
-
-        # 영어 꼬리 절단 후 남는 짧은 고아 단편(단어 1~2개)은 제거
-        plain_no_punct = re.sub(r"[^\w가-힣\s]", "", normalized).strip()
-        token_count = len([tok for tok in plain_no_punct.split() if tok])
-        if (
-            ascii_alpha_count == 0
-            and token_count <= 2
-            and _count_korean_chars(normalized) <= 8
-            and not normalized.startswith(("-", "*"))
-            and not re.match(r'^#{1,6}\s', normalized)
-            and not normalized.startswith(("핵심 정보", "추천 조치", "주의", "요약"))
-        ):
-            dropped_details.append(f"idx={idx} reason=surface_guard_orphan_fragment text={normalized[:120]}")
-            continue
-
-        normalized = re.sub(r"\s{2,}", " ", normalized).strip()
-        if not normalized:
-            continue
-        kept.append(normalized)
-
-    result = "\n".join(kept).strip()
-    if dropped_details_out is not None and dropped_details:
-        dropped_details_out.extend(dropped_details)
-    if result and _line_has_korean(result):
-        return result
-    return raw
-
-
-def _contains_reasoning_trace(text: str) -> bool:
-    candidate = (text or "").strip()
-    if not candidate:
-        return False
-
-    lowered = candidate.lower()
-    if "<think>" in lowered or "</think>" in lowered:
-        return True
-
-    lines = [line.strip() for line in candidate.splitlines() if line.strip()]
-    if any(_looks_like_reasoning_line(line) for line in lines):
-        return True
-
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", candidate) if p.strip()]
-    korean_present = _line_has_korean(candidate)
-    return any(_is_reasoning_paragraph(p, korean_present) for p in paragraphs)
-
-
-def _rewrite_without_reasoning(
-    model_name: str,
-    user_query: str,
-    draft_answer: str,
-    farm_name: Optional[str] = None,
-) -> str:
-    farm_label = farm_name or "농장"
-    rewrite_system = (
-        "너는 답변 정리기다. 내부 추론/분석/독백을 절대 출력하지 마라. "
-        "최종 사용자 응답만 한국어 존댓말로 작성하라."
-    )
-    rewrite_user = (
-        f"[질문]\n{user_query}\n\n"
-        f"[농장]\n{farm_label}\n\n"
-        "[규칙]\n"
-        "1) 내부 생각(예: First, Hmm, Wait, So the main points...) 금지\n"
-        "2) 오류 원인 분석 독백 금지\n"
-        "3) 핵심 상태와 조치만 간결하게 제시\n"
-        "4) 모든 문장을 공손한 존댓말로 작성 (반말 금지)\n\n"
-        f"[후보 답변]\n{draft_answer}"
-    )
-
-    response = _ollama_chat(
-        model=model_name,
-        messages=[
-            {"role": "system", "content": rewrite_system},
-            {"role": "user", "content": rewrite_user},
-        ],
-        options={
-            "temperature": 0.0,
-            "top_p": 0.1,
-            "top_k": 1,
-            "num_predict": NUM_PREDICT_REWRITE,
-            "think": False,
-        },
-        keep_alive="1h",
-    )
-    return _extract_message_content(response) or ""
-
-
-def _force_honorific_response_enabled() -> bool:
-    return is_true(os.getenv("FORCE_HONORIFIC_RESPONSE", "true"))
-
-
-def _rewrite_to_honorific(
-    model_name: str,
-    user_query: str,
-    draft_answer: str,
-    farm_name: Optional[str] = None,
-) -> str:
-    farm_label = farm_name or "농장"
-    rewrite_system = (
-        "너는 문체 교정기다. 의미/수치/단위/URL/목록 순서를 유지하면서 "
-        "최종 답변을 공손한 한국어 존댓말로만 바꿔라. "
-        "내부 추론/독백은 절대 출력하지 마라."
-    )
-    rewrite_user = (
-        f"[질문]\n{user_query}\n\n"
-        f"[농장]\n{farm_label}\n\n"
-        "[규칙]\n"
-        "1) 모든 문장을 존댓말(해요체 또는 하십시오체)로 변환\n"
-        "2) 반말, 친구 말투, 명령조 표현 금지\n"
-        "3) 사실/수치/링크/항목 구조는 유지\n\n"
-        f"[후보 답변]\n{draft_answer}"
-    )
-
-    response = _ollama_chat(
-        model=model_name,
-        messages=[
-            {"role": "system", "content": rewrite_system},
-            {"role": "user", "content": rewrite_user},
-        ],
-        options={
-            "temperature": 0.0,
-            "top_p": 0.1,
-            "top_k": 1,
-            "num_predict": NUM_PREDICT_REWRITE,
-            "think": False,
-        },
-        keep_alive="1h",
-    )
-    return _extract_message_content(response) or ""
 
 
 # ============================================================================
@@ -1621,277 +1067,22 @@ def _refine_farm_knowledge(tool_result: str) -> str:
     return json.dumps(data, ensure_ascii=False)
 
 
-_HONORIFIC_ENDINGS = re.compile(
-    r"(합니다|습니다|세요|해요|드립니다|주세요|겠습니다|됩니다|입니다|바랍니다|있습니다|없습니다"
-    r"|하세요|보세요|으세요|십시오|시오|십니다|랍니다|옵니다|나요|인가요|을까요|ㅂ니다)"
-    r"[.!?\s~]*$",
-    re.MULTILINE,
-)
-_BANMAL_ENDINGS = re.compile(
-    r"(한다|된다|이다|있다|없다|했다|봐라|해라|하자|할게|할거야|거야|인데|는데|건데"
-    r"|잖아|거든|는걸|할까|일까|였다|됐다|갔다|왔다|나온다|들어간다)"
-    r"[.!?\s~]*$",
-    re.MULTILINE,
-)
-
-# 마크다운 비산문(non-prose) 라인 패턴
-_NON_PROSE_LINE = re.compile(
-    r"^\s*("
-    r"#{1,6}\s"          # 마크다운 헤더
-    r"|[-*+]\s"          # 불릿 리스트
-    r"|\d+[.)]\s"        # 번호 리스트
-    r"|```"              # 코드 블록
-    r"|\|"               # 테이블 행
-    r"|>"                # 인용 블록
-    r"|\[출처\]"         # 출처 링크
-    r")"
-)
-
-
-# ============================================================
-# 반말이 감지되면 True, 산문 문장이 모두 존댓말이면 False
-# ============================================================
-def _needs_honorific_rewrite(text: str) -> bool:
-    # 라인 단위로 분리하여 마크다운 구조 요소 필터링
-    lines = [line.strip() for line in text.splitlines() if len(line.strip()) > 3]
-
-    prose_sentences = []
-    for line in lines:
-        # 마크다운 구조 요소 제외
-        if _NON_PROSE_LINE.match(line):
-            continue
-        # 한국어가 없는 라인(영문/숫자/기호만) 제외
-        if not _KOREAN_CHAR_RE.search(line):
-            continue
-        # 산문 문장 분리
-        for seg in re.split(r'[.!?\n]', line):
-            seg = seg.strip()
-            if len(seg) > 5 and _KOREAN_CHAR_RE.search(seg):
-                prose_sentences.append(seg)
-
-    if not prose_sentences:
-        return False
-
-    # 반말이 하나라도 있으면 재작성 필요
-    banmal_count = sum(1 for s in prose_sentences if _BANMAL_ENDINGS.search(s))
-    if banmal_count > 0:
-        logger.debug(f"[존댓말검사] 반말 감지={banmal_count}건 → 재작성 필요")
-        return True
-
-    # 존댓말이 1개 이상이고 반말이 없으면 OK
-    honorific_count = sum(1 for s in prose_sentences if _HONORIFIC_ENDINGS.search(s))
-    if honorific_count > 0:
-        logger.debug(f"[존댓말검사] 존댓말={honorific_count}/{len(prose_sentences)}건, 반말=0 → 스킵")
-        return False
-
-    # 존댓말도 반말도 없는 경우 (명사형 종결 등) → 재작성하지 않음
-    logger.debug(f"[존댓말검사] 존댓말·반말 모두 미감지 ({len(prose_sentences)}건) → 스킵")
-    return False
-
-
-def _enforce_honorific_response(
-    model_name: str,
-    user_query: str,
-    farm_name: Optional[str],
-    answer_text: str,
-) -> str:
-    candidate = (answer_text or "").strip()
-    if not candidate:
-        return candidate
-    if not _force_honorific_response_enabled():
-        return candidate
-
-    if not _needs_honorific_rewrite(candidate):
-        logger.info("[존댓말교정] 이미 존댓말 → LLM 교정 스킵")
-        return candidate
-
-    try:
-        _t_hon_llm = time.time()
-        logger.debug(f"[PERF:대화] 존댓말교정-LLM호출 시작 (입력={len(candidate)}자)")
-        rewritten = _rewrite_to_honorific(
-            model_name=model_name,
-            user_query=user_query,
-            farm_name=farm_name,
-            draft_answer=candidate,
-        )
-        _hon_llm_s = time.time() - _t_hon_llm
-        logger.debug(f"[PERF:대화] 존댓말교정-LLM호출={_hon_llm_s:.1f}s (출력={len(rewritten or '')}자)")
-        if rewritten and rewritten.strip():
-            candidate = rewritten.strip()
-    except Exception as err:
-        logger.warning(f"[존댓말교정] 교정 실패: {err}")
-
-    candidate = clean_llm_response(candidate)
-    candidate = _strip_reasoning_paragraphs(candidate)
-    candidate = _strip_non_korean_reasoning_for_korean_query(
-        candidate,
-        user_query=user_query,
-    )
-    candidate = _force_korean_surface_for_korean_query(
-        candidate,
-        user_query=user_query,
-    )
-    return _sanitize_markdown_links(candidate)
-
-
 def _finalize_user_facing_answer(
     model_name: str,
     user_query: str,
     farm_name: Optional[str],
     raw_answer: str,
 ) -> str:
-    _t_finalize_start = time.time()
-    stage_snapshots: List[Dict[str, Any]] = []
-    dropped_details: List[str] = []
-    rewrite_attempts = 0
-
-    # ── 필터링 전 원본 ──
+    """LLM 응답 후처리: think 태그 제거 + 기본 포맷 정리만 수행."""
     logger.info(f"[필터링전-원본] len={len(raw_answer or '')}자")
     logger.info(f"[필터링전-원본내용]\n{raw_answer}")
 
-    stage_snapshots.append(_snapshot_answer_stage("raw", raw_answer))
+    candidate = clean_llm_response(raw_answer)
 
-    _t_clean = time.time()
-    cleaned = clean_llm_response(raw_answer)
-    stage_snapshots.append(_snapshot_answer_stage("after_clean", cleaned))
-    _clean_ms = (time.time() - _t_clean) * 1000
-    if cleaned != raw_answer:
-        logger.info(f"[필터단계:clean] {len(raw_answer)}자→{len(cleaned)}자")
-        logger.info(f"[필터단계:clean내용]\n{cleaned}")
-
-    _t_strip = time.time()
-    candidate = _strip_reasoning_paragraphs(cleaned, dropped_details_out=dropped_details)
-    stage_snapshots.append(_snapshot_answer_stage("after_overlap_term_strip", candidate))
-
-    candidate = _strip_non_korean_reasoning_for_korean_query(
-        candidate,
-        user_query=user_query,
-        dropped_details_out=dropped_details,
-    )
-    stage_snapshots.append(_snapshot_answer_stage("after_korean_guard", candidate))
-    candidate = _force_korean_surface_for_korean_query(
-        candidate,
-        user_query=user_query,
-        dropped_details_out=dropped_details,
-    )
-    stage_snapshots.append(_snapshot_answer_stage("after_korean_surface_guard", candidate))
-
-    # ── 최종 결과 로깅 ──
-    if dropped_details:
-        logger.info(f"[필터링-삭제항목] {len(dropped_details)}건: {dropped_details}")
-
-    _strip_ms = (time.time() - _t_strip) * 1000
-    logger.debug(
-        f"[PERF:대화] 후처리-클린={_clean_ms:.0f}ms, 추론제거={_strip_ms:.0f}ms"
-    )
-
-    if not _contains_reasoning_trace(candidate):
-        _t_honorific = time.time()
-        candidate = _enforce_honorific_response(
-            model_name=model_name,
-            user_query=user_query,
-            farm_name=farm_name,
-            answer_text=candidate,
-        )
-        _honorific_s = time.time() - _t_honorific
-        _finalize_total_s = time.time() - _t_finalize_start
-        diff = len(raw_answer) - len(candidate)
-        logger.info(f"[필터링완료] {len(raw_answer)}자→{len(candidate)}자 ({diff}자 삭제)")
-        logger.info(f"[최종답변내용]\n{candidate}")
-        logger.debug(
-            f"[PERF:대화] 후처리-존댓말교정={_honorific_s:.1f}s, "
-            f"후처리-전체={_finalize_total_s:.1f}s"
-        )
-        stage_snapshots.append(_snapshot_answer_stage("final", candidate))
-        return candidate
-
-    detected_terms = _find_reasoning_terms(candidate)
-    logger.info(f"[필터링-reasoning잔존] reasoning흔적 감지 terms={detected_terms} → 재작성 시도")
-
-    rewritten = candidate
-    for attempt in range(1):
-        rewrite_attempts = attempt + 1
-        _t_rewrite = time.time()
-        logger.info(f"[필터링-재작성] 시도 {attempt + 1}/1 입력길이={len(rewritten)}자")
-        try:
-            rewritten = _rewrite_without_reasoning(
-                model_name=model_name,
-                user_query=user_query,
-                farm_name=farm_name,
-                draft_answer=rewritten,
-            )
-        except Exception as rewrite_err:
-            logger.warning(f"[필터] reasoning 제거 재작성 실패({attempt + 1}/2): {rewrite_err}")
-            break
-
-        _rewrite_s = time.time() - _t_rewrite
-        logger.debug(f"[PERF:대화] 후처리-reasoning재작성LLM={_rewrite_s:.1f}s (시도{attempt + 1})")
-        stage_snapshots.append(_snapshot_answer_stage(f"rewrite_raw_{attempt + 1}", rewritten))
-
-        before_rewrite_clean = rewritten
-        rewritten = clean_llm_response(rewritten)
-        rewritten = _strip_reasoning_paragraphs(rewritten, dropped_details_out=dropped_details)
-        rewritten = _strip_non_korean_reasoning_for_korean_query(
-            rewritten,
-            user_query=user_query,
-            dropped_details_out=dropped_details,
-        )
-        rewritten = _force_korean_surface_for_korean_query(
-            rewritten,
-            user_query=user_query,
-            dropped_details_out=dropped_details,
-        )
-        stage_snapshots.append(_snapshot_answer_stage(f"rewrite_clean_{attempt + 1}", rewritten))
-
-        if not _contains_reasoning_trace(rewritten):
-            _t_hon2 = time.time()
-            rewritten = _enforce_honorific_response(
-                model_name=model_name,
-                user_query=user_query,
-                farm_name=farm_name,
-                answer_text=rewritten,
-            )
-            _hon2_s = time.time() - _t_hon2
-            _finalize_total_s = time.time() - _t_finalize_start
-            diff = len(raw_answer) - len(rewritten)
-            logger.info(f"[필터링완료] {len(raw_answer)}자→{len(rewritten)}자 ({diff}자 삭제, 재작성{attempt + 1}회)")
-            logger.info(f"[최종답변내용]\n{rewritten}")
-            logger.debug(
-                f"[PERF:대화] 후처리-재작성후존댓말={_hon2_s:.1f}s, "
-                f"후처리-전체={_finalize_total_s:.1f}s"
-            )
-            stage_snapshots.append(_snapshot_answer_stage("final", rewritten))
-            return rewritten
-
-    fallback = rewritten or candidate
-    fallback = _strip_non_korean_reasoning_for_korean_query(
-        fallback,
-        user_query=user_query,
-        dropped_details_out=dropped_details,
-    )
-    fallback = _force_korean_surface_for_korean_query(
-        fallback,
-        user_query=user_query,
-        dropped_details_out=dropped_details,
-    )
-    _t_hon3 = time.time()
-    fallback = _enforce_honorific_response(
-        model_name=model_name,
-        user_query=user_query,
-        farm_name=farm_name,
-        answer_text=fallback,
-    )
-    _hon3_s = time.time() - _t_hon3
-    _finalize_total_s = time.time() - _t_finalize_start
-    diff = len(raw_answer) - len(fallback)
-    logger.info(f"[필터링완료] {len(raw_answer)}자→{len(fallback)}자 ({diff}자 삭제, fallback)")
-    logger.info(f"[최종답변내용]\n{fallback}")
-    logger.debug(
-        f"[PERF:대화] 후처리-fallback존댓말={_hon3_s:.1f}s, "
-        f"후처리-전체={_finalize_total_s:.1f}s"
-    )
-    stage_snapshots.append(_snapshot_answer_stage("final", fallback))
-    return fallback
+    diff = len(raw_answer or '') - len(candidate)
+    logger.info(f"[필터링완료] {len(raw_answer or '')}자→{len(candidate)}자 ({diff}자 삭제)")
+    logger.info(f"[최종답변내용]\n{candidate}")
+    return candidate
 
 
 
@@ -1908,15 +1099,12 @@ def _finalize_user_facing_answer(
 #     str: 필터링된 텍스트
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def clean_llm_response(response_text):
-    """LLM 응답 필터링 + 정리 통합 함수.
-    Think 태그 제거, 생각 과정 라인 제거, 마크다운 헤더/코드블록 제거, 메타 추론 제거, 빈 줄 정리."""
+    """LLM 응답 기본 정리: Think 태그 제거, 마크다운 헤더/코드블록 제거, 빈 줄 정리."""
     if not response_text:
         return response_text
 
     original_text = response_text
     original_length = len(response_text)
-    removed_lines = []
-    has_korean_any = _line_has_korean(response_text)
 
     # 1. Think 태그 제거
     response_text = re.sub(r'<think>.*?</think>', '', response_text, flags=re.DOTALL | re.IGNORECASE)
@@ -1926,105 +1114,31 @@ def clean_llm_response(response_text):
     response_text = re.sub(r'</?think[^>]*>', '', response_text, flags=re.IGNORECASE)
     response_text = re.sub(r'<meta[^>]*>', '', response_text, flags=re.IGNORECASE)
 
-    # 2. 생각 과정 라인 제거 + 영문 메타 추론 제거
-    _meta_reasoning_keywords = (
-        "user", "tools", "tool", "respond", "response", "answer", "final answer",
-        "language", "markdown", "check if", "make sure", "keep it", "need to",
-        "i need to", "i should", "let me", "let's", "reasoning", "analysis",
-        "the user said", "might be asking", "direct query", "call any tools",
-        "tools are for", "statement, not a question", "as the ai",
-        "that means", "decimal", "json serializable", "converted to json",
-    )
-    _meta_reasoning_starts = (
-        "check if", "make sure", "keep it", "need to", "i need to", "i should",
-        "let me", "let's", "respond", "answer", "use the", "given", "since",
-        "okay,", "wait,", "well,", "so,", "now,", "hmm,",
-    )
-
-    lines = response_text.split('\n')
-    cleaned_lines = []
-    for line in lines:
-        line_stripped = line.strip()
-        has_korean = _line_has_korean(line)
-
-        is_thinking = False
-        if not has_korean:
-            for pattern in _THINKING_PATTERNS:
-                if re.match(pattern, line_stripped, re.IGNORECASE):
-                    is_thinking = True
-                    removed_lines.append(line_stripped[:100])
-                    break
-
-        if not is_thinking and has_korean_any and line_stripped:
-            lower_line = line_stripped.lower()
-            has_meta_keyword = any(kw in lower_line for kw in _meta_reasoning_keywords)
-            starts_as_meta = any(lower_line.startswith(p) for p in _meta_reasoning_starts)
-            ascii_alpha_count = sum(1 for c in line_stripped if c.isascii() and c.isalpha())
-            non_space_count = sum(1 for c in line_stripped if not c.isspace())
-            ascii_ratio = (ascii_alpha_count / non_space_count) if non_space_count else 0.0
-            if has_meta_keyword and (starts_as_meta or ascii_ratio >= 0.20):
-                is_thinking = True
-                removed_lines.append(line_stripped[:100])
-
-        if not is_thinking:
-            cleaned_lines.append(line)
-
-    if removed_lines:
-        logger.debug(f"[필터] 생각 과정 라인 {len(removed_lines)}개 제거:")
-        for removed in removed_lines[:5]:
-            logger.debug(f"  - {removed}...")
-        if len(removed_lines) > 5:
-            logger.debug(f"  ... 외 {len(removed_lines) - 5}개")
-
-    response_text = '\n'.join(cleaned_lines)
-
-    # 3. 마크다운 헤더 제거
+    # 2. 마크다운 헤더 제거
     for hdr in (r"^(### )?Final Answer:?\s*", r"^(### )?Final Output:?\s*",
                 r"^(### )?Response:?\s*", r"^(### )?Answer:?\s*", r"^(### )?결론:?\s*"):
         response_text = re.sub(hdr, "", response_text, flags=re.MULTILINE | re.IGNORECASE)
 
-    # 4. 코드 블록 마커 제거
+    # 3. 코드 블록 마커 제거
     response_text = re.sub(r"^```[a-zA-Z]*\s*$", "", response_text, flags=re.MULTILINE)
     response_text = re.sub(r"^```\s*$", "", response_text, flags=re.MULTILINE)
+
+    # 4. 출처/참고 섹션 제거 (LLM이 답변 끝에 출처를 붙이는 경우 — 시스템이 별도 표시)
+    response_text = re.sub(
+        r'\n+(?:#{1,4}\s*)?(?:\*{0,2})(?:출처(?:\s*링크)?|참고\s*(?:링크|자료|문헌)?|References?|Sources?)\s*[:：]?\s*(?:\*{0,2})\s*\n.*$',
+        '', response_text, flags=re.DOTALL | re.IGNORECASE
+    )
 
     # 5. 빈 줄 정리 + 다중 공백 축소
     response_text = re.sub(r'(\n\s*){3,}', '\n\n', response_text)
     response_text = re.sub(r'[ \t]{2,}(?!\n)', ' ', response_text)
     response_text = response_text.strip()
 
-    # 6. 영문 검증/판단 문장 제거 (한글 응답 내)
-    if has_korean_any:
-        sentence_removed_count = 0
-        for line in response_text.split('\n'):
-            if _line_has_korean(line):
-                continue
-            sentences = [s.strip() for s in line.split('.') if s.strip()]
-            filtered_sentences = []
-            for sentence in sentences:
-                is_verification = False
-                if len(sentence) < 200 and not _line_has_korean(sentence):
-                    for pattern in _THINKING_PATTERNS:
-                        if re.match(pattern, sentence.strip(), re.IGNORECASE):
-                            is_verification = True
-                            sentence_removed_count += 1
-                            break
-                if not is_verification:
-                    filtered_sentences.append(sentence)
-            if filtered_sentences:
-                new_line = '. '.join(filtered_sentences)
-                if new_line and not new_line.endswith('.'):
-                    new_line += '.'
-                response_text = response_text.replace(line, new_line)
-            else:
-                response_text = response_text.replace(line, '')
-        if sentence_removed_count > 0:
-            logger.debug(f"[필터] 검증/판단 문장 {sentence_removed_count}개 추가 제거")
-
-    # 7. 최종 빈 줄 정리
+    # 5. 최종 빈 줄 정리
     response_text = re.sub(r'(\n\s*){3,}', '\n\n', response_text)
     response_text = response_text.strip()
 
-    # 8. 과도한 제거 검사 (90% 이상 제거 시 폴백)
+    # 6. 과도한 제거 검사 (90% 이상 제거 시 폴백)
     final_length = len(response_text)
     if original_length > 0:
         removal_ratio = (original_length - final_length) / original_length
@@ -2039,11 +1153,6 @@ def clean_llm_response(response_text):
             logger.debug(f"[필터] LLM 응답 정리: {removed_chars}자 제거 ({original_length} → {final_length})")
 
     return response_text
-
-
-# filter_llm_response → clean_llm_response 호환 래퍼 (내부 호출 유지용)
-def filter_llm_response(text, filter_type="general", query_type=None):
-    return clean_llm_response(text)
 
 
 
@@ -2061,17 +1170,6 @@ def filter_llm_response(text, filter_type="general", query_type=None):
 #     str: 최종 응답 텍스트
 # 마크다운 링크 중 유효하지 않은 URL을 가진 링크를 텍스트로 변환한다.
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-def _sanitize_markdown_links(text: str) -> str:
-    def _replace_bad_link(match):
-        label = match.group(1)
-        url = match.group(2).strip()
-        # http:// 또는 https:// 로 시작하고, 도메인에 .이 포함된 경우만 유효
-        if re.match(r'^https?://[^\s]+\.[^\s]+', url):
-            return match.group(0)  # 유효한 링크는 그대로
-        return label  # 유효하지 않으면 라벨 텍스트만 반환
-    return re.sub(r'\[([^\]]*)\]\(([^)]*)\)', _replace_bad_link, text)
-
-
 _HALLUCINATED_URL_RE = re.compile(
     r'\[([^\]]*)\]\(https?://(?:example\.com|placeholder|dummy|fake|localhost)[^\)]*\)',
 )
@@ -2107,16 +1205,6 @@ def _strip_hallucinated_urls(answer: str, verified_urls: set) -> str:
     return answer
 
 
-def _append_source_urls(answer: str, sources: list) -> str:
-    if not sources:
-        return answer
-    # 답변에 이미 검증된 URL이 포함되어 있으면 추가하지 않음
-    source_urls = {s.get("url", "") for s in sources if s.get("url")}
-    if source_urls and any(url in answer for url in source_urls):
-        return answer
-    lines = [f"- [{s['title']}]({s['url']})" for s in sources]
-    return answer.rstrip() + "\n\n**출처:**\n" + "\n".join(lines)
-
 
 # ============================================================
 # 사용된 도구 목록으로 응답 유형 결정.
@@ -2139,25 +1227,11 @@ def _build_structured_result(
     sources: list,
     tools_used: list,
 ) -> Dict[str, Any]:
-    # LLM 답변 또는 _append_source_urls()가 이미 텍스트에 출처를 포함한 경우 메타데이터 sources를 비움 (프론트엔드 중복 표시 방지)
-    if response_text and ("**출처:**" in response_text or "출처 링크" in response_text or "참고 링크" in response_text):
-        return {
-            "response": response_text,
-            "sources": [],
-            "tools_used": tools_used if tools_used else [],
-            "response_type": _determine_response_type(tools_used),
-        }
-
-    # LLM이 실제 인용한 출처만 필터 (답변에 URL이 포함된 출처만 유지)
-    cited_sources = sources
-    if sources and response_text and ("http://" in response_text or "https://" in response_text):
-        cited_sources = [s for s in sources if s.get("url") and s["url"] in response_text]
-        if not cited_sources:
-            cited_sources = sources  # 안전장치: 매칭 실패 시 원본 유지
-
+    # 출처 중복 방지: clean_llm_response에서 이미 출처 섹션을 정규식으로 제거함
+    # 메타데이터 sources는 항상 전달 → 프론트엔드가 점선 아래에 구조화하여 표시
     return {
         "response": response_text,
-        "sources": cited_sources if cited_sources else [],
+        "sources": sources if sources else [],
         "tools_used": tools_used if tools_used else [],
         "response_type": _determine_response_type(tools_used),
     }
@@ -2243,6 +1317,8 @@ def get_llm_response_with_tools(
     max_tool_iterations: int = 8,
     default_tool_args: Optional[Dict[str, Dict[str, Any]]] = None,
     conversation_history: Optional[List[Dict[str, str]]] = None,
+    speech_style: str = None,
+    progress_queue: Optional[ThreadQueue] = None,
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # Tool Use를 지원하는 LLM 응답 생성
@@ -2253,6 +1329,8 @@ def get_llm_response_with_tools(
 #       max_tool_iterations: 최대 도구 호출 반복 횟수
 #       default_tool_args: 도구별 기본 인자
 #       conversation_history: 이전 대화 히스토리 (멀티턴)
+#       speech_style: 대화체 (male/female)
+#       progress_queue: 진행 상태 이벤트 큐 (스트리밍용, thread-safe)
 # Returns: dict: 구조화된 응답 {response, sources, tools_used, response_type}
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 ) -> Dict[str, Any]:
@@ -2266,7 +1344,7 @@ def get_llm_response_with_tools(
         # 농장명이 있으면 농장 시스템 프롬프트, 없으면 일반 프롬프트
         if farm_name:
             farm_info = _build_farm_info_text()
-            system_prompt = get_system_prompt_with_tools(farm_name, farm_info)
+            system_prompt = get_system_prompt_with_tools(farm_name, farm_info, speech_style=speech_style or "male")
         else:
             system_prompt = (
                 "당신은 다양한 분야의 지식을 갖춘 AI 어시스턴트입니다.\n\n"
@@ -2351,19 +1429,26 @@ def get_llm_response_with_tools(
 
         # 도구 호출 반복 (최대 max_tool_iterations회)
         _prev_had_tool_calls = True  # 첫 반복은 항상 도구 제공
-        _control_retry_count = 0  # 제어 재시도 횟수 (무한 루프 방지)
         _empty_response_count = 0  # 빈 응답 연속 횟수
         for iteration in range(max_tool_iterations):
             logger.info(f"[Tool Use] --- 반복 {iteration + 1}/{max_tool_iterations} ---")
+
+            # 진행 상태 보고: LLM 호출 시작
+            if iteration == 0:
+                _report_progress(progress_queue, "질문을 분석하고 필요한 정보를 파악하고 있습니다...", "llm_analyzing",
+                                 iteration=iteration + 1, max_iterations=max_tool_iterations)
+            else:
+                _report_progress(progress_queue, "수집된 정보를 바탕으로 답변을 작성하고 있습니다...", "llm_generating",
+                                 iteration=iteration + 1, max_iterations=max_tool_iterations)
 
             # LLM 호출
             # 이전 반복에서 도구 호출이 있었으면 → 다음에도 도구 제공 (다단계 호출 지원)
             # 이전 반복에서 도구 호출이 없었으면 → 도구 제거 (최종 답변 생성)
             if _prev_had_tool_calls:
-                iter_num_predict = 768 if iteration == 0 else min(NUM_PREDICT, 2048)
+                iter_num_predict = 768 if iteration == 0 else NUM_PREDICT
                 iter_tools = tools
             else:
-                iter_num_predict = min(NUM_PREDICT, 2048)
+                iter_num_predict = NUM_PREDICT
                 iter_tools = None
             t_iter = time.time()
             response = _ollama_chat(
@@ -2439,6 +1524,7 @@ def get_llm_response_with_tools(
                 else:
                     _empty_response_count = 0  # 유효한 응답이면 카운터 리셋
 
+                _report_progress(progress_queue, "답변을 정리하고 있습니다...", "finalizing")
                 _t_final = time.time()
                 finalized = _finalize_user_facing_answer(
                     model_name=model_name,
@@ -2449,47 +1535,9 @@ def get_llm_response_with_tools(
                 _final_s = time.time() - _t_final
                 logger.debug(f"[PERF:대화] 후처리(_finalize)={_final_s:.1f}s")
 
-                # 제어 키워드 검증: 제어 요청인데 control_relay가 호출되지 않은 경우
-                _control_keywords = ("제어", "켜", "끄", "중지", "가동", "작동", "동작", "정지", "on", "off")
-                # 파일/문서 관련 질문에서 제어 키워드가 파일명에 포함된 경우 오탐 방지
-                _file_context_keywords = ("파일", "학습", "요약", "내용", "문서", ".csv", ".txt", ".pdf", ".xlsx")
-                _is_file_query = any(fk in user_query for fk in _file_context_keywords)
-                _control_tools = {"control_relay"}
-                _has_control_intent = (
-                    any(kw in user_query for kw in _control_keywords)
-                    and not _is_file_query
-                )
-                _control_not_called = _has_control_intent and not _control_tools.intersection(_tools_used)
-
-                # 제어 미호출 + 아직 반복 여유 있고 + 재시도 2회 미만이면 → 재시도 지시
-                if _control_not_called and iteration < max_tool_iterations - 2 and _control_retry_count < 2:
-                    _control_retry_count += 1
-                    logger.warning(
-                        f"[Tool Use] 제어 키워드 감지({user_query[:50]}...) "
-                        f"그러나 control_relay 미호출 → 재시도 지시 (반복{iteration + 1}, "
-                        f"재시도횟수={_control_retry_count}/2)"
-                    )
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            "위 답변에서 장치 제어를 수행했다고 했지만, 실제로 control_relay 도구가 호출되지 않았습니다. "
-                            "반드시 control_relay 또는 control_relays_batch 도구를 호출하여 실제로 장치를 제어하세요. "
-                            "도구를 호출하지 않고 제어했다고 답변하는 것은 금지입니다."
-                        ),
-                    })
-                    _prev_had_tool_calls = True  # 다음 반복에서 도구 제공
-                    continue
-                elif _control_not_called:
-                    logger.warning(
-                        f"[Tool Use] 제어 키워드 감지({user_query[:50]}...) "
-                        f"그러나 control_relay 미호출 → 할루시네이션 가능성 "
-                        f"(재시도 한도 초과: {_control_retry_count}회)"
-                    )
-
                 _verified_urls = {s.get("url", "") for s in _collected_sources if s.get("url")}
                 finalized = _strip_hallucinated_urls(finalized, _verified_urls)
-                text_with_sources = _append_source_urls(finalized, _collected_sources)
-                return _build_structured_result(text_with_sources, _collected_sources, _tools_used)
+                return _build_structured_result(finalized, _collected_sources, _tools_used)
 
             # 도구 호출 처리
             logger.info(f"[Tool Use] 도구호출 {len(tool_calls)}건 감지 (반복{iteration + 1})")
@@ -2507,6 +1555,18 @@ def get_llm_response_with_tools(
                 )
                 logger.info(f"[도구호출] [{tc_idx}/{len(tool_calls)}] {tool_name}({tool_args})")
 
+                # 진행 상태 보고: 도구 호출 시작 (상세 정보 포함)
+                display_name = _TOOL_DISPLAY_NAMES.get(tool_name, tool_name)
+                detail_msg = _build_tool_detail_message(tool_name, tool_args)
+                _report_progress(
+                    progress_queue,
+                    f"{display_name} 중... ({tc_idx}/{len(tool_calls)})" + (f" — {detail_msg}" if detail_msg else ""),
+                    "tool_calling",
+                    tool_name=tool_name,
+                    iteration=iteration + 1,
+                    max_iterations=max_tool_iterations,
+                )
+
                 # 도구 사용 추적
                 if tool_name not in _tools_used:
                     _tools_used.append(tool_name)
@@ -2517,6 +1577,14 @@ def get_llm_response_with_tools(
                 tool_elapsed = time.time() - t_tool
                 result_len = len(tool_result or "")
                 logger.info(f"[도구결과] [{tc_idx}/{len(tool_calls)}] {tool_name} ({tool_elapsed:.1f}s) 결과길이={result_len}자")
+
+                # 진행 상태 보고: 도구 실행 완료
+                _report_progress(
+                    progress_queue,
+                    f"{display_name} 완료 ({tool_elapsed:.1f}초)",
+                    "tool_done",
+                    tool_name=tool_name,
+                )
                 logger.info(f"[도구결과데이터] {tool_name}:\n{tool_result}")
 
                 # 도구 결과에서 출처 수집 (정제 전 원본 JSON에서 파싱)
@@ -2563,8 +1631,7 @@ def get_llm_response_with_tools(
                 )
                 _verified_urls = {s.get("url", "") for s in _collected_sources if s.get("url")}
                 finalized = _strip_hallucinated_urls(finalized, _verified_urls)
-                text_with_sources = _append_source_urls(finalized, _collected_sources)
-                return _build_structured_result(text_with_sources, _collected_sources, _tools_used)
+                return _build_structured_result(finalized, _collected_sources, _tools_used)
             elif hasattr(msg, 'content') and hasattr(msg, 'role'):
                 if msg.role == "assistant":
                     finalized = _finalize_user_facing_answer(
@@ -2575,8 +1642,7 @@ def get_llm_response_with_tools(
                     )
                     _verified_urls = {s.get("url", "") for s in _collected_sources if s.get("url")}
                     finalized = _strip_hallucinated_urls(finalized, _verified_urls)
-                    text_with_sources = _append_source_urls(finalized, _collected_sources)
-                    return _build_structured_result(text_with_sources, _collected_sources, _tools_used)
+                    return _build_structured_result(finalized, _collected_sources, _tools_used)
 
         return _build_structured_result("죄송합니다. 응답을 생성할 수 없습니다.", [], [])
 

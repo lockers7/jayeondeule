@@ -224,6 +224,8 @@ def embed_text(text, timeout=60, max_retries=5):
     payload = {
         "model": embedding_model,
         "input": text,
+        "keep_alive": "0",
+        "options": {"num_gpu": 0},
     }
 
     last_error = None
@@ -243,7 +245,7 @@ def embed_text(text, timeout=60, max_retries=5):
             # /api/embed 미지원 시 구 엔드포인트로 폴백
             if status_code == 404:
                 logger.info("[embed_text] /api/embed 미지원 → /api/embeddings 폴백")
-                fallback_payload = {"model": embedding_model, "prompt": text}
+                fallback_payload = {"model": embedding_model, "prompt": text, "keep_alive": "0", "options": {"num_gpu": 0}}
                 status_code, data, error_text = mcp_http_request(
                     method="POST",
                     url=ollama_url + "/api/embeddings",

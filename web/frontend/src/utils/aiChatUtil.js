@@ -19,7 +19,7 @@ export async function sendQuery(query, farmId, houseId, farmName, houseName, ses
  * SSE 스트리밍 질의 — 실시간 status/token/done 이벤트를 콜백으로 전달
  * @returns {AbortController} 스트림 중단용 컨트롤러
  */
-export function streamQuery(query, farmId, houseId, farmName, houseName, sessionId, callbacks) {
+export function streamQuery(query, farmId, houseId, farmName, houseName, sessionId, speechStyle, callbacks) {
     const {onStatus, onToken, onDone, onError} = callbacks;
     const controller = new AbortController();
 
@@ -33,6 +33,7 @@ export function streamQuery(query, farmId, houseId, farmName, houseName, session
             house_id: houseId,
             farm_name: farmName,
             house_name: houseName,
+            speech_style: speechStyle || "male",
         }),
         signal: controller.signal,
     })

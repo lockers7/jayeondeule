@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { Button, Form } from "react-bootstrap";
+import { Button, Form, Alert } from "react-bootstrap";
+import { useSelector } from "react-redux";
 import { getFarmList } from "../../utils/farmUtil.js";
 import { getHouseList } from "../../utils/houseUtil.js";
 
@@ -9,10 +10,20 @@ export default function ChatSidebar({
     selectedHouse,
     setSelectedHouse,
     onClearMessages,
+    speechStyle,
+    setSpeechStyle,
+    modelAlert,
+    setModelAlert,
 }) {
     const [farms, setFarms] = useState([]);
     const [houses, setHouses] = useState([]);
     const [region, setRegion] = useState("확인 중...");
+
+    // 관리자 전용: LLM 모델 관리
+    const userInfo = useSelector((state) => state.auth?.userInfo);
+    const isAdmin = userInfo?.authLvel === "ADMIN";
+    const [availableModels, setAvailableModels] = useState([]);
+    const [currentModel, setCurrentModel] = useState("");
 
     // IP 기반 지역 판단 (서버 측 조회)
     useEffect(() => {
@@ -33,6 +44,43 @@ export default function ChatSidebar({
                 setRegion("알 수 없음");
             });
     }, []);
+
+    // 관리자 전용: Ollama 모델 목록 로드
+    useEffect(() => {
+        if (!isAdmin) return;
+        fetch("/ai-api/api/v1/admin/models")
+            .then((res) => res.json())
+            .then((data) => {
+                if (data.success) {
+                    setAvailableModels(data.models || []);
+                    setCurrentModel(data.current_model || "");
+                }
+            })
+            .catch(() => {});
+    }, [isAdmin]);
+
+    const handleModelChange = (e) => {
+        const newModel = e.target.value;
+        if (!newModel || newModel === currentModel) return;
+
+        fetch("/ai-api/api/v1/admin/models", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model_name: newModel }),
+        })
+            .then((res) => res.json())
+            .then((data) => {
+                if (data.success) {
+                    setCurrentModel(newModel);
+                    setModelAlert({ variant: "info", text: `모델이 '${newModel}'로 변경되었습니다. 다음 대화부터 적용됩니다.` });
+                } else {
+                    setModelAlert({ variant: "danger", text: `모델 변경 실패: ${data.detail || data.error || "알 수 없는 오류"}` });
+                }
+            })
+            .catch((err) => {
+                setModelAlert({ variant: "danger", text: `모델 변경 실패: ${err.message}` });
+            });
+    };
 
     // 농장 목록 로드
     useEffect(() => {
@@ -86,7 +134,21 @@ export default function ChatSidebar({
         >
             {/* 헤더 */}
             <h5 style={{ color: "#1B5E20", marginBottom: "4px" }}>자연들에</h5>
-            <small className="text-muted" style={{ marginBottom: "20px" }}>스마트팜 AI 관리</small>
+            <small className="text-muted" style={{ marginBottom: "12px", display: "block" }}>스마트팜 AI 관리</small>
+
+            {/* 대화체 선택 */}
+            <Form.Group className="mb-2">
+                <Form.Label style={{ fontWeight: "600", fontSize: "13px", marginBottom: "4px" }}>대화체</Form.Label>
+                <Form.Select
+                    size="sm"
+                    value={speechStyle || "male"}
+                    onChange={(e) => setSpeechStyle(e.target.value)}
+                    style={{ fontSize: "13px" }}
+                >
+                    <option value="male">남성 (사무적)</option>
+                    <option value="female">여성 (부드러운)</option>
+                </Form.Select>
+            </Form.Group>
 
             <hr />
 
@@ -147,6 +209,40 @@ export default function ChatSidebar({
             <Button variant="outline-secondary" size="sm" className="w-100" onClick={onClearMessages}>
                 대화 기록 삭제
             </Button>
+
+            {/* 관리자 전용: LLM 모델 선택 */}
+            {isAdmin && availableModels.length > 0 && (
+                <>
+                    <hr />
+                    <Form.Group className="mb-2">
+                        <Form.Label style={{ fontWeight: "600", fontSize: "13px", color: "#D32F2F", marginBottom: "4px" }}>
+                            LLM 모델 ({userInfo?.userId || "Admin"})
+                        </Form.Label>
+                        <Form.Select
+                            size="sm"
+                            value={currentModel}
+                            onChange={handleModelChange}
+                            style={{ fontSize: "12px" }}
+                        >
+                            {availableModels.map((m) => (
+                                <option key={m.name} value={m.name}>
+                                    {m.name} ({m.parameter_size || "?"}/{m.size_gb}GB)
+                                </option>
+                            ))}
+                        </Form.Select>
+                    </Form.Group>
+                    {modelAlert && (
+                        <Alert
+                            variant={modelAlert.variant}
+                            dismissible
+                            onClose={() => setModelAlert(null)}
+                            style={{ fontSize: "12px", padding: "8px 10px", marginBottom: "0" }}
+                        >
+                            {modelAlert.text}
+                        </Alert>
+                    )}
+                </>
+            )}
         </div>
     );
 }
