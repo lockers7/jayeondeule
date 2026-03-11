@@ -45,7 +45,7 @@
 # _determine_response_type: 사용된 도구 목록으로 응답 유형 결정.
 # _build_structured_result: 구조화된 응답 결과 생성 (출처 URL 중복 제거 포함).
 # _filter_greeting_turns: 인사/잡담만으로 구성된 턴 쌍(user+assistant)을 제외한다.
-# get_llm_response_with_tools 내 턴 주입: 이전 대화를 system role 참고용 맥락으로 주입 (user/assistant role 직접 주입 시 LLM이 이전 질문도 답변하는 오염 방지). 중복 user 턴 제거 시 대응 assistant 턴도 함께 제거.
+# get_llm_response_with_tools 내 턴 주입: 이전 대화를 system role 대화 연속성 참고용 맥락으로 주입 (user/assistant role 직접 주입 시 LLM이 이전 질문도 답변하는 오염 방지). "그럼/그래서/또" 등 연결어 시 맥락 이어가기 허용. 중복 user 턴 제거 시 대응 assistant 턴도 함께 제거.
 # get_llm_response_with_tools 내 출처 수집: _refine_search_web 정제 후 LLM이 보는 결과와 동일한 출처만 수집 (별도 키워드 필터 없음)
 # _coerce_numeric_id: LLM이 비정수 값을 ID로 넣는 경우 기본값(정수)으로 교정
 # get_llm_response_with_tools: Tool Use 지원 LLM 응답 생성 (LLM이 도구 자율 선택)
@@ -1567,9 +1567,10 @@ def get_llm_response_with_tools(
                 messages.append({
                     "role": "system",
                     "content": (
-                        "[직전 대화 맥락 - 참고용]\n"
-                        "아래는 직전 대화예요. 사용자가 '아까', '그거', '이전에' 등으로 이전 대화를 언급할 때만 참고하세요.\n"
-                        "현재 질문에 대해서만 답변하세요. 이전 질문을 다시 답변하거나 이전 데이터를 현재 답변에 포함하지 마세요.\n"
+                        "[직전 대화 맥락 - 대화 연속성 참고용]\n"
+                        "아래는 직전 대화예요. 현재 질문이 직전 대화와 자연스럽게 이어지는 경우(예: '그럼', '그래서', '또', '다른') 맥락을 이어서 답변하세요.\n"
+                        "사용자가 이전 대화 내용을 물으면 아래 내용을 참고하여 답변하세요.\n"
+                        "단, 이전 대화의 구체적 수치(온도, 가격 등)는 재사용하지 말고 도구로 최신 데이터를 확인하세요.\n"
                         f"{_prev_context}"
                     )
                 })

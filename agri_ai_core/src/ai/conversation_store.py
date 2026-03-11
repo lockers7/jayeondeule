@@ -4,6 +4,9 @@
 # --->
 # _SessionData: 인메모리 폴백용 세션 데이터
 # ConversationStore: 대화 이력 저장소 (메모리+DB)
+#   - _summarize_old_turns: MAX_TURNS 초과 시 오래된 턴을 LLM으로 요약 후 VectorDB 저장
+#   - _delete_old_turns: 요약 성공/실패 무관하게 오래된 턴 PostgreSQL에서 삭제 (무한 누적 방지)
+#   - _store_summary_to_vectordb: 대화 요약을 conversation_collection에 임베딩 저장
 # get_conversation_store: 글로벌 ConversationStore 싱글톤을 반환한다.
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import os
@@ -156,6 +159,7 @@ class ConversationStore:
             )
 
         # MAX_TURNS 초과 시 오래된 턴을 요약 → conversation_collection 저장
+        # 요약 실패 시에도 오래된 턴을 PostgreSQL에서 삭제하여 무한 누적 방지
         if len(rows) > self._max_turns * 2:
             overflow_count = len(rows) - self._max_turns * 2
             if overflow_count % 2 != 0:
@@ -163,8 +167,12 @@ class ConversationStore:
             old_turns = rows[:overflow_count]
             recent_rows = rows[overflow_count:]
 
-            # 비동기 요약 (응답 지연 방지)
+            # 요약 시도
             summary = self._summarize_old_turns(session_id, old_turns)
+
+            # 요약 성공/실패 무관하게 오래된 턴 PostgreSQL에서 삭제 (무한 누적 방지)
+            self._delete_old_turns(session_id, overflow_count)
+
             if summary:
                 result = [{"role": "system", "content": f"[이전 대화 요약] {summary}"}]
                 result.extend({"role": r["role"], "content": r["content"]} for r in recent_rows)
@@ -243,6 +251,24 @@ class ConversationStore:
         except Exception as e:
             logger.debug(f"[대화저장소] 대화 요약 실패: {e}")
             return None
+
+    # ============================================================
+    # MAX_TURNS 초과 시 오래된 턴을 PostgreSQL에서 삭제 (요약 성공/실패 무관, 무한 누적 방지)
+    # ============================================================
+    def _delete_old_turns(self, session_id: str, count: int):
+        """오래된 턴 N개를 PostgreSQL에서 삭제한다."""
+        try:
+            from agri_ai_core.src.postgresql.connection import db_session
+            from agri_ai_core.src.postgresql import queries as dbQry
+
+            with db_session() as database:
+                database.execute_query(
+                    dbQry.DELETE_AI_CONVERSATION_OLD_TURNS,
+                    (session_id, count),
+                )
+            logger.info(f"[대화저장소] 오래된 턴 {count}개 삭제 완료 (session={session_id[:12]}...)")
+        except Exception as e:
+            logger.warning(f"[대화저장소] 오래된 턴 삭제 실패: {e}")
 
     # ============================================================
     # 대화 요약을 conversation_collection에 임베딩 저장
