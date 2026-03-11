@@ -35,15 +35,17 @@
 # _clean_page_content: 페이지 본문에서 노이즈 제거 후 도입부 추출
 # _refine_search_web: search_web 결과를 구조적으로 정제 + LLM이 보는 결과와 동일한 출처 목록 반환 (tuple: 정제텍스트, 출처리스트)
 # _refine_fetch_url: fetch_url_content 결과를 구조적으로 정제
+# _refine_farm_knowledge: search_farm_knowledge 결과를 경량화 (개별 content 500자 + 전체 1500자 제한, num_ctx 포화 방지)
 # _refine_realtime_data: get_farm_realtime_data 결과를 컴팩트 텍스트로 변환 (조회시각 생략, sensor+relay 동시 처리)
 # _refine_tool_result: 도구 결과를 LLM 메시지에 넣기 전에 도구별 지능형 정제
+# 도구 호출 중복 제거: 같은 반복 내 동일 함수+동일 인자 호출은 캐시 사용하여 1번만 실행 (num_ctx 낭비 방지)
 # _finalize_user_facing_answer: 최종 사용자 응답 생성 (think 태그 제거 + 기본 정리)
 # _align_markdown_tables: LLM 응답 내 마크다운 표의 컬럼 구분자(|)를 정렬 (한글 너비 고려)
 # clean_llm_response: LLM 응답 기본 정리 + 표 정렬
 # _determine_response_type: 사용된 도구 목록으로 응답 유형 결정.
 # _build_structured_result: 구조화된 응답 결과 생성 (출처 URL 중복 제거 포함).
 # _filter_greeting_turns: 인사/잡담만으로 구성된 턴 쌍(user+assistant)을 제외한다.
-# get_llm_response_with_tools 내 턴 주입: 중복 user 턴 제거 시 대응 assistant 턴도 함께 제거 (고아 assistant → LLM 패턴 복사 방지)
+# get_llm_response_with_tools 내 턴 주입: 이전 대화를 system role 참고용 맥락으로 주입 (user/assistant role 직접 주입 시 LLM이 이전 질문도 답변하는 오염 방지). 중복 user 턴 제거 시 대응 assistant 턴도 함께 제거.
 # get_llm_response_with_tools 내 출처 수집: _refine_search_web 정제 후 LLM이 보는 결과와 동일한 출처만 수집 (별도 키워드 필터 없음)
 # _coerce_numeric_id: LLM이 비정수 값을 ID로 넣는 경우 기본값(정수)으로 교정
 # get_llm_response_with_tools: Tool Use 지원 LLM 응답 생성 (LLM이 도구 자율 선택)
@@ -1055,33 +1057,47 @@ def _refine_farm_knowledge(tool_result: str) -> str:
     - description이 content와 중복이면 제거
     - 불필요한 metadata 키 제거
     - 네비게이션 잡음 제거
+    - content 개별 항목 500자 제한 + 전체 결과 1500자 제한 (num_ctx 포화 방지)
+    기존: 정제 후에도 ~5800자/건 → 다중 호출 시 num_ctx 초과로 다른 도구 결과 누락
+    변경: 핵심 내용만 보존하여 1500자 이내로 제한, 다른 도구 결과와 공존 가능
     """
+    _MAX_CONTENT_PER_ITEM = 500   # 개별 항목 content 최대 길이
+    _MAX_TOTAL_REFINED = 1500     # 정제 결과 전체 최대 길이
+
     try:
         data = json.loads(tool_result)
     except (json.JSONDecodeError, TypeError):
-        return tool_result
+        return tool_result[:_MAX_TOTAL_REFINED] if len(tool_result or "") > _MAX_TOTAL_REFINED else (tool_result or "")
 
     results = data.get("results")
     if not results or not isinstance(results, list):
-        return tool_result
+        return tool_result[:_MAX_TOTAL_REFINED] if len(tool_result or "") > _MAX_TOTAL_REFINED else (tool_result or "")
 
     for item in results:
         # 1) 네비게이션 잡음 제거
         content = item.get("content", "")
         if content:
-            item["content"] = _strip_nav_noise(content)
+            content = _strip_nav_noise(content)
+            # 2) 개별 content 길이 제한
+            if len(content) > _MAX_CONTENT_PER_ITEM:
+                content = content[:_MAX_CONTENT_PER_ITEM] + "..."
+            item["content"] = content
 
-        # 2) description이 content와 중복이면 제거
+        # 3) description이 content와 중복이면 제거
         meta = item.get("metadata", {})
         desc = meta.get("description", "")
         if desc and content and desc[:50] in content:
             del meta["description"]
 
-        # 3) 불필요한 metadata 키 제거
+        # 4) 불필요한 metadata 키 제거
         for key in _UNNECESSARY_META_KEYS:
             meta.pop(key, None)
 
-    return json.dumps(data, ensure_ascii=False)
+    refined = json.dumps(data, ensure_ascii=False)
+    # 전체 결과 길이 제한 (num_ctx 포화 방지)
+    if len(refined) > _MAX_TOTAL_REFINED:
+        refined = refined[:_MAX_TOTAL_REFINED] + "..."
+    return refined
 
 
 def _finalize_user_facing_answer(
@@ -1502,17 +1518,20 @@ def get_llm_response_with_tools(
             filtered_turns = _filter_greeting_turns(actual_turns)
             skipped = len(actual_turns) - len(filtered_turns)
 
-            # 관련 과거 대화 주입 (system role, 400자 제한)
+            # 관련 과거 대화 주입 (system role, 400자 제한, 참고용 명시)
             for ctx in system_context:
                 content = ctx.get("content", "")
                 if len(content) > 400:
                     content = content[:400] + "..."
-                messages.append({"role": "system", "content": content})
+                # LLM이 과거 대화를 현재 질문으로 혼동하지 않도록 명시적 구분
+                formatted = f"[이전 대화 요약 - 참고용, 답변 근거로 사용 금지]\n{content}"
+                messages.append({"role": "system", "content": formatted})
 
-            # 최근 턴 주입 (user 400자/assistant 300자)
-            # 빈/실패 assistant 메시지는 LLM이 패턴을 따라 동일 응답을 반복하므로 제거
-            # [FIX] 중복 user 턴 제거 시 대응하는 assistant 턴도 함께 제거 (고아 assistant → LLM 패턴 복사 방지)
+            # 최근 턴 주입 — system role로 참고용 맥락 주입
+            # [FIX] 이전 대화를 user/assistant role로 넣으면 LLM이 이전 질문도 함께 답변하려 함
+            # → 하나의 system 메시지로 묶어 "참고용 맥락"으로만 전달하여 데이터 오염 방지
             _user_query_stripped = (user_query or "").strip()
+            _context_parts = []
             _skip_next_assistant = False
             for turn in filtered_turns:
                 role = turn.get("role", "user")
@@ -1535,12 +1554,25 @@ def get_llm_response_with_tools(
                     _skip_next_assistant = True
                     continue
                 _skip_next_assistant = False
-                # assistant 답변은 짧게 제한 (과거 답변 복사 방지 + 도구 결과 공간 확보)
-                if role == "assistant" and len(content) > 300:
-                    content = content[:300] + "..."
+                # 길이 제한 (참고용이므로 핵심 주제만 보존)
+                if role == "assistant" and len(content) > 200:
+                    content = content[:200] + "..."
                 elif role == "user" and len(content) > 400:
                     content = content[:400] + "..."
-                messages.append({"role": role, "content": content})
+                label = "사용자" if role == "user" else "AI"
+                _context_parts.append(f"{label}: {content}")
+
+            if _context_parts:
+                _prev_context = "\n".join(_context_parts)
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "[직전 대화 맥락 - 참고용]\n"
+                        "아래는 직전 대화예요. 사용자가 '아까', '그거', '이전에' 등으로 이전 대화를 언급할 때만 참고하세요.\n"
+                        "현재 질문에 대해서만 답변하세요. 이전 질문을 다시 답변하거나 이전 데이터를 현재 답변에 포함하지 마세요.\n"
+                        f"{_prev_context}"
+                    )
+                })
 
             logger.info(
                 f"[멀티턴] 하이브리드 컨텍스트: 관련대화={len(system_context)}건, "
@@ -1580,7 +1612,8 @@ def get_llm_response_with_tools(
             # 이전 반복에서 도구 호출이 있었으면 → 다음에도 도구 제공 (다단계 호출 지원)
             # 이전 반복에서 도구 호출이 없었으면 → 도구 제거 (최종 답변 생성)
             if _prev_had_tool_calls:
-                iter_num_predict = 768 if iteration == 0 else NUM_PREDICT
+                # 첫 반복은 도구 호출 전용 (보통 50~100토큰) → 384로 제한하여 생성 시간 절약
+                iter_num_predict = 384 if iteration == 0 else NUM_PREDICT
                 iter_tools = tools
             else:
                 iter_num_predict = NUM_PREDICT
@@ -1677,8 +1710,10 @@ def get_llm_response_with_tools(
                 return _build_structured_result(finalized, _collected_sources, _tools_used)
 
             # 도구 호출 처리 (같은 반복의 결과는 병합하여 1개 메시지로 추가)
+            # 동일 반복 내 중복 도구 호출 제거: 같은 함수+같은 인자면 캐시된 결과 재사용 (num_ctx 낭비 방지)
             logger.info(f"[Tool Use] 도구호출 {len(tool_calls)}건 감지 (반복{iteration + 1})")
             _iteration_tool_results = []
+            _dedup_cache: dict = {}  # key: (tool_name, args_json) → value: refined_result
             for tc_idx, tool_call in enumerate(tool_calls, start=1):
                 tool_name = _extract_tool_name(tool_call)
                 tool_args = _extract_tool_arguments(tool_call)
@@ -1691,6 +1726,13 @@ def get_llm_response_with_tools(
                     tool_args,
                     default_tool_args=default_tool_args,
                 )
+
+                # 중복 도구 호출 감지: 같은 반복 내 동일 함수+동일 인자면 캐시 사용
+                _dedup_key = (tool_name, json.dumps(tool_args, sort_keys=True, ensure_ascii=False))
+                if _dedup_key in _dedup_cache:
+                    logger.info(f"[도구호출] [{tc_idx}/{len(tool_calls)}] {tool_name}({tool_args}) → 중복 생략 (캐시 사용)")
+                    continue
+
                 logger.info(f"[도구호출] [{tc_idx}/{len(tool_calls)}] {tool_name}({tool_args})")
 
                 # 진행 상태 보고: 도구 호출 시작 (상세 정보 포함)
@@ -1725,20 +1767,13 @@ def get_llm_response_with_tools(
                 )
                 logger.info(f"[도구결과데이터] {tool_name}:\n{tool_result}")
 
-                # 도구 결과에서 출처 수집 (search_web: 정제 후 LLM이 보는 결과와 동일한 출처만 수집)
-                if tool_result:
+                # 도구 결과에서 출처 수집 (search_web 전용: 정제 후 LLM이 보는 결과와 동일한 출처만 수집)
+                # search_farm_knowledge는 내부 RAG 문서 검색이므로 외부 URL 출처 수집 안 함
+                # (이전 대화에서 저장된 웹 검색 URL이 무관한 출처로 표시되는 문제 방지)
+                if tool_result and tool_name == "search_web":
                     try:
-                        parsed_result = json.loads(tool_result)
-                        if tool_name == "search_web":
-                            _, _filtered_sources = _refine_search_web(tool_result, user_query)
-                            _collected_sources.extend(_filtered_sources)
-                        elif tool_name == "search_farm_knowledge":
-                            for item in parsed_result.get("results", []):
-                                meta = item.get("metadata", {})
-                                src = (meta.get("source") or meta.get("title") or "").strip()
-                                url = (meta.get("url") or "").strip()
-                                if src and url:
-                                    _collected_sources.append({"title": src, "url": url})
+                        _, _filtered_sources = _refine_search_web(tool_result, user_query)
+                        _collected_sources.extend(_filtered_sources)
                     except (json.JSONDecodeError, TypeError):
                         pass
 
@@ -1748,6 +1783,7 @@ def get_llm_response_with_tools(
                     f"[도구정제] {tool_name} 원본={len(tool_result or '')}자 → 정제={len(refined_result)}자"
                 )
                 _iteration_tool_results.append(refined_result)
+                _dedup_cache[_dedup_key] = True  # 중복 방지용 캐시 등록
 
             # 같은 반복의 모든 도구 결과를 하나의 tool 메시지로 병합 (메시지 수 절감 → 컨텍스트 절약)
             if _iteration_tool_results:
