@@ -176,6 +176,8 @@ class ConversationStore:
 
     # ============================================================
     # 오래된 대화 턴을 LLM으로 요약하고 conversation_collection에 임베딩 저장
+    # 요약 규칙: 사용자 질문 주제만 보존, AI 답변의 구체적 수치(온도/가격 등)는 제외 (시간 경과로 변함)
+    # 4문장 이내, num_predict=200으로 충분한 요약 공간 확보
     # ============================================================
     def _summarize_old_turns(self, session_id: str, old_turns: list) -> Optional[str]:
         try:
@@ -196,9 +198,13 @@ class ConversationStore:
                 or "qwen3:32b"
             )
 
+            # 대화 요약 프롬프트: 사용자 질문 주제만 보존, LLM 답변 수치는 제외 (시간 경과로 변함)
             prompt = (
-                f"아래 대화를 3문장 이내로 핵심만 요약하세요.\n\n"
-                f"{dialogue[:2000]}\n\n"
+                f"아래 대화를 4문장 이내로 요약하세요. 규칙:\n"
+                f"- 사용자가 질문한 주제와 키워드를 포함하세요\n"
+                f"- AI 답변의 구체적 수치(온도, 가격 등)는 제외하세요 (시간 경과로 변함)\n"
+                f"- 한국어로 작성하세요\n\n"
+                f"{dialogue[:2500]}\n\n"
                 f"/no_think\n"
                 f"요약:"
             )
@@ -210,7 +216,7 @@ class ConversationStore:
                     "model": model_name,
                     "prompt": prompt,
                     "stream": False,
-                    "options": {"temperature": 0, "num_predict": 150},
+                    "options": {"temperature": 0, "num_predict": 200},
                 },
                 timeout=20,
             )

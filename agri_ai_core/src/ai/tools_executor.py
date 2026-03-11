@@ -5,7 +5,7 @@
 # has_korean (utils): 한국어 포함 여부 판별
 # _search_via_naver_api: Naver 검색 API를 통한 검색 (블로그 + 웹)
 # _search_via_brave_api: Brave Search API를 통한 검색
-# _search_via_searxng: SearXNG 자체 호스팅 메타 검색 엔진을 통한 검색
+# _search_via_searxng: SearXNG 자체 호스팅 메타 검색 엔진을 통한 검색 (항상 한국어 결과 우선)
 # _search_via_api: API 검색 통합 라우터
 # _json_default: json.dumps 기본 직렬화로 처리할 수 없는 타입 변환.
 # search_farm_knowledge: 농장 지식 검색
@@ -220,8 +220,8 @@ def _search_via_searxng(query: str, count: Optional[int] = None) -> Optional[Lis
     if count is None:
         count = _WEB_SEARCH_RESULT_LIMIT
 
-    # 한국어 쿼리 감지 → 언어 설정
-    lang = "ko-KR" if _is_korean_query(query) else "en-US"
+    # 한국 농장 시스템 — 항상 한국어 결과 우선 (LLM이 외국어 query 생성해도 한국어 결과 반환)
+    lang = "ko-KR"
 
     params = urllib.parse.urlencode({
         "q": query,
