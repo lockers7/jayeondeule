@@ -5,9 +5,13 @@
 # _dedupe_list: 공통 헬퍼 함수
 # _build_default_tool_args: 도구별 기본 인자 생성
 # _load_hybrid_context: 하이브리드 대화 컨텍스트: 직전 N턴 + VectorDB 관련 대화 검색
+#   - _CONVERSATION_MAX_DISTANCE: VectorDB 거리 임계값 (3.0, 환경변수 CONV_VECTOR_MAX_DISTANCE)
+#   - VectorDB 검색 결과 중복 제거 (_seen_queries 셋으로 동일 질문 필터링)
 # _search_related_conversations: VectorDB conversation_collection에서 관련 과거 대화를 검색
-# _save_conversation_turn_hybrid: 대화 턴 저장: PostgreSQL(동기) + VectorDB(비동기)
+# _save_conversation_turn_hybrid: 대화 턴 저장: PostgreSQL(동기) + VectorDB(비동기/동기 선택)
+#   - SYNC_VECTORDB_SAVE=true 환경변수로 동기 저장 전환 가능
 # _async_vectordb_save: 백그라운드: Q+A 쌍을 VectorDB에 임베딩 저장 + 수명 관리
+#   - 저장 실패 시 warning 레벨 로그 출력
 # _prune_old_conversations: farm_id별 대화 기록을 최대 N건으로 유지
 # _call_llm_with_timeout: LLM 호출 (타임아웃 포함)
 # _unpack_llm_result: LLM 결과를 (response_text, sources, tools_used, response_type) 튜플로 언패킹
@@ -107,7 +111,8 @@ def _build_default_tool_args(user_query, farm_id, house_id):
 _HYBRID_RECENT_TURNS = int(os.getenv("HYBRID_RECENT_TURNS", "2"))
 _HYBRID_RELATED_RESULTS = int(os.getenv("HYBRID_RELATED_RESULTS", "5"))
 _HYBRID_MAX_RECORDS_PER_FARM = int(os.getenv("HYBRID_MAX_RECORDS", "30"))
-_CONVERSATION_MAX_DISTANCE = float(os.getenv("CONV_VECTOR_MAX_DISTANCE", "16.0"))
+# VectorDB 관련 대화 검색 거리 임계값 (기존 16.0 → 3.0: 무관한 과거 대화 컨텍스트 유입 방지)
+_CONVERSATION_MAX_DISTANCE = float(os.getenv("CONV_VECTOR_MAX_DISTANCE", "3.0"))
 
 
 # ============================================================
@@ -199,7 +204,9 @@ def _search_related_conversations(user_query, farm_id):
         distances = results.get("distances", []) or []
 
         # 거리 임계값 필터 + 포맷 (질문만 추출, 과거 답변은 포함하지 않음)
+        # 동일 질문 중복 제거: query_preview 기준으로 중복 검색 결과 1건만 유지
         lines = []
+        _seen_queries: set = set()
         for idx, doc in enumerate(documents):
             dist = distances[idx] if idx < len(distances) else None
             if dist is not None and dist > _CONVERSATION_MAX_DISTANCE:
@@ -215,6 +222,11 @@ def _search_related_conversations(user_query, farm_id):
                 else:
                     query_preview = raw[:200]
             if query_preview:
+                # 중복 질문 제거
+                _preview_key = query_preview.strip()[:50]
+                if _preview_key in _seen_queries:
+                    continue
+                _seen_queries.add(_preview_key)
                 lines.append(f"- ({record_dt}) 질문: {query_preview}")
 
         if not lines:
@@ -241,12 +253,18 @@ def _save_conversation_turn_hybrid(session_id, user_query, response_text, farm_i
     store.add_turn(session_id, "assistant", response_text, farm_id)
     logger.info(f"[{label}하이브리드] session={session_id[:12]}... PostgreSQL 저장 완료")
 
-    # [2] VectorDB 비동기 저장 (응답 지연 방지)
-    threading.Thread(
-        target=_async_vectordb_save,
-        args=(session_id, user_query, response_text, farm_id),
-        daemon=True,
-    ).start()
+    # [2] VectorDB 저장 (기본: 비동기, 환경변수로 동기 전환 가능)
+    # 비동기: 응답 지연 방지, 단 연속 대화 시 최신 데이터 미포함 가능
+    # 동기: 저장 완료 후 반환, 연속 대화에서도 최신 데이터 보장
+    _sync_vectordb = os.getenv("SYNC_VECTORDB_SAVE", "false").lower() == "true"
+    if _sync_vectordb:
+        _async_vectordb_save(session_id, user_query, response_text, farm_id)
+    else:
+        threading.Thread(
+            target=_async_vectordb_save,
+            args=(session_id, user_query, response_text, farm_id),
+            daemon=True,
+        ).start()
 
 
 # ============================================================
@@ -295,15 +313,15 @@ def _async_vectordb_save(session_id, user_query, response_text, farm_id):
 
         result = upsert_documents_with_embedding(collection_name, docs)
         if result.get("success"):
-            logger.debug(f"[하이브리드] VectorDB 대화 저장 완료: {doc_id}")
+            logger.info(f"[하이브리드] VectorDB 대화 저장 완료: {doc_id}")
         else:
-            logger.debug(f"[하이브리드] VectorDB 저장 실패: {result.get('error', '')}")
+            logger.warning(f"[하이브리드] VectorDB 저장 실패: {result.get('error', '')}")
 
         # 수명 관리: farm_id당 최대 30건
         _prune_old_conversations(collection_name, farm_id)
 
     except Exception as e:
-        logger.debug(f"[하이브리드] VectorDB 비동기 저장 실패: {e}")
+        logger.warning(f"[하이브리드] VectorDB 비동기 저장 실패: {e}")
 
 
 # ============================================================

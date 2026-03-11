@@ -322,6 +322,16 @@ DELETE_AI_CONVERSATION_SESSION = "DELETE FROM ai_conversation WHERE session_id =
 
 DELETE_AI_CONVERSATION_EXPIRED = "DELETE FROM ai_conversation WHERE created_at < NOW() - (%s || ' days')::INTERVAL"
 
+# 오래된 턴 삭제: MAX_TURNS 초과 시 가장 오래된 N개 턴 삭제 (요약 실패 시에도 무한 누적 방지)
+DELETE_AI_CONVERSATION_OLD_TURNS = """
+DELETE FROM ai_conversation WHERE id IN (
+    SELECT id FROM ai_conversation
+    WHERE session_id = %s
+    ORDER BY created_at ASC
+    LIMIT %s
+)
+"""
+
 COUNT_AI_CONVERSATION_SESSIONS = """
 SELECT COUNT(DISTINCT session_id) as cnt FROM ai_conversation
 WHERE created_at > NOW() - (%s || ' days')::INTERVAL
