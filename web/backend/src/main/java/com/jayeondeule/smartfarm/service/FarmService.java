@@ -12,6 +12,8 @@ import com.jayeondeule.smartfarm.repository.UserRepository;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.*;
+
+import java.util.Objects;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -27,13 +29,14 @@ public class FarmService {
     }
 
     public void insertFarm(FarmInsertDTO farmInfo) {
-        farmRepository.save(mapper.convertValue(farmInfo, Farm.class));
+        farmRepository.save(Objects.requireNonNull(mapper.convertValue(farmInfo, Farm.class)));
     }
 
+    //전체 농장 목록 조회 — dlteYn='N'만 조회
     public Page<FarmDTO> getAllFarms(int page, int size) {
         Pageable pageable = PageRequest.of(page, size, Sort.by("rgstDttm").descending());
 
-        Page<Farm> farmList = farmRepository.findAllBy(pageable);
+        Page<Farm> farmList = farmRepository.findAllByDlteYn("N", pageable);
 
         return farmList.map(farm -> mapper.convertValue(farm, FarmDTO.class));
     }
@@ -52,8 +55,13 @@ public class FarmService {
         return mapper.convertValue(userFarm, FarmDTO.class);
     }
 
+    //농장 삭제 (soft delete — dlteYn='Y')
     public void deleteFarmByFarmId(Long farmId) {
-        farmRepository.deleteById(farmId);
+        Farm target = farmRepository.findByFarmId(farmId);
+        if (target != null) {
+            target.setDlteYn("Y");
+            farmRepository.save(target);
+        }
     }
 
     public void patchFarmByFarmId(Long farmId, FarmPatchDTO modifiedInfo) {

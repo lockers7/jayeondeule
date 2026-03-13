@@ -10,7 +10,7 @@
 # delete_document: 문서 삭제
 # upsert_collection_data: 문서 업서트 (있으면 업데이트, 없으면 추가)
 # upsert_documents_with_embedding: 복수 문서 업서트 (임베딩 포함)
-# query_documents: 벡터 검색
+# query_documents: 벡터 검색 (타임아웃 10초, 재시도 2회 — 기존 30초x3회에서 축소하여 대화 응답 지연 방지)
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import os
 import time
@@ -36,12 +36,15 @@ logger = setup_logger(__name__)
 
 
 def _http_post(url: str, payload: dict, timeout: int = 30):
-    return mcp_http_request(
+    logger.debug(f"[ChromaDB-POST] url={url}, payload_keys={list(payload.keys()) if isinstance(payload, dict) else type(payload)}, timeout={timeout}")
+    status_code, data, text = mcp_http_request(
         method="POST",
         url=url,
         json_body=payload,
         timeout=timeout,
     )
+    logger.debug(f"[ChromaDB-POST] 응답: status={status_code}, data_type={type(data).__name__}")
+    return status_code, data, text
 
 
 _AUTO_EMBED_ON_UPSERT = is_true(os.getenv("AUTO_EMBED_ON_UPSERT", "true"))
@@ -411,9 +414,10 @@ def query_documents(collection_name, query_embeddings=None, n_results=5, where=N
 
         _RETRY_EMPTY = {"matches": [], "ids": [], "documents": [], "metadatas": [], "distances": []}
 
-        for retry in range(3):
+        # 재시도 2회, 타임아웃 10초 — 기존 30초x3회(=90초 블로킹)에서 10초x2회(=20초)로 축소
+        for retry in range(2):
             try:
-                status_code, result, text = _http_post(url, payload, timeout=30)
+                status_code, result, text = _http_post(url, payload, timeout=10)
                 if status_code == 200:
                     if not isinstance(result, dict):
                         logger.warning("[query_documents] 응답 JSON 파싱 실패")

@@ -5,11 +5,11 @@
 # has_korean (utils): 한국어 포함 여부 판별
 # _search_via_naver_api: Naver 검색 API를 통한 검색 (블로그 + 웹)
 # _search_via_brave_api: Brave Search API를 통한 검색
-# _search_via_searxng: SearXNG 자체 호스팅 메타 검색 엔진을 통한 검색 (항상 한국어 결과 우선)
+# _search_via_searxng: SearXNG 자체 호스팅 메타 검색 엔진을 통한 검색 (한국어 우선 + answers/infoboxes 즉답 수집)
 # _search_via_api: API 검색 통합 라우터
 # _json_default: json.dumps 기본 직렬화로 처리할 수 없는 타입 변환.
-# search_farm_knowledge: 농장 지식 검색
-# get_farm_realtime_data: 농장 실시간 데이터 가져오기
+# search_farm_knowledge: 농장 지식 검색 (메타 질문 시 Reranker 바이패스 + 파일 목록 추출, farm_id 필터 없는 폴백 추가)
+# get_farm_realtime_data: 농장 실시간 데이터 가져오기 (센서값 + 릴레이 + 환경 제어 임계값 + AI 환경 판단)
 # control_relay: 릴레이(장치) 제어
 # _auto_fetch_urls: 웹 검색
 # search_web: MCP를 통한 웹 검색 + 상위 URL 본문 자동 읽기
@@ -35,6 +35,9 @@ from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.ai.utils import has_korean as _is_korean_query
 
 logger = setup_logger(__name__)
+
+# 시스템/가상 농장 ID (관리자 선택 시 전체 데이터 검색, 일반 사용자는 자기 농장 + 시스템 농장 데이터 검색)
+_SYSTEM_FARM_ID = "0"
 
 
 def _normalize_id(value):
@@ -257,6 +260,39 @@ def _search_via_searxng(query: str, count: Optional[int] = None) -> Optional[Lis
             if len(results) >= count:
                 break
 
+        # SearXNG 즉답(answers) + 지식패널(infoboxes) 수집 — 기존 results 파이프라인에 영향 없이 추가 데이터 제공
+        answers = data.get("answers", []) or []
+        infoboxes = data.get("infoboxes", []) or []
+        if answers:
+            logger.info(f"[SearXNG] 즉답(answers) {len(answers)}건 확보")
+        if infoboxes:
+            logger.info(f"[SearXNG] 지식패널(infoboxes) {len(infoboxes)}건 확보")
+
+        # answers/infoboxes 텍스트를 results 앞에 우선 정보로 삽입
+        priority_items = []
+        for ans in answers[:2]:
+            if isinstance(ans, str) and ans.strip():
+                priority_items.append({
+                    "title": "[즉답]",
+                    "url": "",
+                    "description": ans.strip(),
+                    "source": "searxng_answer",
+                })
+        for ibox in infoboxes[:1]:
+            if isinstance(ibox, dict):
+                ibox_content = ibox.get("content", "")
+                ibox_title = ibox.get("infobox", "")
+                if ibox_content:
+                    priority_items.append({
+                        "title": f"[지식] {ibox_title}",
+                        "url": ibox.get("urls", [{}])[0].get("url", "") if ibox.get("urls") else "",
+                        "description": ibox_content[:500],
+                        "source": "searxng_infobox",
+                    })
+
+        if priority_items:
+            results = priority_items + results
+
         engines_used = list(set(item.get("engine", "") for item in data.get("results", []) if item.get("engine")))
         logger.info(f"[SearXNG] {len(results)}건 검색 완료 engines={engines_used[:5]} query=\"{query[:50]}\"")
         return results if results else None
@@ -403,27 +439,45 @@ def search_farm_knowledge(
             return {"$and": conditions}
 
         source_where_candidates = []
-        source_where_str = {}
-        if farm_id is not None:
-            source_where_str["farm_id"] = str(farm_id)
-        if house_id is not None:
-            source_where_str["house_id"] = str(house_id)
-        if source_where_str:
-            source_where_candidates.append(_to_chroma_where(source_where_str))
 
-        source_where_int = {}
-        farm_id_int = _parse_optional_int(farm_id)
-        house_id_int = _parse_optional_int(house_id)
-        if farm_id_int is not None:
-            source_where_int["farm_id"] = farm_id_int
-        if house_id_int is not None:
-            source_where_int["house_id"] = house_id_int
-        chroma_int = _to_chroma_where(source_where_int)
-        if chroma_int and chroma_int not in source_where_candidates:
-            source_where_candidates.append(chroma_int)
-
-        if not source_where_candidates:
+        if farm_id is not None and str(farm_id) == _SYSTEM_FARM_ID:
+            # 시스템 농장 선택 (관리자): farm_id 필터 없이 모든 농장 데이터 검색
             source_where_candidates = [None]
+            logger.info("[VectorDB검색] 시스템 농장 모드: 전체 농장 데이터 검색")
+        else:
+            source_where_str = {}
+            if farm_id is not None:
+                source_where_str["farm_id"] = str(farm_id)
+            if house_id is not None:
+                source_where_str["house_id"] = str(house_id)
+            if source_where_str:
+                source_where_candidates.append(_to_chroma_where(source_where_str))
+
+            source_where_int = {}
+            farm_id_int = _parse_optional_int(farm_id)
+            house_id_int = _parse_optional_int(house_id)
+            if farm_id_int is not None:
+                source_where_int["farm_id"] = farm_id_int
+            if house_id_int is not None:
+                source_where_int["house_id"] = house_id_int
+            chroma_int = _to_chroma_where(source_where_int)
+            if chroma_int and chroma_int not in source_where_candidates:
+                source_where_candidates.append(chroma_int)
+
+            # 일반 농장 사용자: 시스템 농장(farm_id=0) 학습 데이터도 함께 검색
+            if farm_id is not None:
+                sys_where_str = _to_chroma_where({"farm_id": _SYSTEM_FARM_ID})
+                if sys_where_str not in source_where_candidates:
+                    source_where_candidates.append(sys_where_str)
+                sys_farm_int = _parse_optional_int(_SYSTEM_FARM_ID)
+                if sys_farm_int is not None:
+                    sys_where_int = _to_chroma_where({"farm_id": sys_farm_int})
+                    if sys_where_int not in source_where_candidates:
+                        source_where_candidates.append(sys_where_int)
+                logger.info(f"[VectorDB검색] 일반 농장 모드: farm_id={farm_id} + 시스템 농장 데이터 검색")
+
+            if not source_where_candidates:
+                source_where_candidates = [None]
 
         t_embed = time.time()
         query_embedding = embed_text(query)
@@ -465,6 +519,15 @@ def search_farm_knowledge(
                     "label": "farm_knowledge",
                     "name": farm_knowledge_name,
                     "where": where,
+                    "max_distance": _parse_positive_float(os.getenv("SOURCE_VECTOR_MAX_DISTANCE", "24.0"), 24.0),
+                })
+            # [FIX] farm_id/house_id 필터가 있을 때 필터 없는 폴백도 추가
+            # → 파일 학습 데이터 등 farm_id 메타가 없는 문서도 검색 가능하도록
+            if source_where_candidates and source_where_candidates != [None]:
+                collection_plans.append({
+                    "label": "farm_knowledge",
+                    "name": farm_knowledge_name,
+                    "where": None,
                     "max_distance": _parse_positive_float(os.getenv("SOURCE_VECTOR_MAX_DISTANCE", "24.0"), 24.0),
                 })
 
@@ -561,15 +624,21 @@ def search_farm_knowledge(
 
         # LLM 기반 Reranker 적용 (관련성 판단을 LLM에 위임, 무관한 결과 필터링)
         # file_name 필터 시 Reranker 바이패스 (파일명 쿼리는 내용과 관련성 낮아 Reranker가 오판)
-        if file_name:
+        # [FIX] 메타 질문(파일/학습/목록/리스트/자료 등) 감지 시 Reranker 바이패스
+        # → "학습한 자료 리스트" 같은 질문은 문서 내용과 직접 관련이 없어 Reranker가 모두 1점 처리하는 문제 방지
+        _meta_query_keywords = ("파일", "학습", "목록", "리스트", "자료", "문서", "업로드", "RAG", "데이터")
+        _is_meta_query = any(kw in (query or "") for kw in _meta_query_keywords)
+        if file_name or _is_meta_query:
+            if _is_meta_query and not file_name:
+                logger.info(f"[VectorDB검색] 메타 질문 감지 → Reranker 바이패스 (query=\"{query[:40]}\")")
             # file_name 필터로 검색한 document_collection 결과를 우선 반환
             doc_results = [r for r in deduped_results if r.get("collection") == "document"]
             if doc_results:
                 deduped_results = doc_results[:max_results]
-                logger.info(f"[VectorDB검색] file_name 필터 → Reranker 바이패스, document 결과 {len(deduped_results)}건")
+                logger.info(f"[VectorDB검색] document 결과 우선 반환 {len(deduped_results)}건")
             else:
                 deduped_results = deduped_results[:max_results]
-                logger.info(f"[VectorDB검색] file_name 필터 → document 결과 없음, 전체 {len(deduped_results)}건 폴백")
+                logger.info(f"[VectorDB검색] document 결과 없음, 전체 {len(deduped_results)}건 폴백")
         else:
             try:
                 from agri_ai_core.src.ai.rag.reranker import rerank_results
@@ -608,13 +677,38 @@ def search_farm_knowledge(
         except Exception:
             pass
 
-        return {
+        # [FIX] 메타 질문(파일/학습/목록/리스트/자료 등) 시 검색된 전체 결과에서
+        # 고유 파일명 목록을 추출하여 file_list로 함께 반환 → LLM이 학습 자료 리스트 답변 가능
+        _file_list = None
+        if _is_meta_query:
+            _seen_files = set()
+            _file_entries = []
+            # 현재 검색 결과 + 거리 초과로 제외된 결과 모두에서 파일명 수집
+            for item in formatted_results:
+                meta = item.get("metadata") or {}
+                fn = meta.get("file_name") or meta.get("file_name_stored") or ""
+                if fn and fn not in _seen_files:
+                    _seen_files.add(fn)
+                    _file_entries.append({
+                        "file_name": fn,
+                        "collection": item.get("collection", ""),
+                        "document_type": meta.get("document_type", ""),
+                    })
+            if _file_entries:
+                _file_list = _file_entries
+                logger.info(f"[VectorDB검색] 메타 질문 → 고유 파일 {len(_file_entries)}건 추출")
+
+        result_data = {
             "success": True,
             "query": query,
             "count": len(deduped_results),
             "data_retrieved_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "results": deduped_results,
         }
+        if _file_list:
+            result_data["file_list"] = _file_list
+            result_data["file_count"] = len(_file_list)
+        return result_data
 
     except Exception as e:
         elapsed = time.time() - t_start
@@ -632,7 +726,9 @@ def search_farm_knowledge(
 # Args: house_id: 재배사 ID
 #       farm_id: 농장 ID (선택)
 #       data_type: 데이터 유형 (sensor/relay/all)
-# Returns: dict: 실시간 데이터
+# Returns: dict: 실시간 데이터 + environment_thresholds(환경 제어 임계값) + ai_environment_judgment(AI 환경 판단)
+#   - environment_thresholds: 온도/습도/CO2/수온의 적정/비상 범위 (LLM이 센서값 적정 여부 판단용)
+#   - ai_environment_judgment: 현재 센서값 기반 알고리즘 권장 릴레이 상태 (제어 없이 판단만)
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def get_farm_realtime_data(house_id: str = None, farm_id: str = None, data_type: str = "all") -> Dict[str, Any]:
     t_start = time.time()
@@ -722,6 +818,29 @@ def get_farm_realtime_data(house_id: str = None, farm_id: str = None, data_type:
                                 "name": label,
                             }
                 result["relay_mapping"] = relay_mapping
+
+        # 환경 제어 임계값 + AI 판단 포함 (LLM이 센서값 적정 여부를 판단할 수 있도록)
+        if data_type in ["sensor", "all"]:
+            from agri_ai_core.src.control.control_common import (
+                TEMP_LOW, TEMP_HIGH, TEMP_CRITICAL_LOW, TEMP_CRITICAL_HIGH,
+                HUMIDITY_LOW, HUMIDITY_HIGH, HUMIDITY_CRITICAL_LOW, HUMIDITY_CRITICAL_HIGH,
+                CO2_LOW, CO2_HIGH, CO2_CRITICAL_HIGH,
+                WATER_TEMP_LOW, WATER_TEMP_HIGH, WATER_TEMP_CRITICAL_LOW, WATER_TEMP_CRITICAL_HIGH,
+            )
+            result["environment_thresholds"] = {
+                "indoor_temperature": {"low": TEMP_LOW, "high": TEMP_HIGH, "critical_low": TEMP_CRITICAL_LOW, "critical_high": TEMP_CRITICAL_HIGH, "unit": "°C"},
+                "indoor_humidity": {"low": HUMIDITY_LOW, "high": HUMIDITY_HIGH, "critical_low": HUMIDITY_CRITICAL_LOW, "critical_high": HUMIDITY_CRITICAL_HIGH, "unit": "%"},
+                "co2": {"low": CO2_LOW, "high": CO2_HIGH, "critical_high": CO2_CRITICAL_HIGH, "unit": "ppm"},
+                "water_temperature": {"low": WATER_TEMP_LOW, "high": WATER_TEMP_HIGH, "critical_low": WATER_TEMP_CRITICAL_LOW, "critical_high": WATER_TEMP_CRITICAL_HIGH, "unit": "°C"},
+            }
+            # AI 환경 판단 (알고리즘이 현재 센서값에 대해 권장하는 릴레이 상태)
+            try:
+                from agri_ai_core.src.control.manual_control import get_ai_environment_judgment
+                ai_judgment = get_ai_environment_judgment(target_farm_id, target_house_id)
+                if ai_judgment:
+                    result["ai_environment_judgment"] = ai_judgment
+            except Exception as e:
+                logger.debug(f"[PostgreSQL조회] AI 환경 판단 조회 실패: {e}")
 
         if (
             (data_type in ["sensor", "all"] and not result.get("sensor"))

@@ -83,14 +83,19 @@
     color: inherit;
 }
 
+/* 마크다운 표 래퍼: 말풍선 내부에서 가로 스크롤 허용 */
+.chat-markdown .chat-table-wrapper {
+    overflow-x: auto;
+    margin: 8px 0;
+    -webkit-overflow-scrolling: touch;
+}
+
 /* 마크다운 표 (remark-gfm) */
 .chat-markdown table {
     border-collapse: collapse;
-    margin: 8px 0;
-    width: 100%;
+    width: max-content;
+    min-width: 100%;
     font-size: 0.9em;
-    overflow-x: auto;
-    display: block;
 }
 
 .chat-markdown thead {

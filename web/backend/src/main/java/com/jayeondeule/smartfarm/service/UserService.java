@@ -5,6 +5,8 @@ import com.jayeondeule.smartfarm.dto.user.*;
 import com.jayeondeule.smartfarm.entity.user.User;
 import com.jayeondeule.smartfarm.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
+
+import java.util.Objects;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -26,7 +28,7 @@ public class UserService {
         String hashed = passwordEncoder.encode(signupInfo.getPasswd());
         signupInfo.setPasswd(hashed);
 
-        userRepository.save(mapper.convertValue(signupInfo, User.class));
+        userRepository.save(Objects.requireNonNull(mapper.convertValue(signupInfo, User.class)));
 
         return true;
     }
@@ -36,8 +38,26 @@ public class UserService {
         return userRepository.existsByUserId(idInfo);
     }
 
-    //권한부여를 위한 유저 리스트 조회(관리자용)
+    //유저 리스트 조회(관리자용) — dlteYn='N'만 조회
     public Page<UserDTO> getUsers(int page, int size) {
+        Pageable pageable = PageRequest.of(page, size, Sort.by("rgstDttm").descending());
+
+        Page<User> userList = userRepository.findAllByDlteYn("N", pageable);
+
+        return userList.map(user -> mapper.convertValue(user, UserDTO.class));
+    }
+
+    //농장별 유저 리스트 조회 — dlteYn='N'만 조회
+    public Page<UserDTO> getUsers(int page, int size, long searchQuery) {
+        Pageable pageable = PageRequest.of(page, size, Sort.by("rgstDttm").descending());
+
+        Page<User> userList = userRepository.findAllByFarmIdAndDlteYn(searchQuery, "N", pageable);
+
+        return userList.map(user -> mapper.convertValue(user, UserDTO.class));
+    }
+
+    //유저 전체 리스트 조회(관리자용) — 삭제 포함
+    public Page<UserDTO> getUsersAll(int page, int size) {
         Pageable pageable = PageRequest.of(page, size, Sort.by("rgstDttm").descending());
 
         Page<User> userList = userRepository.findAll(pageable);
@@ -45,13 +65,22 @@ public class UserService {
         return userList.map(user -> mapper.convertValue(user, UserDTO.class));
     }
 
-    //권한부여를 위한 기존 유저 리스트 조회(관리자용)
-    public Page<UserDTO> getUsers(int page, int size, long searchQuery) {
+    //농장별 유저 전체 리스트 조회(관리자용) — 삭제 포함
+    public Page<UserDTO> getUsersAll(int page, int size, long searchQuery) {
         Pageable pageable = PageRequest.of(page, size, Sort.by("rgstDttm").descending());
 
         Page<User> userList = userRepository.findAllByFarmId(searchQuery, pageable);
 
         return userList.map(user -> mapper.convertValue(user, UserDTO.class));
+    }
+
+    //사용자 복원 (soft delete 취소 — dlteYn='N')
+    public void restoreUser(String userId) {
+        User target = userRepository.findByUserId(userId);
+        if (target != null) {
+            target.setDlteYn("N");
+            userRepository.save(target);
+        }
     }
 
     //사용자 정보 조회
@@ -98,7 +127,12 @@ public class UserService {
         return userRepository.findByUserId(userId).getFarmId();
     }
 
+    //사용자 삭제 (soft delete — dlteYn='Y')
     public void deleteUser(String userId) {
-        userRepository.deleteById(userId);
+        User target = userRepository.findByUserId(userId);
+        if (target != null) {
+            target.setDlteYn("Y");
+            userRepository.save(target);
+        }
     }
 }

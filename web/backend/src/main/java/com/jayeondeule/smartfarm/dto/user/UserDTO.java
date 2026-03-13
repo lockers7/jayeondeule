@@ -23,4 +23,5 @@ public class UserDTO {
     private AuthLvel authLvel; // 권한 (ADMIN, USER 등)
     private String hpNo; // 전화번호
     private LocalDateTime rgstDttm; // 가입 일자
+    private String dlteYn; // 삭제여부 (Y/N)
 }

@@ -2,7 +2,7 @@ import { createSlice } from "@reduxjs/toolkit";
 
 const authSlice = createSlice({
     name: "auth",
-    initialState: { token: null, userInfo: null },
+    initialState: { token: null, userInfo: null, selectedFarm: null },
     reducers: {
         loginSuccess: (state, action) => {
             state.token = action.payload.token;
@@ -12,6 +12,7 @@ const authSlice = createSlice({
         logout: (state) => {
             state.token = null;
             state.userInfo = null;
+            state.selectedFarm = null;
             localStorage.removeItem("token");
         },
         restoreSession: (state) => {
@@ -23,9 +24,13 @@ const authSlice = createSlice({
         setUser: (state, action) => {
             state.token = localStorage.getItem("token");
             state.userInfo = action.payload;
-        }
+        },
+        // 선택된 농장 정보 저장 (farmId, farmName)
+        setSelectedFarm: (state, action) => {
+            state.selectedFarm = action.payload;
+        },
     }
 });
 
-export const { loginSuccess, logout, restoreSession, setUser } = authSlice.actions;
+export const { loginSuccess, logout, restoreSession, setUser, setSelectedFarm } = authSlice.actions;
 export default authSlice.reducer;

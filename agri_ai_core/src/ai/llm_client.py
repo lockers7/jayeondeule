@@ -23,7 +23,7 @@
 # _ollama_chat: Ollama 채팅 통합 함수 (직접/MCP/패키지 자동 선택)
 # _extract_message_content: Ollama 응답에서 메시지 내용 추출
 # _normalize_assistant_message: 어시스턴트 메시지 정규화
-# _extract_tool_calls: Ollama 응답에서 도구 호출 추출
+# _extract_tool_calls: Ollama 응답에서 도구 호출 추출 (tool_calls 필드 우선, content에 JSON 도구 호출이 텍스트로 출력된 경우도 파싱)
 # _extract_tool_name: 도구 호출에서 도구명 추출
 # _extract_tool_arguments: 도구 호출에서 인자 추출
 # _normalize_tool_arguments: 도구 인자 정규화
@@ -35,8 +35,8 @@
 # _clean_page_content: 페이지 본문에서 노이즈 제거 후 도입부 추출
 # _refine_search_web: search_web 결과를 구조적으로 정제 + LLM이 보는 결과와 동일한 출처 목록 반환 (tuple: 정제텍스트, 출처리스트)
 # _refine_fetch_url: fetch_url_content 결과를 구조적으로 정제
-# _refine_farm_knowledge: search_farm_knowledge 결과를 경량화 (개별 content 500자 + 전체 1500자 제한, num_ctx 포화 방지)
-# _refine_realtime_data: get_farm_realtime_data 결과를 컴팩트 텍스트로 변환 (조회시각 생략, sensor+relay 동시 처리)
+# _refine_farm_knowledge: search_farm_knowledge 결과를 경량화 (개별 content 500자 + 전체 1500자 제한, num_ctx 포화 방지). 메타 질문(파일/학습/목록) 시 file_list 보존하여 LLM이 학습 자료 리스트 답변 가능
+# _refine_realtime_data: get_farm_realtime_data 결과를 컴팩트 텍스트로 변환 (센서+릴레이+적정범위+AI알고리즘권장 포함)
 # _refine_tool_result: 도구 결과를 LLM 메시지에 넣기 전에 도구별 지능형 정제
 # 도구 호출 중복 제거: 같은 반복 내 동일 함수+동일 인자 호출은 캐시 사용하여 1번만 실행 (num_ctx 낭비 방지)
 # _finalize_user_facing_answer: 최종 사용자 응답 생성 (think 태그 제거 + 기본 정리)
@@ -45,10 +45,10 @@
 # _determine_response_type: 사용된 도구 목록으로 응답 유형 결정.
 # _build_structured_result: 구조화된 응답 결과 생성 (출처 URL 중복 제거 포함).
 # _filter_greeting_turns: 인사/잡담만으로 구성된 턴 쌍(user+assistant)을 제외한다.
-# get_llm_response_with_tools 내 턴 주입: 이전 대화를 system role 대화 연속성 참고용 맥락으로 주입 (user/assistant role 직접 주입 시 LLM이 이전 질문도 답변하는 오염 방지). "그럼/그래서/또" 등 연결어 시 맥락 이어가기 허용. 중복 user 턴 제거 시 대응 assistant 턴도 함께 제거.
+# get_llm_response_with_tools 내 턴 주입: 이전 대화를 system role 대화 연속성 참고용 맥락으로 주입 (user/assistant role 직접 주입 시 LLM이 이전 질문도 답변하는 오염 방지). "그럼/그래서/또" 등 연결어 시 맥락 이어가기 허용. 중복 user 턴 제거 시 대응 assistant 턴도 함께 제거. 유사 assistant 답변 중복 제거: 앞 150자 기준 80% 이상 유사하면 이전 Q&A 제거하고 최신만 유지. 파일 목록 포함 답변 또는 "N번" 참조 질문 시 assistant truncation 800자로 확대. 릴레이 제어 맥락 경고: 이전 대화에 릴레이 제어 답변이 있어도 새 요청 시 반드시 control_relay 도구 재호출 필수.
 # get_llm_response_with_tools 내 출처 수집: _refine_search_web 정제 후 LLM이 보는 결과와 동일한 출처만 수집 (별도 키워드 필터 없음)
 # _coerce_numeric_id: LLM이 비정수 값을 ID로 넣는 경우 기본값(정수)으로 교정
-# get_llm_response_with_tools: Tool Use 지원 LLM 응답 생성 (LLM이 도구 자율 선택)
+# get_llm_response_with_tools: Tool Use 지원 LLM 응답 생성 (LLM이 도구 자율 선택, 1차 반복 토큰한도 도달 시 도구 호출 강제 재시도, JSON 텍스트/짧은 대기문구 답변 감지 시 자연어 재생성 유도, 릴레이 제어 답변인데 control_relay 미호출 시 강제 재시도)
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import os
 import re
@@ -554,10 +554,31 @@ def _normalize_assistant_message(assistant_message: Any) -> Dict[str, Any]:
     return normalized
 
 
+# LLM 응답에서 도구 호출 추출 (tool_calls 필드 우선, content에 JSON 도구 호출이 텍스트로 출력된 경우도 파싱)
 def _extract_tool_calls(assistant_message: Dict[str, Any]) -> List[Any]:
     tool_calls = assistant_message.get("tool_calls")
-    if isinstance(tool_calls, list):
+    if isinstance(tool_calls, list) and tool_calls:
         return tool_calls
+
+    # content에 도구 호출 JSON이 텍스트로 출력된 경우 파싱 시도
+    # 예: {"name": "search_farm_knowledge", "arguments": {...}}
+    content = assistant_message.get("content", "").strip()
+    if content.startswith("{") and content.endswith("}"):
+        try:
+            parsed = json.loads(content)
+            if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
+                # 도구 호출 JSON을 정규 tool_call 형식으로 변환
+                tool_call = {"function": {"name": parsed["name"], "arguments": parsed["arguments"]}}
+                # content를 비워서 최종답변으로 사용되지 않도록 함
+                assistant_message["content"] = ""
+                assistant_message["tool_calls"] = [tool_call]
+                logger.warning(
+                    f"[Tool Use] content에서 도구호출 JSON 감지 → tool_calls로 변환: {parsed['name']}"
+                )
+                return [tool_call]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass
+
     return []
 
 
@@ -948,9 +969,11 @@ _SENSOR_SHORT = {
 
 def _refine_realtime_data(tool_result: str) -> str:
     """get_farm_realtime_data 결과를 컴팩트 텍스트로 변환.
-    ~1.5KB JSON → ~100~200자 텍스트로 압축하여 LLM 컨텍스트 절감.
+    ~1.5KB JSON → 압축하여 LLM 컨텍스트 절감.
     - 조회시각 생략 (모든 재배사 동일하므로 중복 제거)
     - OFF 장치 목록 생략 (ON만 표시, 나머지는 OFF로 추론 가능)
+    - environment_thresholds: 환경 제어 임계값 (적정 범위) 보존
+    - ai_environment_judgment: AI 알고리즘 권장 릴레이 상태 보존
     """
     try:
         data = json.loads(tool_result)
@@ -973,6 +996,19 @@ def _refine_realtime_data(tool_result: str) -> str:
                 sensor_items.append(f"{label}={val}")
         if sensor_items:
             parts.append("센서: " + ", ".join(sensor_items))
+
+    # 환경 제어 임계값 (적정 범위) — LLM이 센서값 적정 여부 판단에 필수
+    # ※ 적정범위는 모든 재배사 공통이므로 병합 시 중복 제거 가능하도록 고정 접두어 사용
+    thresholds = data.get("environment_thresholds")
+    if thresholds and isinstance(thresholds, dict):
+        th_items = []
+        for key, th in thresholds.items():
+            if isinstance(th, dict):
+                label = _SENSOR_SHORT.get(key, key)
+                unit = th.get("unit", "")
+                th_items.append(f"{label}: 적정{th.get('low','')}{unit}~{th.get('high','')}{unit}, 비상저{th.get('critical_low','')}{unit}/비상고{th.get('critical_high','')}{unit}")
+        if th_items:
+            parts.append("적정범위(공통): " + ", ".join(th_items))
 
     # 릴레이 데이터 압축 (relay_mapping 사용 → ON/OFF 장치명)
     relay_mapping = data.get("relay_mapping")
@@ -999,6 +1035,22 @@ def _refine_realtime_data(tool_result: str) -> str:
             parts.append(f"ON: {', '.join(on_pins)}")
         if off_pins:
             parts.append(f"OFF: {', '.join(off_pins)}")
+
+    # AI 환경 판단 (알고리즘 권장 릴레이 상태) — 제어값 비교용
+    ai_judgment = data.get("ai_environment_judgment")
+    if ai_judgment and isinstance(ai_judgment, dict):
+        reason = ai_judgment.get("reason", "")
+        device_summary = ai_judgment.get("device_summary", "")
+        circulation = ai_judgment.get("circulation", "")
+        judge_parts = []
+        if reason:
+            judge_parts.append(f"판단: {reason}")
+        if device_summary:
+            judge_parts.append(f"권장장치: {device_summary}")
+        if circulation:
+            judge_parts.append(f"순환모드: {circulation}")
+        if judge_parts:
+            parts.append("AI알고리즘권장: " + ", ".join(judge_parts))
 
     return " | ".join(parts)
 
@@ -1092,6 +1144,28 @@ def _refine_farm_knowledge(tool_result: str) -> str:
         # 4) 불필요한 metadata 키 제거
         for key in _UNNECESSARY_META_KEYS:
             meta.pop(key, None)
+
+    # [FIX] file_list가 있으면 (메타 질문: 학습/파일/목록 등) 파일 목록을 우선 포함
+    # → LLM이 학습 자료 리스트를 답변할 수 있도록 file_list 정보를 보존
+    _file_list = data.get("file_list")
+    if _file_list and isinstance(_file_list, list):
+        _file_summary = "학습된 파일 목록:\n"
+        for idx, f in enumerate(_file_list, 1):
+            fn = f.get("file_name", "")
+            dt = f.get("document_type", "")
+            col = f.get("collection", "")
+            _file_summary += f"{idx}. {fn} (유형: {dt}, 출처: {col})\n"
+        # file_list가 있으면 파일 목록 + 축약된 결과를 합산
+        refined = json.dumps(data, ensure_ascii=False)
+        if len(refined) > _MAX_TOTAL_REFINED:
+            # 파일 목록은 보존하고 results만 축약
+            data["results"] = data.get("results", [])[:2]
+            for item in data.get("results", []):
+                c = item.get("content", "")
+                if len(c) > 200:
+                    item["content"] = c[:200] + "..."
+            refined = json.dumps(data, ensure_ascii=False)
+        return refined
 
     refined = json.dumps(data, ensure_ascii=False)
     # 전체 결과 길이 제한 (num_ctx 포화 방지)
@@ -1530,9 +1604,14 @@ def get_llm_response_with_tools(
             # 최근 턴 주입 — system role로 참고용 맥락 주입
             # [FIX] 이전 대화를 user/assistant role로 넣으면 LLM이 이전 질문도 함께 답변하려 함
             # → 하나의 system 메시지로 묶어 "참고용 맥락"으로만 전달하여 데이터 오염 방지
+            # [FIX] 유사 assistant 답변 중복 제거: 연속 대화에서 비슷한 답변이 반복 주입되는 문제 해결
             _user_query_stripped = (user_query or "").strip()
+            # [FIX] 현재 질문에 "N번" 참조가 있으면 이전 답변의 목록을 보존해야 함
+            _user_refs_number = bool(re.search(r'\d+번', _user_query_stripped))
             _context_parts = []
             _skip_next_assistant = False
+            _prev_assistant_prefix = ""  # 직전 assistant 답변의 앞부분 (유사도 비교용)
+            _dedup_count = 0  # 유사 중복으로 제거된 턴 수
             for turn in filtered_turns:
                 role = turn.get("role", "user")
                 content = turn.get("content", "")
@@ -1553,14 +1632,70 @@ def get_llm_response_with_tools(
                 if role == "user" and content.strip() == _user_query_stripped:
                     _skip_next_assistant = True
                     continue
+                # [FIX] 직전 대화 내 연속 동일 user 질문 제거 (도구 실패 재시도 시 같은 질문 2회 저장되는 경우)
+                if role == "user" and _context_parts:
+                    _last_user_part = None
+                    for _cp in reversed(_context_parts):
+                        if _cp.startswith("사용자: "):
+                            _last_user_part = _cp[5:]  # "사용자: " 이후
+                            break
+                    if _last_user_part and _last_user_part.strip()[:60] == content.strip()[:60]:
+                        _skip_next_assistant = True
+                        _dedup_count += 1
+                        logger.info(f"[멀티턴] 직전 대화 내 동일 질문 반복 제거: '{content.strip()[:40]}...'")
+                        continue
                 _skip_next_assistant = False
+                # [FIX] 유사 assistant 답변 중복 제거: 이전 답변과 앞 150자가 80% 이상 겹치면
+                # 이전 Q&A를 제거하고 최신 것만 유지 (연속 유사 질문 시 컨텍스트 낭비 방지)
+                if role == "assistant" and len(content) > 80:
+                    _current_prefix = content.strip()[:150]
+                    if _prev_assistant_prefix and _current_prefix and _prev_assistant_prefix:
+                        _common = sum(1 for a, b in zip(_prev_assistant_prefix, _current_prefix) if a == b)
+                        _max_len = max(len(_prev_assistant_prefix), len(_current_prefix))
+                        if _max_len > 0 and _common / _max_len > 0.8:
+                            # 이전 user+assistant 쌍 제거, 현재(최신) 것만 유지
+                            if len(_context_parts) >= 2:
+                                _context_parts.pop()  # 이전 AI 답변 제거
+                                _context_parts.pop()  # 이전 사용자 질문 제거
+                                _dedup_count += 1
+                                logger.info(f"[멀티턴] 유사 답변 중복 제거: 이전 Q&A 제거 (유사도={_common}/{_max_len})")
+                            elif len(_context_parts) >= 1:
+                                _context_parts.pop()  # 이전 AI 답변만 제거
+                                _dedup_count += 1
+                    _prev_assistant_prefix = _current_prefix
                 # 길이 제한 (참고용이므로 핵심 주제만 보존)
-                if role == "assistant" and len(content) > 200:
-                    content = content[:200] + "..."
+                # [FIX] 파일 목록/번호가 포함된 답변은 800자까지 확대 (사용자가 "N번" 참조 시 필요)
+                if role == "assistant":
+                    # [FIX] 릴레이 제어 결과 답변 축약: LLM이 이전 제어 답변을 복사하여
+                    # 도구 없이 거짓 응답하는 문제 방지. 상세 데이터를 제거하여
+                    # LLM이 반드시 control_relay 도구를 호출하도록 유도
+                    _relay_result_indicators = ("릴레이", "AI 환경 판단", "AI 권장", "반대로")
+                    _relay_done_indicators = ("설정했어요", "변경했어요", "제어했어요", "반전했어요", "전환했어요",
+                                              "설정했습니다", "변경했습니다", "제어했습니다")
+                    _is_relay_result = (
+                        any(ind in content for ind in _relay_result_indicators)
+                        and any(ind in content for ind in _relay_done_indicators)
+                    )
+                    if _is_relay_result:
+                        # 릴레이 제어 답변은 첫 줄만 보존 (상세 표/데이터 제거)
+                        _first_line = content.split("\n")[0][:80]
+                        content = f"{_first_line} (상세 생략 — 새 요청 시 control_relay 도구 호출 필수)"
+                    else:
+                        # 파일 목록 패턴 감지: "1. file.pdf" 또는 "| 1 | file.pdf |" 형식
+                        _has_numbered_list = bool(
+                            re.search(r'\d+[\.\)]\s*\*{0,2}\S+\.(pdf|txt|csv|json|md)', content)
+                            or re.search(r'\|\s*\d+\s*\|.*\.(pdf|txt|csv|json|md)', content)
+                        )
+                        # "N번" 참조 질문 시 목록 보존을 위해 추가 확대
+                        _max_assistant = 800 if (_has_numbered_list or _user_refs_number) else 350
+                        if len(content) > _max_assistant:
+                            content = content[:_max_assistant] + "..."
                 elif role == "user" and len(content) > 400:
                     content = content[:400] + "..."
                 label = "사용자" if role == "user" else "AI"
                 _context_parts.append(f"{label}: {content}")
+            if _dedup_count:
+                logger.info(f"[멀티턴] 유사 답변 중복 {_dedup_count}건 제거 완료")
 
             if _context_parts:
                 _prev_context = "\n".join(_context_parts)
@@ -1569,8 +1704,10 @@ def get_llm_response_with_tools(
                     "content": (
                         "[직전 대화 맥락 - 대화 연속성 참고용]\n"
                         "아래는 직전 대화예요. 현재 질문이 직전 대화와 자연스럽게 이어지는 경우(예: '그럼', '그래서', '또', '다른') 맥락을 이어서 답변하세요.\n"
-                        "사용자가 이전 대화 내용을 물으면 아래 내용을 참고하여 답변하세요.\n"
-                        "단, 이전 대화의 구체적 수치(온도, 가격 등)는 재사용하지 말고 도구로 최신 데이터를 확인하세요.\n"
+                        "중요: 이 맥락은 참고용이며, 파일/학습/자료/문서/데이터 관련 질문에는 반드시 search_farm_knowledge 도구를 사용하세요.\n"
+                        "이전 대화에서 비슷한 답변이 있더라도, 도구를 다시 호출하여 최신 정보를 검색하세요.\n"
+                        "이전 답변을 그대로 복사하거나 반복하는 것은 금지합니다.\n"
+                        "**장치 제어/릴레이 제어 관련 (절대 규칙)**: 이전 대화에서 릴레이 제어 성공 답변이 있더라도, 사용자가 다시 제어를 요청하면 반드시 control_relay 도구를 새로 호출하세요. 이전 제어 결과를 복사하여 도구 없이 답변하면 실제 하드웨어가 제어되지 않습니다.\n"
                         f"{_prev_context}"
                     )
                 })
@@ -1646,6 +1783,13 @@ def get_llm_response_with_tools(
 
             assistant_message = _normalize_assistant_message(assistant_message_raw)
 
+            # done_reason 추출 (length면 토큰 한도 도달, stop이면 정상 종료)
+            _done_reason = None
+            if hasattr(response, 'done_reason'):
+                _done_reason = response.done_reason
+            elif isinstance(response, dict):
+                _done_reason = response.get('done_reason')
+
             # 메시지 히스토리에 추가
             messages.append(assistant_message)
 
@@ -1659,12 +1803,100 @@ def get_llm_response_with_tools(
                 _tooluse_total_s = time.time() - _t_tooluse_start
                 logger.info(
                     f"[Tool Use] 도구호출 없음 → 최종답변 반환 (반복{iteration + 1}, {iter_elapsed:.1f}s) "
-                    f"답변길이={len(final_answer)}자"
+                    f"답변길이={len(final_answer)}자 done_reason={_done_reason}"
                 )
                 logger.debug(
                     f"[PERF:대화] ToolUse루프-LLM호출={iter_elapsed:.1f}s, "
                     f"ToolUse루프-전체={_tooluse_total_s:.1f}s (반복{iteration + 1})"
                 )
+
+                # 1차 반복에서 도구 호출 없이 토큰 한도 도달 → 도구 사용 강제 재시도
+                # LLM이 도구 대신 직접 답변을 생성하다 num_predict(384) 한도에 걸린 경우
+                if iteration == 0 and _done_reason == "length" and iter_tools is not None:
+                    # 릴레이 제어 키워드가 있으면 control_relay 도구를 명시적으로 안내
+                    _relay_hint_keywords = ("반대로", "반전", "셋팅", "설정", "제어", "켜", "꺼", "가동", "중지")
+                    _is_relay_hint = any(kw in user_query for kw in _relay_hint_keywords)
+                    if _is_relay_hint:
+                        _retry_msg = (
+                            f"릴레이 제어 요청은 반드시 control_relay 도구를 호출해야 합니다. "
+                            f"이전 대화의 답변을 복사하지 마세요. "
+                            f"먼저 get_farm_realtime_data(data_type='relay', house_id='1')로 현재 상태를 확인하고, "
+                            f"control_relay(house_id='1', mode='reverse_all')로 실제 제어를 수행하세요."
+                        )
+                    else:
+                        _retry_msg = (
+                            f"위 요청을 처리하려면 반드시 도구를 호출해야 합니다. "
+                            f"직접 답변하지 말고 get_farm_realtime_data, search_farm_knowledge, "
+                            f"search_web, control_relay 등 적절한 도구를 호출하세요."
+                        )
+                    logger.warning(
+                        f"[Tool Use] 1차 반복 토큰한도 도달(done_reason=length) → 도구 호출 강제 재시도"
+                        f"{' (릴레이 제어 감지)' if _is_relay_hint else ''}"
+                    )
+                    messages.pop()  # 잘린 assistant 메시지 제거
+                    messages.append({"role": "user", "content": _retry_msg})
+                    _prev_had_tool_calls = True
+                    continue
+
+                # 릴레이 제어 답변인데 도구를 사용하지 않은 경우 로깅 (모니터링 전용)
+                # 컨텍스트 절삭(Change 4)으로 근본 원인은 해결됨 — 여기서는 감지·기록만 수행
+                _stripped = final_answer.strip()
+                _relay_done_phrases = ("설정했어요", "설정했습니다", "제어했어요", "제어했습니다", "완료했어요", "완료했습니다", "변경했어요", "변경했습니다", "반전했어요", "반전했습니다", "전환했어요", "전환했습니다")
+                _has_relay_done = any(phrase in _stripped for phrase in _relay_done_phrases)
+                if _has_relay_done and "control_relay" not in _tools_used:
+                    logger.warning(
+                        f"[Tool Use] 릴레이 제어 답변인데 control_relay 미호출 감지 (반복{iteration + 1}) — "
+                        f"모니터링 기록 (강제 재시도 없음)"
+                    )
+
+                # JSON 형식 응답 감지: LLM이 도구 결과 JSON을 그대로 텍스트로 출력한 경우
+                # 예: {"content": "[생육 RAG] ..."} 또는 {"success": true, ...}
+                if _stripped.startswith("{") and _stripped.endswith("}") and iteration < max_tool_iterations - 1:
+                    try:
+                        _parsed_json = json.loads(_stripped)
+                        if isinstance(_parsed_json, dict):
+                            logger.warning(
+                                f"[Tool Use] JSON 형식 응답 감지 (반복{iteration + 1}) → "
+                                f"자연어 답변 재생성 유도 (키: {list(_parsed_json.keys())[:3]})"
+                            )
+                            messages.pop()  # JSON 응답 assistant 메시지 제거
+                            messages.append({
+                                "role": "user",
+                                "content": (
+                                    f"도구 결과를 사용자에게 자연어로 설명해 주세요. "
+                                    f"JSON 형식이 아닌 한국어 문장으로 답변하세요. "
+                                    f"사용자의 원래 요청: \"{user_query}\""
+                                ),
+                            })
+                            _prev_had_tool_calls = True
+                            continue
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+                # 도구 호출 후 짧은 답변 감지: 도구 결과를 종합하지 않고 대기/예고 문구만 출력한 경우
+                # 예: "재배차이점을 분석하기 전에 먼저 관련 지식을 검색해볼게요." (도구 결과가 이미 있는데 종합하지 않음)
+                if (
+                    _tools_used  # 도구를 1개 이상 호출한 상태
+                    and len(_stripped) < 80  # 짧은 답변
+                    and iteration < max_tool_iterations - 1
+                    and not _stripped.startswith("|")  # 마크다운 표 시작이 아닌 경우
+                ):
+                    logger.warning(
+                        f"[Tool Use] 도구 호출 후 짧은 답변 감지 (반복{iteration + 1}, {len(_stripped)}자) → "
+                        f"도구 결과 기반 답변 재생성 유도: \"{_stripped[:40]}...\""
+                    )
+                    messages.pop()  # 짧은 assistant 메시지 제거
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"도구 검색 결과가 이미 제공되었습니다. 대기/예고 문구 없이 "
+                            f"수집된 정보를 종합하여 사용자의 질문에 바로 답변하세요. "
+                            f"정보가 부족하면 search_web으로 추가 검색하세요. "
+                            f"사용자의 원래 요청: \"{user_query}\""
+                        ),
+                    })
+                    _prev_had_tool_calls = True
+                    continue
 
                 # 빈 응답 감지 (qwen3 thinking 모드에서 content="" 반환하는 경우)
                 if not final_answer.strip():
@@ -1787,8 +2019,23 @@ def get_llm_response_with_tools(
                 _dedup_cache[_dedup_key] = True  # 중복 방지용 캐시 등록
 
             # 같은 반복의 모든 도구 결과를 하나의 tool 메시지로 병합 (메시지 수 절감 → 컨텍스트 절약)
+            # 동일 도구(get_farm_realtime_data)의 적정범위(공통) 중복 제거: 첫 번째만 보존
             if _iteration_tool_results:
-                merged_result = "\n".join(_iteration_tool_results)
+                _seen_common_prefix = set()
+                _deduped_results = []
+                for r in _iteration_tool_results:
+                    lines = r.split(" | ")
+                    filtered_lines = []
+                    for line in lines:
+                        if line.startswith("적정범위(공통):"):
+                            if "적정범위(공통)" not in _seen_common_prefix:
+                                _seen_common_prefix.add("적정범위(공통)")
+                                filtered_lines.append(line)
+                            # 이미 본 적정범위는 생략
+                        else:
+                            filtered_lines.append(line)
+                    _deduped_results.append(" | ".join(filtered_lines))
+                merged_result = "\n".join(_deduped_results)
                 messages.append({
                     "role": "tool",
                     "content": merged_result

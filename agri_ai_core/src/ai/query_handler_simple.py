@@ -6,11 +6,14 @@
 # _build_default_tool_args: 도구별 기본 인자 생성
 # _load_hybrid_context: 하이브리드 대화 컨텍스트: 직전 N턴 + VectorDB 관련 대화 검색
 #   - _CONVERSATION_MAX_DISTANCE: VectorDB 거리 임계값 (3.0, 환경변수 CONV_VECTOR_MAX_DISTANCE)
-#   - VectorDB 검색 결과 중복 제거 (_seen_queries 셋으로 동일 질문 필터링)
-# _search_related_conversations: VectorDB conversation_collection에서 관련 과거 대화를 검색
+#   - VectorDB 검색 결과 중복 제거 (_seen_queries 셋으로 동일/유사 질문 필터링, 앞 60자 80% 유사도 비교)
+#   - VectorDB↔직전대화 교차 중복 제거 (직전 대화에 이미 있는 질문은 VectorDB 주제에서 제외)
+# _classify_topic: 대화 주제 분류 (규칙 기반, LLM 호출 불필요: farm_data/weather/control/search/general)
+# _search_related_conversations: VectorDB conversation_collection에서 관련 과거 대화를 검색 (동일 주제 우선 정렬)
 # _save_conversation_turn_hybrid: 대화 턴 저장: PostgreSQL(동기) + VectorDB(비동기/동기 선택)
 #   - SYNC_VECTORDB_SAVE=true 환경변수로 동기 저장 전환 가능
-# _async_vectordb_save: 백그라운드: Q+A 쌍을 VectorDB에 임베딩 저장 + 수명 관리
+# _async_vectordb_save: 백그라운드: Q+A 쌍을 VectorDB에 임베딩 저장 + 수명 관리 + topic 메타데이터 추가
+#   - 동일 Q&A 중복 저장 방지: 질문+응답 내용 기반 해시로 doc_id 생성 → 같은 내용이면 upsert로 덮어쓰기
 #   - 저장 실패 시 warning 레벨 로그 출력
 # _prune_old_conversations: farm_id별 대화 기록을 최대 N건으로 유지
 # _call_llm_with_timeout: LLM 호출 (타임아웃 포함)
@@ -38,8 +41,33 @@ from agri_ai_core.src.ai.utils import GREETING_RE as _GREETING_RE_HYBRID
 logger = setup_logger(__name__)
 web_logger = setup_web_logger("chat")
 
+# 시스템/가상 농장 ID (관리자 선택 시 전체 대화 검색, 일반 사용자는 자기 농장 + 시스템 농장 대화 검색)
+_SYSTEM_FARM_ID = "0"
+
 _LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT_SECONDS", "600"))
 _STREAM_HEARTBEAT_SECONDS = max(3, int(os.getenv("STREAM_HEARTBEAT_SECONDS", "5")))
+
+
+# ============================================================
+# 대화 주제 분류 (규칙 기반, LLM 호출 불필요)
+# VectorDB 저장 시 topic 메타데이터로 추가하여 검색 정확도 향상
+# ============================================================
+_TOPIC_PATTERNS = [
+    (re.compile(r'센서|온도|습도|CO2|수온|릴레이|재배사|생육|균사'), "farm_data"),
+    (re.compile(r'날씨|기온|비|바람|강수|예보|기상'), "weather"),
+    (re.compile(r'제어|켜|끄|가동|중지|작동|히터|팬|밸브'), "control"),
+    (re.compile(r'검색|찾아|알려|추천|알아|맛집|관광|주유'), "search"),
+]
+
+
+def _classify_topic(query: str) -> str:
+    """사용자 질문을 주제별로 분류한다 (규칙 기반). LLM 호출 없음."""
+    if not query:
+        return "general"
+    for pattern, topic in _TOPIC_PATTERNS:
+        if pattern.search(query):
+            return topic
+    return "general"
 
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -131,6 +159,36 @@ def _load_hybrid_context(session_id, user_query, farm_id, label=""):
     related_context = _search_related_conversations(user_query, farm_id)
 
     # [3] 하이브리드 컨텍스트 조합
+    # [FIX] VectorDB 주제와 직전 대화 교차 중복 제거: 직전 대화에 이미 있는 질문은 VectorDB 주제에서 제외
+    if related_context and recent_turns:
+        _recent_user_queries = set()
+        for t in recent_turns:
+            if t.get("role") == "user":
+                _recent_user_queries.add(t.get("content", "").strip()[:60])
+        if _recent_user_queries:
+            _filtered_lines = []
+            for line in related_context.split("\n"):
+                # "- (2026-03-12) 질문: ..." 형식에서 질문 부분 추출
+                _q_start = line.find("질문: ")
+                if _q_start >= 0:
+                    _q_text = line[_q_start + 4:].strip()[:60]
+                    # 직전 대화의 user 질문과 유사한지 비교
+                    _is_dup = False
+                    for _rq in _recent_user_queries:
+                        if _q_text and _rq:
+                            _common = sum(1 for a, b in zip(_q_text, _rq) if a == b)
+                            _max_len = max(len(_q_text), len(_rq))
+                            if _max_len > 0 and _common / _max_len > 0.7:
+                                _is_dup = True
+                                break
+                    if _is_dup:
+                        continue
+                _filtered_lines.append(line)
+            _dedup_removed = related_context.count("\n") + 1 - len(_filtered_lines)
+            if _dedup_removed > 0:
+                logger.info(f"[{label}하이브리드] VectorDB↔직전대화 교차 중복 {_dedup_removed}건 제거")
+            related_context = "\n".join(_filtered_lines) if _filtered_lines else None
+
     history = []
     if related_context:
         history.append({
@@ -172,11 +230,18 @@ def _search_related_conversations(user_query, farm_id):
         if not query_embedding:
             return None
 
-        # farm_id 기반 필터
-        if farm_id:
+        # farm_id 기반 필터: 시스템 농장(0)은 전체 검색, 일반 농장은 자기 농장 + 시스템 농장 대화 검색
+        if farm_id and str(farm_id) == _SYSTEM_FARM_ID:
+            # 시스템 농장 선택 (관리자): 모든 농장 대화 검색
+            where_filter = {"data_kind": {"$eq": "conversation_turn"}}
+        elif farm_id:
+            # 일반 농장: 자기 농장 + 시스템 농장 대화 검색
             where_filter = {
                 "$and": [
-                    {"farm_id": {"$eq": str(farm_id)}},
+                    {"$or": [
+                        {"farm_id": {"$eq": str(farm_id)}},
+                        {"farm_id": {"$eq": _SYSTEM_FARM_ID}},
+                    ]},
                     {"data_kind": {"$eq": "conversation_turn"}},
                 ]
             }
@@ -205,7 +270,10 @@ def _search_related_conversations(user_query, farm_id):
 
         # 거리 임계값 필터 + 포맷 (질문만 추출, 과거 답변은 포함하지 않음)
         # 동일 질문 중복 제거: query_preview 기준으로 중복 검색 결과 1건만 유지
-        lines = []
+        # 동일 주제(topic) 우선 정렬: 현재 질문과 같은 주제의 과거 대화를 먼저 배치
+        current_topic = _classify_topic(user_query)
+        lines_same_topic = []
+        lines_other_topic = []
         _seen_queries: set = set()
         for idx, doc in enumerate(documents):
             dist = distances[idx] if idx < len(distances) else None
@@ -213,6 +281,7 @@ def _search_related_conversations(user_query, farm_id):
                 continue
             meta = metadatas[idx] if idx < len(metadatas) else {}
             record_dt = (meta or {}).get("record_datetime", "")[:10]
+            doc_topic = (meta or {}).get("topic", "general")
             # 과거 답변을 포함하면 LLM이 도구 호출 없이 복사하므로 질문만 추출
             query_preview = (meta or {}).get("query_preview", "")
             if not query_preview:
@@ -222,17 +291,36 @@ def _search_related_conversations(user_query, farm_id):
                 else:
                     query_preview = raw[:200]
             if query_preview:
-                # 중복 질문 제거
-                _preview_key = query_preview.strip()[:50]
+                # 중복 질문 제거 (100자까지 비교하여 유사 질문도 걸러냄)
+                _preview_key = query_preview.strip()[:100]
                 if _preview_key in _seen_queries:
                     continue
+                # [FIX] 유사 질문 추가 필터: 기존 질문과 앞 60자 80% 이상 겹치면 중복으로 판정
+                _is_similar = False
+                _key_prefix = _preview_key[:60]
+                for existing in _seen_queries:
+                    _existing_prefix = existing[:60]
+                    if _key_prefix and _existing_prefix:
+                        _common = sum(1 for a, b in zip(_key_prefix, _existing_prefix) if a == b)
+                        _max_len = max(len(_key_prefix), len(_existing_prefix))
+                        if _max_len > 0 and _common / _max_len > 0.8:
+                            _is_similar = True
+                            break
+                if _is_similar:
+                    continue
                 _seen_queries.add(_preview_key)
-                lines.append(f"- ({record_dt}) 질문: {query_preview}")
+                line = f"- ({record_dt}) 질문: {query_preview}"
+                # 동일 주제 우선
+                if doc_topic == current_topic and current_topic != "general":
+                    lines_same_topic.append(line)
+                else:
+                    lines_other_topic.append(line)
 
+        lines = lines_same_topic + lines_other_topic
         if not lines:
             return None
 
-        logger.info(f"[하이브리드] 관련 대화 {len(lines)}건 검색됨 (farm={farm_id})")
+        logger.info(f"[하이브리드] 관련 대화 {len(lines)}건 검색됨 (farm={farm_id}, topic={current_topic}, 동일주제={len(lines_same_topic)}건)")
         return "\n".join(lines[:_HYBRID_RELATED_RESULTS])
 
     except Exception as e:
@@ -292,12 +380,15 @@ def _async_vectordb_save(session_id, user_query, response_text, farm_id):
         if not embedding:
             return
 
-        doc_id_hash = hashlib.md5(
-            f"{farm_id}_{session_id}_{time.time()}".encode()
+        # [FIX] 동일 Q&A 중복 저장 방지: 질문+응답 내용 기반 해시 → 같은 내용이면 같은 doc_id로 upsert
+        _content_hash = hashlib.md5(
+            f"{farm_id}_{user_query[:200]}_{(response_text or '')[:200]}".encode()
         ).hexdigest()[:16]
+        doc_id_hash = _content_hash
         doc_id = f"conv_turn_{doc_id_hash}"
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        topic = _classify_topic(user_query)
         docs = [{
             "doc_id": doc_id,
             "text": combined_text,
@@ -307,6 +398,7 @@ def _async_vectordb_save(session_id, user_query, response_text, farm_id):
                 "data_kind": "conversation_turn",
                 "record_datetime": now_str,
                 "query_preview": user_query[:100],
+                "topic": topic,
             },
             "embedding": embedding,
         }]

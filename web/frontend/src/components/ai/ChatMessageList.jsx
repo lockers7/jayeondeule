@@ -12,6 +12,7 @@ export default function ChatMessageList({messages}) {
         <div
             style={{
                 flex: 1,
+                minWidth: 0,
                 overflowY: "auto",
                 padding: "16px",
                 backgroundColor: "#F5F5F5",

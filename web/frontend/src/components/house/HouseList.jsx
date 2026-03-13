@@ -33,7 +33,7 @@ export default function HouseList({houses, selectedHouse, setSelectedHouse, auth
                 </Dropdown>
 
                 {/* 재배사 수정 버튼 */}
-                {authLvel === "ADMIN" && (
+                {(authLvel === "ADMIN" || authLvel === "FARM_ADMIN") && (
                     <>
                         <Dropdown align="end">
                             <Dropdown.Toggle variant="outline-success" className="no-caret">
@@ -58,7 +58,7 @@ export default function HouseList({houses, selectedHouse, setSelectedHouse, auth
                     </>
                 )}
             </InputGroup>
-            {authLvel === "ADMIN" &&
+            {(authLvel === "ADMIN" || authLvel === "FARM_ADMIN") &&
                 <Button
                     variant="success"
                     onClick={() => navigate(`/farm/${farmId}/house-register`)}

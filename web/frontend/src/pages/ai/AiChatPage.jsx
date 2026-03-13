@@ -291,7 +291,7 @@ export default function AiChatPage() {
                     modelAlert={modelAlert}
                     setModelAlert={setModelAlert}
                 />
-                <div ref={contentRef} style={{flex: 1, display: "flex", flexDirection: "column"}}>
+                <div ref={contentRef} style={{flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden"}}>
                     <ChatMessageList messages={messages}/>
                     <ChatInput
                         value={currentInput}

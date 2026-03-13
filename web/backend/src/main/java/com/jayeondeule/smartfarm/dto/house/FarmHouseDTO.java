@@ -23,4 +23,5 @@ public class FarmHouseDTO {
     private int cropLvel; // 생육단계 (1:발이기, 2:생육기, 3:수확기, 4:휴지기)
 
     private LocalDateTime rgstDttm; // 등록일자
+    private String dlteYn; // 삭제여부 (Y/N)
 }

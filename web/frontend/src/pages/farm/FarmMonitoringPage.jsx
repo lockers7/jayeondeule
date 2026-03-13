@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Container, Tabs, Tab, Accordion } from "react-bootstrap";
-import { useSelector } from "react-redux";
+import { useSelector, useDispatch } from "react-redux";
+import { setSelectedFarm } from "../../store/auth/authSlice.js";
 import { useQuery } from "@tanstack/react-query";
 
 import { getHouseList } from "../../utils/houseUtil.js";
@@ -25,6 +26,7 @@ import LatestSensorSelected from "../../components/sensor/LatestSensorSelected.j
 export default function FarmMonitoringPage() {
     const { farmId } = useParams();
     const auth = useSelector(state => state.auth);
+    const dispatch = useDispatch();
     const navigate = useNavigate();
 
     const [isAccordionOpened, setIsAccordionOpened] = useState(true);
@@ -92,6 +94,13 @@ export default function FarmMonitoringPage() {
         }
     }, [farmId, navigate])
 
+    // 농장 정보 로드 시 우측 상단 메뉴에 농장명 반영
+    useEffect(() => {
+        if (farm) {
+            dispatch(setSelectedFarm({farmId: farm.farmId, farmName: farm.farmName}));
+        }
+    }, [farm]);
+
     // selectedHouse 초기값
     useEffect(() => {
         if (!selectedHouse && houses[0] != null) {
@@ -110,7 +119,7 @@ export default function FarmMonitoringPage() {
         <Container className="mt-4">
             <div className="d-flex justify-content-between align-items-center mb-3">
                 {farm && (
-                    auth.userInfo.authLvel === "ADMIN" ? (
+                    (auth.userInfo.authLvel === "ADMIN" || auth.userInfo.authLvel === "FARM_ADMIN") ? (
                         <>
                             <h3 className="mb-0">{farm.farmName} 현황</h3>
                             <FarmKebabMenu farmId={farmId} />

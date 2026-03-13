@@ -25,3 +25,8 @@ export async function deleteHouse(farmId, houseId){
     const { url, method } = apiRoutes.houses.delete(farmId, houseId);
     return api({url, method});
 }
+
+export async function restoreHouse(farmId, houseId) {
+    const { url, method } = apiRoutes.houses.restore(farmId, houseId);
+    return api({url, method});
+}

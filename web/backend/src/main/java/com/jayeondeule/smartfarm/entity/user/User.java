@@ -39,6 +39,10 @@ public class User {
     @Column(nullable = false, columnDefinition = "TIMESTAMP(6) WITHOUT TIME ZONE")
     private LocalDateTime rgstDttm = LocalDateTime.now(); // 가입일자
 
+    @Setter
+    @Column(nullable = false, columnDefinition = "CHAR(1) DEFAULT 'N'")
+    private String dlteYn = "N"; // 삭제여부 (Y/N)
+
     //비밀번호 변경 용도
     public void changePassword(String newPassword) {
         this.passwd = newPassword;

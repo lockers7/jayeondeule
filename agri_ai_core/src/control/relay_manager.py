@@ -5,10 +5,12 @@
 # --->
 # _relay_detail_parts: 릴레이 전체 상태를 상세 문자열 리스트로 생성
 # log_relay_detail: 릴레이 상세 상태 로그 출력
-# set_relay_value: 릴레이 값 설정
+# _persist_relay_values: LLM/일괄 제어 시 DB에 반복 쓰기하여 IoT 폴링 주기를 생존 (백그라운드 스레드)
+# set_relay_value: 릴레이 값 설정 (마이크로초 타임스탬프 + IoT 폴링 생존용 반복 쓰기)
 # get_relay_status: 릴레이 상태 조회
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 import traceback
+import threading
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.config import get_relay_mapping
@@ -44,14 +46,45 @@ def log_relay_detail(farm_id, house_id):
         logger.info(part)
 
 
+# IoT 폴링 생존용 반복 쓰기 설정 (초)
+_PERSIST_INTERVAL = 3          # 반복 쓰기 간격 (초)
+_PERSIST_COUNT = 5             # 반복 쓰기 횟수 (3초 × 5회 = 15초간 유지)
+
+
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# LLM/일괄 제어 시 DB에 반복 쓰기하여 IoT 폴링 주기를 생존하는 백그라운드 스레드
+# IoT 하드웨어가 4초마다 물리적 릴레이 상태를 DB에 기록하므로,
+# LLM이 설정한 값이 IoT 기록에 의해 즉시 덮어써지는 문제를 방지합니다.
+# 일정 시간 동안 동일한 값을 반복 쓰기하여, IoT가 LLM의 값을 읽고 물리적 릴레이를 변경할 수 있도록 합니다.
+# ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def _persist_relay_values(farm_id, house_id, relay_values, count=_PERSIST_COUNT, interval=_PERSIST_INTERVAL):
+    import time
+    from datetime import datetime
+    for i in range(count):
+        time.sleep(interval)
+        try:
+            recd_dttm = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+            params = (farm_id, int(house_id), recd_dttm) + tuple(relay_values.values())
+            with db_session() as database:
+                database.execute_query(dbQry.SET_RELAY_VALUE, params)
+            logger.info(f"[릴레이유지] 반복쓰기 {i + 1}/{count} farm_id={farm_id} house_id={house_id}")
+        except Exception as e:
+            logger.warning(f"[릴레이유지] 반복쓰기 실패 {i + 1}/{count}: {e}")
+
+
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 릴레이 값 설정
-# 릴레이 값 설정
+# IoT 하드웨어가 4초마다 물리적 릴레이 상태를 DB에 기록(RELAY_L_RECORDING)하므로,
+# LLM이 DB에 쓴 원하는 릴레이 상태가 IoT 기록에 의해 즉시 덮어써지는 문제를 방지하기 위해:
+# 1) 마이크로초 포함 타임스탬프로 같은 초 내에서 IoT 기록보다 항상 "최신"이 되도록 함
+# 2) raw_mode=False (LLM/일괄 제어) 시 백그라운드 스레드로 15초간 반복 쓰기하여
+#    IoT가 LLM의 값을 읽고 물리적 릴레이를 변경할 수 있도록 함
 #
 # Args:
 #     farm_id: 농장 ID
 #     house_id: 재배사 ID
 #     relay_settings: 릴레이 설정 딕셔너리
+#     raw_mode: True이면 수동환경제어 (16개 relay_*st_flag 직접 전달, 반복쓰기 없음)
 #
 # Returns:
 #     dict: 실행 결과
@@ -90,19 +123,32 @@ def set_relay_value(farm_id, house_id, relay_settings, raw_mode=False):
                     logger.warning(f"[릴레이설정] 매핑 실패: {key} → {actual_key} (relay_values에 없음)")
 
         # SQL 파라미터 준비 (farm_id, hous_id, recd_dttm, relay flags...)
+        # 마이크로초 포함 타임스탬프: IoT 4초 폴링 기록보다 항상 "최신"이 되도록 함
         from datetime import datetime
-        recd_dttm = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        recd_dttm = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
         params = (farm_id, int(house_id), recd_dttm) + tuple(relay_values.values())
 
         # 모든 재배사에 대해 동일한 쿼리 사용
         query = dbQry.SET_RELAY_VALUE
 
-        logger.info(f"[릴레이설정] DB쓰기 farm_id={farm_id} house_id={house_id} params_count={len(params)}")
+        logger.info(f"[릴레이설정] DB쓰기 farm_id={farm_id} house_id={house_id} params_count={len(params)} recd_dttm={recd_dttm}")
         with db_session() as database:
             result = database.execute_query(query, params)
 
             if result:
                 logger.info(f"[릴레이설정] DB쓰기 성공: farm_id={farm_id}, house_id={house_id}")
+
+                # LLM/일괄 제어 시 IoT 폴링 주기 생존을 위한 백그라운드 반복 쓰기
+                # raw_mode(수동환경제어 10초 주기)는 자체적으로 반복되므로 불필요
+                if not raw_mode:
+                    t = threading.Thread(
+                        target=_persist_relay_values,
+                        args=(farm_id, house_id, relay_values),
+                        daemon=True,
+                    )
+                    t.start()
+                    logger.info(f"[릴레이설정] IoT 폴링 생존용 반복쓰기 시작 ({_PERSIST_COUNT}회, {_PERSIST_INTERVAL}초 간격)")
+
                 return {
                     "success": True,
                     "message": "릴레이 값이 성공적으로 설정되었습니다.",

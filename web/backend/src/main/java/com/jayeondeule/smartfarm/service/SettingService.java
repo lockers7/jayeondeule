@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 @Service
@@ -69,9 +70,9 @@ public class SettingService {
                 .setnDttm(setnDttm)
                 .build();
 
-        Optional<LightIrrigationSetting> target = lightIrrigationSettingRepository.findById(id);
+        Optional<LightIrrigationSetting> target = lightIrrigationSettingRepository.findById(Objects.requireNonNull(id));
         if(target.isPresent()) {
-            lightIrrigationSettingRepository.delete(target.get());
+            lightIrrigationSettingRepository.delete(Objects.requireNonNull(target.get()));
         }
     }
 
@@ -82,7 +83,7 @@ public class SettingService {
                 .setnDttm(setnDttm)
                 .build();
 
-        Optional<LightIrrigationSetting> target = lightIrrigationSettingRepository.findById(id);
+        Optional<LightIrrigationSetting> target = lightIrrigationSettingRepository.findById(Objects.requireNonNull(id));
         if(target.isPresent()) {
             LightIrrigationSetting data = target.get();
 

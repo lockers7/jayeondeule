@@ -10,11 +10,14 @@ import {
     Dropdown,
 } from "react-bootstrap";
 import {useNavigate} from "react-router-dom";
+import {useDispatch} from "react-redux";
+import {setSelectedFarm} from "../../store/auth/authSlice.js";
 import TruncatedOverlayTrigger from "../../components/farm/TruncatedOverlayTrigger.jsx";
 import {getFarmList} from "../../utils/farmUtil.js";
 
 export default function FarmManagementPage() {
     const navigate = useNavigate();
+    const dispatch = useDispatch();
     const [farms, setFarms] = useState([]);
     const [search, setSearch] = useState("");
     const [searchField, setSearchField] = useState("farmName"); // 기본값: 농장이름
@@ -102,7 +105,10 @@ export default function FarmManagementPage() {
                 <tbody>
                 {filteredFarms.map((farm, index) => (
                     <tr key={farm.farmId} ref={filteredFarms.length === index + 1 ? lastFarmRef : null}
-                        onClick={() => navigate(`/farm/${farm.farmId}/monitor`)}
+                        onClick={() => {
+                            dispatch(setSelectedFarm({farmId: farm.farmId, farmName: farm.farmName}));
+                            navigate(`/farm/${farm.farmId}/monitor`);
+                        }}
                         style={{cursor: "pointer"}}>
                         <td className="text-success"
                             style={{verticalAlign: "middle"}}>
