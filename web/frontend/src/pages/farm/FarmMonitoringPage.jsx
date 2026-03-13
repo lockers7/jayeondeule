@@ -47,12 +47,18 @@ export default function FarmMonitoringPage() {
         enabled: !!farmId,
     });
 
-    // 재배사 리스트
-    const { data: houses = [], isLoading: housesLoading, error: housesError } = useQuery({
-        queryKey: ["houses", farmId],
-        queryFn: () => getHouseList({ farmId }).then(res => res.data),
+    // 재배사 전체 리스트 (housId=0 포함, 메모 재배사 선택용)
+    const isAdmin = auth.userInfo?.authLvel === "ADMIN";
+    const { data: allHouses = [] } = useQuery({
+        queryKey: ["allHouses", farmId],
+        queryFn: () => getHouseList({ farmId }).then(res => res.data || []),
         enabled: !!farmId,
     });
+
+    // 재배사 리스트 (비ADMIN: housId=0 제외, 모니터/센서용)
+    const houses = isAdmin ? allHouses : allHouses.filter(h => h.housId !== 0);
+    const housesLoading = false;
+    const housesError = null;
 
     // 선택된 하우스 센서 데이터
     const {
@@ -160,14 +166,14 @@ export default function FarmMonitoringPage() {
                 )
             })()}
 
-            {/* 재배사 리스트 */}
-            <HouseList
+            {/* 재배사 리스트 — 현재 숨김 (향후 사용 예정) */}
+            {/*<HouseList
                 selectedHouse={selectedHouse?.housId}
                 authLvel={auth.userInfo.authLvel}
                 houses={houses}
                 setSelectedHouse={setSelectedHouse}
                 farmId={farmId}
-            />
+            />*/}
 
             {/* 탭 */}
             <Tabs id="custom-tabs" className="d-flex justify-content-end">
@@ -216,7 +222,8 @@ export default function FarmMonitoringPage() {
                 >
                     {/* 메모 컴포넌트 */}
                     {selectedHouse &&
-                        <MemoDashboard farmId={farmId} houseId={selectedHouse.housId} />
+                        <MemoDashboard farmId={farmId} houseId={selectedHouse.housId}
+                                       houses={allHouses} farmName={farm?.farmName} />
                     }
                 </Tab>
 

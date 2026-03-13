@@ -6,6 +6,11 @@ export async function getHouseList({farmId}) {
     return api({url, method});
 }
 
+export async function getNextHousId(farmId) {
+    const { url, method } = apiRoutes.houses.nextId(farmId);
+    return api({url, method});
+}
+
 export async function registerHouse(form) {
     const { url, method } = apiRoutes.houses.register(form.farmId);
     return api({url, method, data: form});

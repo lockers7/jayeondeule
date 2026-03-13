@@ -194,6 +194,12 @@ const apiRoutes = {
         list: (farmId) => ({url: `${BASE_URL}/farms/${farmId}/houses`, method: "GET"}),
 
         /**
+         * 다음 재배사 번호 조회 API<br>
+         * GET /api/farms/${farmId}/houses/next-id
+         */
+        nextId: (farmId) => ({url: `${BASE_URL}/farms/${farmId}/houses/next-id`, method: "GET"}),
+
+        /**
          * 재배사 등록 API<br>
          * POST /api/farms/${farmId}/houses<br>
          * pathVariable: {farmId}<br>
