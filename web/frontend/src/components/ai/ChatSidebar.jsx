@@ -147,7 +147,9 @@ export default function ChatSidebar({
         >
             {/* 헤더 */}
             <h5 style={{ color: "#1B5E20", marginBottom: "4px" }}>자연들에</h5>
-            <small className="text-muted" style={{ marginBottom: "12px", display: "block" }}>스마트팜 AI 관리</small>
+            <small className="text-muted" style={{ marginBottom: "0", display: "block" }}>스마트팜 AI 관리</small>
+
+            <div style={{ height: "2em" }} />
 
             {/* 대화체 선택 */}
             <Form.Group className="mb-2">
@@ -162,8 +164,6 @@ export default function ChatSidebar({
                     <option value="female">여성 (부드러운)</option>
                 </Form.Select>
             </Form.Group>
-
-            <hr />
 
             {/* 농장 선택 */}
             <Form.Group className="mb-3">
