@@ -100,10 +100,12 @@ public class UserController {
         if (userInfo.getAuthLvel().equals(AuthLvel.ADMIN)) {
             userService.patchUserFarmId(modifiedInfo, userId);
         } else if (userInfo.getAuthLvel().equals(AuthLvel.FARM_ADMIN)) {
-            // FARM_ADMIN은 자기 농장 소속 사용자만 배정/해제 가능
+            // FARM_ADMIN은 자기 농장 소속 또는 미배정(farmId=0) 사용자를 자기 농장에 배정 가능
             long myFarmId = userService.getUserOwnedFarmId(userInfo.getUserId());
             long targetFarmId = userService.getUserOwnedFarmId(userId);
-            if (myFarmId > 0 && myFarmId == targetFarmId) {
+            long requestedFarmId = modifiedInfo.getFarmId() != null ? modifiedInfo.getFarmId() : 0;
+            if (myFarmId > 0 && (myFarmId == targetFarmId || targetFarmId == 0)
+                    && (requestedFarmId == myFarmId || requestedFarmId == 0)) {
                 userService.patchUserFarmId(modifiedInfo, userId);
             }
         }
@@ -163,5 +165,17 @@ public class UserController {
         if (userInfo.getAuthLvel().equals(AuthLvel.ADMIN)) {
             userService.restoreUser(userId);
         }
+    }
+
+    //관리자에 의한 사용자 완전 삭제 (hard delete)
+    @DeleteMapping("/{userId}/hard")
+    public ResponseEntity<Void> hardDeleteUser(@AuthenticationPrincipal UserClaimDTO userInfo,
+                                               @PathVariable String userId) {
+        if (userInfo == null) return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        if (userInfo.getAuthLvel().equals(AuthLvel.ADMIN)) {
+            userService.hardDeleteUser(userId);
+            return ResponseEntity.ok().build();
+        }
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
     }
 }

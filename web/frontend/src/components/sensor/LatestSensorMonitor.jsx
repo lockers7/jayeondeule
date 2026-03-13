@@ -22,13 +22,12 @@ export default function LatestSensorMonitor({latestSensorData, houses, setSelect
     if (!latestSensorData || !houses) return null;
 
     const renderSensorItems = () => {
-        return Object.entries(latestSensorData).map(([key, value]) => {
-            const house = houses.find(h => h.housId === Number(key));
-            if (!house) return null; // 삭제된 재배사는 표시하지 않음
+        return houses.map((house) => {
+            const sensorData = latestSensorData[house.housId] || null;
             return (
                 <LatestSensorItem
-                    key={key}
-                    latestSensorData={value}
+                    key={house.housId}
+                    latestSensorData={sensorData}
                     house={house}
                     setSelectedHouse={setSelectedHouse}
                     selectedHouse={selectedHouse}

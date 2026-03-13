@@ -1,0 +1,17 @@
+# AI 스마트팜 컨설턴트 - 과제 전용 의존성
+# 기존 venv에 추가 설치 필요 패키지
+
+langchain>=1.2.0
+langchain-community>=0.4.0
+langchain-ollama>=1.0.0
+langchain-chroma>=1.1.0
+langchain-text-splitters>=1.1.0
+langgraph>=1.1.0
+
+# 기존 venv에 이미 설치된 패키지 (참고용)
+# streamlit>=1.55.0
+# chromadb>=1.5.0
+# ollama>=0.6.0
+# python-dotenv>=1.2.0
+# httpx>=0.28.0
+# beautifulsoup4>=4.14.0

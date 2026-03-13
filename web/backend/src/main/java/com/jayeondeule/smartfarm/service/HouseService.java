@@ -7,8 +7,9 @@ import com.jayeondeule.smartfarm.dto.house.FarmHouseInsertDTO;
 import com.jayeondeule.smartfarm.dto.house.FarmHousePatchDTO;
 import com.jayeondeule.smartfarm.entity.house.FarmHouse;
 import com.jayeondeule.smartfarm.entity.house.FarmHouseId;
-import com.jayeondeule.smartfarm.repository.FarmHouseRepository;
+import com.jayeondeule.smartfarm.repository.*;
 import jakarta.annotation.PostConstruct;
+import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -21,6 +22,11 @@ import java.util.Optional;
 //재배사 등록, 설정, 모니터링 로직
 public class HouseService {
     private final FarmHouseRepository farmHouseRepository;
+    private final SensorRecordingRepository sensorRecordingRepository;
+    private final SensorSettingRepository sensorSettingRepository;
+    private final LightIrrigationSettingRepository lightIrrigationSettingRepository;
+    private final RelayRecordingRepository relayRecordingRepository;
+    private final FarmHouseCropsRepository farmHouseCropsRepository;
     private final ObjectMapper mapper;
 
     @PostConstruct
@@ -68,8 +74,8 @@ public class HouseService {
     }
 
     public void insertHouse(FarmHouseInsertDTO insertInfo) {
-        // 해당 farm의 house갯수에 따라 hous_id 지정.
-        insertInfo.setHousId(farmHouseRepository.findAllByFarmId(insertInfo.getFarmId()).size() + 1);
+        // 해당 farm의 MAX(housId)+1로 hous_id 지정 (하드 삭제 후 ID 중복 방지)
+        insertInfo.setHousId(farmHouseRepository.findMaxHousIdByFarmId(insertInfo.getFarmId()) + 1);
         farmHouseRepository.save(Objects.requireNonNull(mapper.convertValue(insertInfo, FarmHouse.class)));
     }
 
@@ -111,5 +117,23 @@ public class HouseService {
             target.setDlteYn("Y");
             farmHouseRepository.save(target);
         }
+    }
+
+    //재배사 완전 삭제 (hard delete — 연관 데이터 포함 레코드 삭제)
+    @Transactional
+    public void hardDeleteHouse(long farmId, long houseId) {
+        // 연관 데이터 먼저 삭제 (FK 제약조건)
+        sensorRecordingRepository.deleteAllByFarmIdAndHousId(farmId, houseId);
+        sensorSettingRepository.deleteAllByFarmIdAndHousId(farmId, houseId);
+        lightIrrigationSettingRepository.deleteAllByFarmIdAndHousId(farmId, houseId);
+        relayRecordingRepository.deleteAllByFarmIdAndHousId(farmId, houseId);
+        farmHouseCropsRepository.deleteAllByFarmIdAndHousId(farmId, houseId);
+
+        // 재배사 삭제
+        FarmHouseId id = FarmHouseId.builder()
+                .farmId(farmId)
+                .housId(houseId)
+                .build();
+        farmHouseRepository.deleteById(Objects.requireNonNull(id));
     }
 }

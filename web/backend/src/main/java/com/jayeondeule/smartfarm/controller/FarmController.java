@@ -33,7 +33,7 @@ public class FarmController {
         }
     }
 
-    //농장 리스트 (ADMIN만)
+    //농장 리스트 (ADMIN만 — 삭제 포함 전체)
     @GetMapping
     public ResponseEntity<Page<FarmDTO>> getFarmList(
             @AuthenticationPrincipal UserClaimDTO userInfo,
@@ -41,7 +41,7 @@ public class FarmController {
             @RequestParam int size) {
         if (userInfo != null) {
             if (userInfo.getAuthLvel().equals(AuthLvel.ADMIN)) {
-                return ResponseEntity.ok(farmService.getAllFarms(page, size));
+                return ResponseEntity.ok(farmService.getAllFarmsAll(page, size));
             }
         }
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(null);
@@ -85,12 +85,37 @@ public class FarmController {
 
     //농장 삭제 (ADMIN만 — soft delete)
     @DeleteMapping("/{farmId}")
-    public void deleteFarm(@PathVariable Long farmId,
+    public ResponseEntity<Void> deleteFarm(@PathVariable Long farmId,
                            @AuthenticationPrincipal UserClaimDTO userInfo) {
-        if (userInfo != null) {
-            if (userInfo.getAuthLvel().equals(AuthLvel.ADMIN)) {
-                farmService.deleteFarmByFarmId(farmId);
-            }
+        if (userInfo == null) return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        if (userInfo.getAuthLvel().equals(AuthLvel.ADMIN)) {
+            farmService.deleteFarmByFarmId(farmId);
+            return ResponseEntity.ok().build();
         }
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+    }
+
+    //농장 복원 (ADMIN만 — dlteYn='N')
+    @PatchMapping("/{farmId}/restore")
+    public ResponseEntity<Void> restoreFarm(@PathVariable Long farmId,
+                                             @AuthenticationPrincipal UserClaimDTO userInfo) {
+        if (userInfo == null) return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        if (userInfo.getAuthLvel().equals(AuthLvel.ADMIN)) {
+            farmService.restoreFarm(farmId);
+            return ResponseEntity.ok().build();
+        }
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+    }
+
+    //농장 완전 삭제 (ADMIN만 — hard delete)
+    @DeleteMapping("/{farmId}/hard")
+    public ResponseEntity<Void> hardDeleteFarm(@PathVariable Long farmId,
+                                                @AuthenticationPrincipal UserClaimDTO userInfo) {
+        if (userInfo == null) return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        if (userInfo.getAuthLvel().equals(AuthLvel.ADMIN)) {
+            farmService.hardDeleteFarm(farmId);
+            return ResponseEntity.ok().build();
+        }
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
     }
 }

@@ -2,6 +2,7 @@ package com.jayeondeule.smartfarm.repository;
 
 import com.jayeondeule.smartfarm.entity.sensor.SensorRecording;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -12,6 +13,10 @@ import java.util.List;
 @Repository
 public interface SensorRecordingRepository extends JpaRepository<SensorRecording, Long> {
     SensorRecording findTopByFarmIdAndHousIdOrderByRecdDttmDesc(long farmId, long housId);
+
+    @Modifying
+    @Query("DELETE FROM SensorRecording s WHERE s.farmId = :farmId AND s.housId = :housId")
+    void deleteAllByFarmIdAndHousId(@Param("farmId") long farmId, @Param("housId") long housId);
 
     @Query(value = """
             WITH data AS (

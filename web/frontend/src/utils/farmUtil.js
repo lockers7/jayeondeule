@@ -30,3 +30,13 @@ export async function patchFarm(farm) {
     const {url, method} = apiRoutes.farms.edit(farm.farmId);
     return api({url, method, data: farm});
 }
+
+export async function restoreFarm(farmId) {
+    const {url, method} = apiRoutes.farms.restore(farmId);
+    return api({url, method});
+}
+
+export async function hardDeleteFarm(farmId) {
+    const {url, method} = apiRoutes.farms.hardDelete(farmId);
+    return api({url, method});
+}

@@ -345,6 +345,17 @@ fastapi_restart() {
 
 # --- Spring Boot (jayeondeule_web) ---
 springboot_start() {
+    log_msg "${BLUE}[Spring Boot]${NC} 빌드 중..."
+    cd "$BASE_DIR/web/backend" || return 1
+    mvn package -DskipTests -q > "$LOG_DIR/springboot_build.log" 2>&1
+    if [ $? -ne 0 ]; then
+        log_msg "${RED}[Spring Boot]${NC} 빌드 실패 — $LOG_DIR/springboot_build.log 확인"
+        cd "$BASE_DIR"
+        return 1
+    fi
+    log_msg "${GREEN}[Spring Boot]${NC} 빌드 완료"
+    cd "$BASE_DIR"
+
     log_msg "${BLUE}[Spring Boot]${NC} 시작 중 (port 9090)..."
     sudo systemctl start jayeondeule_web.service
     if wait_port 9090 30; then
@@ -362,6 +373,17 @@ springboot_stop() {
 }
 
 springboot_restart() {
+    log_msg "${BLUE}[Spring Boot]${NC} 빌드 중..."
+    cd "$BASE_DIR/web/backend" || return 1
+    mvn package -DskipTests -q > "$LOG_DIR/springboot_build.log" 2>&1
+    if [ $? -ne 0 ]; then
+        log_msg "${RED}[Spring Boot]${NC} 빌드 실패 — $LOG_DIR/springboot_build.log 확인"
+        cd "$BASE_DIR"
+        return 1
+    fi
+    log_msg "${GREEN}[Spring Boot]${NC} 빌드 완료"
+    cd "$BASE_DIR"
+
     log_msg "${BLUE}[Spring Boot]${NC} 재시작 중..."
     sudo systemctl restart jayeondeule_web.service
     if wait_port 9090 30; then

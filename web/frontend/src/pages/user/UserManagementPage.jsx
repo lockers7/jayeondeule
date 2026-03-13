@@ -2,11 +2,11 @@
 // user_m_info 테이블 기반, 코드 테이블(auth_lvel, pstn) 콤보박스 적용
 // 비admin 사용자는 자기 소속 농장의 사용자만 조회
 import React, {useEffect, useState} from "react";
-import {Button, Container, Form, Spinner, Table} from "react-bootstrap";
+import {Button, Container, Form, Modal, Spinner, Table} from "react-bootstrap";
 import {useParams} from "react-router-dom";
 import {useSelector} from "react-redux";
-import {searchUserList, registerUser, patchUserFarmId, patchUserById, idDuplCheck, deleteUserById, restoreUserById} from "../../utils/userUtil.js";
-import {getMyFarm} from "../../utils/farmUtil.js";
+import {searchUserList, registerUser, patchUserFarmId, patchUserById, idDuplCheck, deleteUserById, restoreUserById, hardDeleteUserById} from "../../utils/userUtil.js";
+import {getMyFarm, getFarmList} from "../../utils/farmUtil.js";
 import AlertModal from "../../components/common/AlertModal.jsx";
 
 // 코드 테이블 값 (code_m_info 기반) — API 응답 값과 일치
@@ -14,6 +14,10 @@ const AUTH_LVEL_OPTIONS = [
     {value: "FARM_ADMIN", label: "농장관리자"},
     {value: "HOUS_MANAGER", label: "농장등록자"},
     {value: "MONITOR", label: "농장모니터링"},
+];
+const AUTH_LVEL_OPTIONS_ADMIN = [
+    {value: "ADMIN", label: "시스템관리자"},
+    ...AUTH_LVEL_OPTIONS,
 ];
 const PSTN_OPTIONS = [
     {value: "1", label: "농장주"},
@@ -33,12 +37,21 @@ export default function UserManagementPage() {
     const [modalMsg, setModalMsg] = useState({title: "", body: "", variant: "success"});
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [deleteTarget, setDeleteTarget] = useState(null);
+    const [showHardDeleteModal, setShowHardDeleteModal] = useState(false);
+    const [hardDeleteTarget, setHardDeleteTarget] = useState(null);
     const [showReleaseModal, setShowReleaseModal] = useState(false);
     const [releaseTarget, setReleaseTarget] = useState(null);
+
+    // 농장 목록 (admin용 드롭다운)
+    const [farmList, setFarmList] = useState([]);
 
     // 수정 폼
     const [editId, setEditId] = useState(null);
     const [editForm, setEditForm] = useState({});
+
+    // 비밀번호 변경 모달
+    const [showPwModal, setShowPwModal] = useState(false);
+    const [pwForm, setPwForm] = useState({newPw: "", confirmPw: ""});
 
     // 신규 등록 폼
     const [showRegister, setShowRegister] = useState(false);
@@ -51,6 +64,10 @@ export default function UserManagementPage() {
         const resolveFarmId = async () => {
             if (isAdmin) {
                 setActiveFarmId(urlFarmId);
+                try {
+                    const res = await getFarmList(0, 100);
+                    setFarmList(res.data?.content || []);
+                } catch (err) { console.error(err); }
             } else {
                 try {
                     const res = await getMyFarm();
@@ -88,6 +105,8 @@ export default function UserManagementPage() {
             userName: user.userName || "",
             pstn: user.pstn || "99",
             hpNo: user.hpNo || "",
+            authLvel: user.authLvel || "MONITOR",
+            farmId: user.farmId != null ? String(user.farmId) : "0",
         });
     };
 
@@ -100,13 +119,47 @@ export default function UserManagementPage() {
 
     const saveEdit = async () => {
         try {
-            await patchUserById(editId, editForm);
+            const payload = {
+                userName: editForm.userName,
+                pstn: editForm.pstn,
+                hpNo: editForm.hpNo,
+                authLvel: editForm.authLvel,
+                farmId: Number(editForm.farmId),
+            };
+            await patchUserById(editId, payload);
             setEditId(null);
             setModalMsg({title: "알림", body: "사용자 정보가 수정되었습니다.", variant: "success"});
             setShowModal(true);
             fetchUsers();
         } catch (err) {
             setModalMsg({title: "오류", body: "사용자 수정에 실패했습니다.", variant: "danger"});
+            setShowModal(true);
+        }
+    };
+
+    // 비밀번호 변경
+    const openPwModal = () => {
+        setPwForm({newPw: "", confirmPw: ""});
+        setShowPwModal(true);
+    };
+    const handlePwChange = async () => {
+        if (!pwForm.newPw.trim()) {
+            setModalMsg({title: "알림", body: "새 비밀번호를 입력해주세요.", variant: "warning"});
+            setShowModal(true);
+            return;
+        }
+        if (pwForm.newPw !== pwForm.confirmPw) {
+            setModalMsg({title: "알림", body: "비밀번호가 일치하지 않습니다.", variant: "warning"});
+            setShowModal(true);
+            return;
+        }
+        try {
+            await patchUserById(editId, {passwd: pwForm.newPw});
+            setShowPwModal(false);
+            setModalMsg({title: "알림", body: "비밀번호가 변경되었습니다.", variant: "success"});
+            setShowModal(true);
+        } catch (err) {
+            setModalMsg({title: "오류", body: "비밀번호 변경에 실패했습니다.", variant: "danger"});
             setShowModal(true);
         }
     };
@@ -122,13 +175,17 @@ export default function UserManagementPage() {
         try {
             await deleteUserById(deleteTarget.userId);
             setShowDeleteModal(false);
-            setModalMsg({title: "알림", body: "사용자가 삭제되었습니다.", variant: "success"});
-            setShowModal(true);
             fetchUsers();
+            setTimeout(() => {
+                setModalMsg({title: "알림", body: "사용자가 삭제되었습니다.", variant: "success"});
+                setShowModal(true);
+            }, 300);
         } catch (err) {
             setShowDeleteModal(false);
-            setModalMsg({title: "오류", body: "사용자 삭제에 실패했습니다.", variant: "danger"});
-            setShowModal(true);
+            setTimeout(() => {
+                setModalMsg({title: "오류", body: "사용자 삭제에 실패했습니다.", variant: "danger"});
+                setShowModal(true);
+            }, 300);
         }
     };
 
@@ -142,6 +199,29 @@ export default function UserManagementPage() {
         } catch (err) {
             setModalMsg({title: "오류", body: "사용자 복원에 실패했습니다.", variant: "danger"});
             setShowModal(true);
+        }
+    };
+
+    // 완전 삭제 확인 (관리자 전용)
+    const confirmHardDelete = (user) => {
+        setHardDeleteTarget(user);
+        setShowHardDeleteModal(true);
+    };
+    const handleHardDelete = async () => {
+        try {
+            await hardDeleteUserById(hardDeleteTarget.userId);
+            setShowHardDeleteModal(false);
+            fetchUsers();
+            setTimeout(() => {
+                setModalMsg({title: "알림", body: "사용자가 완전 삭제되었습니다.", variant: "success"});
+                setShowModal(true);
+            }, 300);
+        } catch (err) {
+            setShowHardDeleteModal(false);
+            setTimeout(() => {
+                setModalMsg({title: "오류", body: "사용자 완전 삭제에 실패했습니다.", variant: "danger"});
+                setShowModal(true);
+            }, 300);
         }
     };
 
@@ -304,6 +384,7 @@ export default function UserManagementPage() {
                          style={{backgroundColor: "#198754", color: "#fff"}}>
                         <span className="fw-bold">사용자 수정 ({editId})</span>
                         <div>
+                            <Button size="sm" variant="warning" className="me-1" onClick={openPwModal}>비밀번호변경</Button>
                             <Button size="sm" variant="light" className="me-1" onClick={saveEdit}>저장</Button>
                             <Button size="sm" variant="outline-light" onClick={cancelEdit}>취소</Button>
                         </div>
@@ -316,11 +397,11 @@ export default function UserManagementPage() {
                                 <Form.Control size="sm" name="userName" value={editForm.userName}
                                               onChange={handleEditChange}/>
                             </td>
-                            <th style={{backgroundColor: "#e9ecef", width: "12%"}} className="text-center align-middle">직위</th>
+                            <th style={{backgroundColor: "#e9ecef", width: "12%"}} className="text-center align-middle">권한</th>
                             <td style={{width: "22%"}}>
-                                <Form.Select size="sm" name="pstn" value={editForm.pstn}
+                                <Form.Select size="sm" name="authLvel" value={editForm.authLvel}
                                              onChange={handleEditChange}>
-                                    {PSTN_OPTIONS.map((o) =>
+                                    {(isAdmin ? AUTH_LVEL_OPTIONS_ADMIN : AUTH_LVEL_OPTIONS).map((o) =>
                                         <option key={o.value} value={o.value}>{o.label}</option>)}
                                 </Form.Select>
                             </td>
@@ -328,6 +409,28 @@ export default function UserManagementPage() {
                             <td style={{width: "22%"}}>
                                 <Form.Control size="sm" name="hpNo" value={editForm.hpNo}
                                               onChange={handleEditChange} placeholder="010-0000-0000"/>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th style={{backgroundColor: "#e9ecef"}} className="text-center align-middle">직위</th>
+                            <td>
+                                <Form.Select size="sm" name="pstn" value={editForm.pstn}
+                                             onChange={handleEditChange}>
+                                    {PSTN_OPTIONS.map((o) =>
+                                        <option key={o.value} value={o.value}>{o.label}</option>)}
+                                </Form.Select>
+                            </td>
+                            <th style={{backgroundColor: "#e9ecef"}} className="text-center align-middle">소속농장</th>
+                            <td>
+                                {isAdmin ? (
+                                    <Form.Select size="sm" name="farmId" value={editForm.farmId}
+                                                 onChange={handleEditChange}>
+                                        {farmList.map((f) =>
+                                            <option key={f.farmId} value={String(f.farmId)}>{f.farmName}</option>)}
+                                    </Form.Select>
+                                ) : (
+                                    <Form.Control size="sm" value={editForm.farmId} disabled/>
+                                )}
                             </td>
                         </tr>
                         </tbody>
@@ -356,14 +459,21 @@ export default function UserManagementPage() {
                             className={editId === user.userId ? "table-warning" : isDeleted ? "table-secondary" : ""}>
                             {isAdmin && (
                                 <td className="text-center">
-                                    <span className={`badge bg-${isDeleted ? "danger" : "success"}`}>
-                                        {isDeleted ? "삭제" : "정상"}
-                                    </span>
+                                    {isDeleted ? (
+                                        <span
+                                            className="badge bg-danger"
+                                            style={{cursor: "pointer"}}
+                                            onClick={() => confirmHardDelete(user)}
+                                            title="완전삭제"
+                                        >삭제</span>
+                                    ) : (
+                                        <span className="badge bg-success">정상</span>
+                                    )}
                                 </td>
                             )}
                             <td>{user.userId}</td>
                             <td>{user.userName}</td>
-                            <td>{getLabelByValue(AUTH_LVEL_OPTIONS, user.authLvel)}</td>
+                            <td>{getLabelByValue(AUTH_LVEL_OPTIONS_ADMIN, user.authLvel)}</td>
                             <td>{getLabelByValue(PSTN_OPTIONS, user.pstn)}</td>
                             <td>{user.hpNo || "-"}</td>
                             <td>{user.rgstDttm ? new Date(user.rgstDttm).toLocaleDateString() : "-"}</td>
@@ -412,6 +522,38 @@ export default function UserManagementPage() {
                         title="사용자 삭제"
                         body={`'${deleteTarget?.userName}(${deleteTarget?.userId})' 사용자를 삭제하시겠습니까?`}
                         variant="danger" buttonMsg="삭제"/>
+
+            {/* 완전삭제 확인 */}
+            <AlertModal show={showHardDeleteModal} hideModalFunc={() => setShowHardDeleteModal(false)}
+                        onClickFunc={handleHardDelete}
+                        title="사용자 완전삭제"
+                        body={`'${hardDeleteTarget?.userName}(${hardDeleteTarget?.userId})' 사용자를 완전히 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.`}
+                        variant="danger" buttonMsg="완전삭제"/>
+
+            {/* 비밀번호 변경 모달 */}
+            <Modal show={showPwModal} onHide={() => setShowPwModal(false)} centered>
+                <Modal.Header closeButton>
+                    <Modal.Title>비밀번호 변경 ({editId})</Modal.Title>
+                </Modal.Header>
+                <Modal.Body>
+                    <Form.Group className="mb-3">
+                        <Form.Label>새 비밀번호</Form.Label>
+                        <Form.Control type="password" value={pwForm.newPw}
+                                      onChange={(e) => setPwForm({...pwForm, newPw: e.target.value})}
+                                      placeholder="새 비밀번호 입력"/>
+                    </Form.Group>
+                    <Form.Group>
+                        <Form.Label>비밀번호 확인</Form.Label>
+                        <Form.Control type="password" value={pwForm.confirmPw}
+                                      onChange={(e) => setPwForm({...pwForm, confirmPw: e.target.value})}
+                                      placeholder="비밀번호 재입력"/>
+                    </Form.Group>
+                </Modal.Body>
+                <Modal.Footer>
+                    <Button variant="secondary" onClick={() => setShowPwModal(false)}>취소</Button>
+                    <Button variant="warning" onClick={handlePwChange}>변경</Button>
+                </Modal.Footer>
+            </Modal>
         </Container>
     );
 }

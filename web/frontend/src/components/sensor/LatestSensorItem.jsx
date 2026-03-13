@@ -28,14 +28,19 @@ const fmt = (v, unit) => (v != null ? Math.round(v * 100) / 100 + unit : "-");
 export default function LatestSensorItem({latestSensorData, house, setSelectedHouse, selectedHouse, farmId}) {
     const queryClient = useQueryClient();
     const trStyle = {};
-    const now = new Date();
-    const recdTime = new Date(latestSensorData.recdDttm);
+    const hasSensorData = latestSensorData != null;
 
-    if ((now - recdTime) / 1000 > 60) { // 1분(60초) 이상 차이면
-        trStyle.color = "red";
+    if (hasSensorData) {
+        const now = new Date();
+        const recdTime = new Date(latestSensorData.recdDttm);
+        if ((now - recdTime) / 1000 > 60) { // 1분(60초) 이상 차이면
+            trStyle.color = "red";
+        }
+    } else {
+        trStyle.color = "#999";
     }
 
-    if(selectedHouse.housId == house.housId) {
+    if(selectedHouse?.housId == house.housId) {
         trStyle.backgroundColor = "#f4f8fd";
         trStyle.fontWeight = "bold";
     }
@@ -105,15 +110,14 @@ export default function LatestSensorItem({latestSensorData, house, setSelectedHo
                     </Form.Select>
                     </div>
                 </td>
-                <td style={trStyle}>{fmt(latestSensorData.indrTprtValu, "℃")}</td>
-                <td style={trStyle}>{fmt(latestSensorData.oudrTprtValu, "℃")}</td>
-                <td style={trStyle}>{fmt(latestSensorData.indrHmdtValu, "%")}</td>
-                <td style={trStyle}>{fmt(latestSensorData.oudrHmdtValu, "%")}</td>
-                <td style={trStyle}>{fmt(latestSensorData.co2Valu, "ppm")}</td>
-                <td style={trStyle}>{fmt(latestSensorData.watrTprtValu, "℃")}</td>
+                <td style={trStyle}>{fmt(latestSensorData?.indrTprtValu, "℃")}</td>
+                <td style={trStyle}>{fmt(latestSensorData?.oudrTprtValu, "℃")}</td>
+                <td style={trStyle}>{fmt(latestSensorData?.indrHmdtValu, "%")}</td>
+                <td style={trStyle}>{fmt(latestSensorData?.oudrHmdtValu, "%")}</td>
+                <td style={trStyle}>{fmt(latestSensorData?.co2Valu, "ppm")}</td>
+                <td style={trStyle}>{fmt(latestSensorData?.watrTprtValu, "℃")}</td>
                 <td style={{...trStyle, fontSize: "12px"}}>
-                    {formatDate(latestSensorData.recdDttm)}<br/>
-                    {formatTime(latestSensorData.recdDttm)}
+                    {hasSensorData ? (<>{formatDate(latestSensorData.recdDttm)}<br/>{formatTime(latestSensorData.recdDttm)}</>) : "-"}
                 </td>
             </tr>
     )
