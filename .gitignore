@@ -178,3 +178,4 @@ download/
 # Large backup/dump files (GitHub 100MB limit)
 setup/system-configs/data/*.sql
 setup/system-configs/data/*.tar.gz
+docs/bak/
