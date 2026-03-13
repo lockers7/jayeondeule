@@ -42,6 +42,16 @@ public class HouseController {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
     }
 
+    //다음 재배사 번호 조회 (등록 폼 기본값 표시용)
+    @GetMapping("/next-id")
+    public ResponseEntity<Long> getNextHousId(@PathVariable Long farmId,
+                                               @AuthenticationPrincipal UserClaimDTO userInfo) {
+        if (userInfo != null) {
+            return ResponseEntity.ok(houseService.getNextHousId(farmId));
+        }
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+    }
+
     //농장의 재배사 조회 (ADMIN: 삭제 포함 전체, 비admin: 정상만)
     @GetMapping
     public ResponseEntity<List<FarmHouseDTO>> getFarmHouse(@PathVariable Long farmId,

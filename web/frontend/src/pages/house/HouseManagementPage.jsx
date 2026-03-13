@@ -5,7 +5,7 @@ import React, {useEffect, useState} from "react";
 import {Button, Container, Form, Spinner, Table, Row, Col, Card} from "react-bootstrap";
 import {useParams} from "react-router-dom";
 import {useSelector} from "react-redux";
-import {getHouseList, patchHouse, deleteHouse, registerHouse, restoreHouse, hardDeleteHouse} from "../../utils/houseUtil.js";
+import {getHouseList, patchHouse, deleteHouse, registerHouse, restoreHouse, hardDeleteHouse, getNextHousId} from "../../utils/houseUtil.js";
 import {getMyFarm, getFarmList} from "../../utils/farmUtil.js";
 import AlertModal from "../../components/common/AlertModal.jsx";
 
@@ -61,7 +61,7 @@ export default function HouseManagementPage() {
     // 신규 등록 폼
     const [showRegister, setShowRegister] = useState(false);
     const [newForm, setNewForm] = useState({
-        housName: "", cropKind: "10", cropLvel: "2", operationMode: "algorithm",
+        housId: "", housName: "", cropKind: "10", cropLvel: "2", operationMode: "algorithm",
         snsrRfrsItvl: "3", rfrsFlag: false,
     });
 
@@ -107,7 +107,8 @@ export default function HouseManagementPage() {
         if (!activeFarmId) return;
         try {
             const res = await getHouseList({farmId: activeFarmId});
-            setHouses(res.data || []);
+            const list = res.data || [];
+            setHouses(isAdmin ? list : list.filter(h => h.housId !== 0));
         } catch (err) {
             console.error(err);
         } finally {
@@ -225,10 +226,11 @@ export default function HouseManagementPage() {
         e.preventDefault();
         try {
             const targetFarmId = isAdmin ? registerFarmId : activeFarmId;
-            const {operationMode, ...rest} = newForm;
-            await registerHouse({farmId: targetFarmId, ...rest, ...modeToFields(operationMode)});
+            const {operationMode, housId, ...rest} = newForm;
+            const sendHousId = isAdmin ? Number(housId) : 0;
+            await registerHouse({farmId: targetFarmId, housId: sendHousId, ...rest, ...modeToFields(operationMode)});
             setShowRegister(false);
-            setNewForm({housName: "", cropKind: "10", cropLvel: "2", operationMode: "algorithm",
+            setNewForm({housId: "", housName: "", cropKind: "10", cropLvel: "2", operationMode: "algorithm",
                 snsrRfrsItvl: "3", rfrsFlag: false});
             setModalMsg({title: "알림", body: "재배사가 등록되었습니다.", variant: "success"});
             setShowModal(true);
@@ -255,7 +257,18 @@ export default function HouseManagementPage() {
             <div className="d-flex justify-content-between align-items-center mb-3">
                 <h4>재배사 관리</h4>
                 {canManage && (
-                    <Button variant="success" size="sm" onClick={() => setShowRegister(!showRegister)}>
+                    <Button variant="success" size="sm" onClick={async () => {
+                        if (!showRegister) {
+                            try {
+                                const targetFarmId = isAdmin ? (registerFarmId || activeFarmId) : activeFarmId;
+                                const res = await getNextHousId(targetFarmId);
+                                setNewForm(prev => ({...prev, housId: String(res.data)}));
+                            } catch (err) {
+                                console.error("nextHousId 조회 실패:", err);
+                            }
+                        }
+                        setShowRegister(!showRegister);
+                    }}>
                         {showRegister ? "취소" : "재배사 등록"}
                     </Button>
                 )}
@@ -281,7 +294,14 @@ export default function HouseManagementPage() {
                                     <th style={{backgroundColor: "#e9ecef", width: "14%"}} className="text-center align-middle">소속농장</th>
                                     <td colSpan={5}>
                                         <Form.Select size="sm" value={registerFarmId}
-                                                     onChange={(e) => setRegisterFarmId(e.target.value)}>
+                                                     onChange={async (e) => {
+                                                         const fId = e.target.value;
+                                                         setRegisterFarmId(fId);
+                                                         try {
+                                                             const res = await getNextHousId(fId);
+                                                             setNewForm(prev => ({...prev, housId: String(res.data)}));
+                                                         } catch (err) { console.error(err); }
+                                                     }}>
                                             {farmList.map((farm) => (
                                                 <option key={farm.farmId} value={String(farm.farmId)}>
                                                     {farm.farmName} (ID: {farm.farmId})
@@ -292,6 +312,14 @@ export default function HouseManagementPage() {
                                 </tr>
                             )}
                             <tr>
+                                <th style={{backgroundColor: "#e9ecef", width: "14%"}} className="text-center align-middle">재배사번호</th>
+                                <td style={{width: "19%"}}>
+                                    <Form.Control size="sm" value={newForm.housId}
+                                                  onChange={(e) => setNewForm({...newForm, housId: e.target.value})}
+                                                  type="number" min="1"
+                                                  readOnly={!isAdmin}
+                                                  style={!isAdmin ? {backgroundColor: "#e9ecef"} : {}}/>
+                                </td>
                                 <th style={{backgroundColor: "#e9ecef", width: "14%"}} className="text-center align-middle">재배사명</th>
                                 <td style={{width: "19%"}}>
                                     <Form.Control size="sm" value={newForm.housName}
@@ -299,23 +327,23 @@ export default function HouseManagementPage() {
                                                   placeholder="재배사명" required/>
                                 </td>
                                 <th style={{backgroundColor: "#e9ecef", width: "14%"}} className="text-center align-middle">작물</th>
-                                <td style={{width: "19%"}}>
+                                <td style={{width: "20%"}}>
                                     <Form.Select size="sm" value={newForm.cropKind}
                                                  onChange={(e) => setNewForm({...newForm, cropKind: e.target.value})}>
                                         {CROP_KIND_OPTIONS.map((o) =>
                                             <option key={o.value} value={o.value}>{o.label}</option>)}
                                     </Form.Select>
                                 </td>
-                                <th style={{backgroundColor: "#e9ecef", width: "14%"}} className="text-center align-middle">생육단계</th>
-                                <td style={{width: "20%"}}>
+                            </tr>
+                            <tr>
+                                <th style={{backgroundColor: "#e9ecef"}} className="text-center align-middle">생육단계</th>
+                                <td>
                                     <Form.Select size="sm" value={newForm.cropLvel}
                                                  onChange={(e) => setNewForm({...newForm, cropLvel: e.target.value})}>
                                         {CROP_LVEL_OPTIONS.map((o) =>
                                             <option key={o.value} value={o.value}>{o.label}</option>)}
                                     </Form.Select>
                                 </td>
-                            </tr>
-                            <tr>
                                 <th style={{backgroundColor: "#e9ecef"}} className="text-center align-middle">운용방식</th>
                                 <td>
                                     <Form.Select size="sm" value={newForm.operationMode}

@@ -135,8 +135,8 @@ export default function ChatSidebar({
     return (
         <div
             style={{
-                width: "280px",
-                minWidth: "280px",
+                width: "220px",
+                minWidth: "220px",
                 borderRight: "1px solid #DEE2E6",
                 padding: "20px 16px",
                 backgroundColor: "#FAFAFA",
