@@ -11,4 +11,9 @@ public interface FarmRepository extends JpaRepository<Farm, Long> {
     Page<Farm> findAllBy(Pageable pageable);
 
     Farm findByFarmId(Long farmId);
+
+    // dlteYn 조건 추가 메서드
+    Page<Farm> findAllByDlteYn(String dlteYn, Pageable pageable);
+
+    Farm findByFarmIdAndDlteYn(Long farmId, String dlteYn);
 }

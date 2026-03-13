@@ -34,12 +34,15 @@ logger = setup_logger(__name__)
 
 def _http_request(method: str, url: str, payload=None, timeout: int = 10):
     normalized_method = (method or "GET").upper()
-    return mcp_http_request(
+    logger.debug(f"[ChromaDB-{normalized_method}] url={url}, payload={payload}, timeout={timeout}")
+    status_code, data, text = mcp_http_request(
         method=normalized_method,
         url=url,
         json_body=payload,
         timeout=timeout,
     )
+    logger.debug(f"[ChromaDB-{normalized_method}] 응답: status={status_code}, data_type={type(data).__name__}")
+    return status_code, data, text
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Button, Form, Alert } from "react-bootstrap";
 import { useSelector } from "react-redux";
-import { getFarmList } from "../../utils/farmUtil.js";
+import { getFarmList, getMyFarm } from "../../utils/farmUtil.js";
 import { getHouseList } from "../../utils/houseUtil.js";
 
 export default function ChatSidebar({
@@ -82,18 +82,31 @@ export default function ChatSidebar({
             });
     };
 
-    // 농장 목록 로드
+    // 농장 목록 로드 (admin: 전체 농장, 비admin: 소속 농장)
     useEffect(() => {
-        getFarmList(0, 100)
-            .then((res) => {
-                const list = res.data.content || [];
-                setFarms(list);
-                if (list.length > 0 && !selectedFarm) {
-                    setSelectedFarm(list[0]);
-                }
-            })
-            .catch(err => { console.error(err); });
-    }, []);
+        if (isAdmin) {
+            getFarmList(0, 100)
+                .then((res) => {
+                    const list = res.data.content || [];
+                    setFarms(list);
+                    if (list.length > 0 && !selectedFarm) {
+                        setSelectedFarm(list[0]);
+                    }
+                })
+                .catch(err => { console.error(err); });
+        } else {
+            getMyFarm()
+                .then((res) => {
+                    if (res.data) {
+                        setFarms([res.data]);
+                        if (!selectedFarm) {
+                            setSelectedFarm(res.data);
+                        }
+                    }
+                })
+                .catch(err => { console.error(err); });
+        }
+    }, [isAdmin]);
 
     // 재배사 목록 로드 (농장 선택 변경 시)
     useEffect(() => {

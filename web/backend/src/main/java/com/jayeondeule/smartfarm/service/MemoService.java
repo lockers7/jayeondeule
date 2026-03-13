@@ -19,6 +19,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -72,12 +73,12 @@ public class MemoService {
                 .recdDttm(recdDttm)
                 .build();
 
-        Optional<FarmHouseCrops> opt = farmHouseCropsRepository.findById(id);
+        Optional<FarmHouseCrops> opt = farmHouseCropsRepository.findById(Objects.requireNonNull(id));
 
         if(opt.isPresent()) {
             FarmHouseCrops target = opt.get();
             target.setRmks(memo);
-            farmHouseCropsRepository.save(target);
+            farmHouseCropsRepository.save(Objects.requireNonNull(target));
         }
     }
 
@@ -88,10 +89,10 @@ public class MemoService {
                 .recdDttm(recdDttm)
                 .build();
 
-        Optional<FarmHouseCrops> opt = farmHouseCropsRepository.findById(id);
+        Optional<FarmHouseCrops> opt = farmHouseCropsRepository.findById(Objects.requireNonNull(id));
 
         if(opt.isPresent()) {
-            farmHouseCropsRepository.delete(opt.get());
+            farmHouseCropsRepository.delete(Objects.requireNonNull(opt.get()));
         }
     }
 }

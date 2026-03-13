@@ -7,6 +7,12 @@ import PasswordChangePage from "../pages/user/PasswordChangePage.jsx";
 import FarmMonitoringPage from "../pages/farm/FarmMonitoringPage.jsx";
 import SensorSettingDashboard from "../components/sensor/SensorSettingDashboard.jsx";
 import AiChatPage from "../pages/ai/AiChatPage.jsx";
+import HouseManagementPage from "../pages/house/HouseManagementPage.jsx";
+import UserManagementPage from "../pages/user/UserManagementPage.jsx";
+import FarmEditPage from "../pages/farm/FarmEditPage.jsx";
+import HouseRegisterPage from "../pages/house/HouseRegisterPage.jsx";
+import HousePatchPage from "../pages/house/HousePatchPage.jsx";
+import FarmPatchPage from "../pages/farm/FarmPatchPage.jsx";
 
 export default function CommonRoutes() {
     return (
@@ -16,6 +22,14 @@ export default function CommonRoutes() {
                 element={
                     <PrivateRoute>
                         <FarmMonitoringPage/>
+                    </PrivateRoute>
+                }
+            />
+            <Route
+                path="/farm-edit"
+                element={
+                    <PrivateRoute>
+                        <FarmEditPage/>
                     </PrivateRoute>
                 }
             />
@@ -51,6 +65,47 @@ export default function CommonRoutes() {
                     </PrivateRoute>
                 }
             />
+            <Route
+                path="/farm/:farmId/edit"
+                element={
+                    <PrivateRoute>
+                        <FarmPatchPage/>
+                    </PrivateRoute>
+                }
+            />
+            <Route
+                path="/farm/:farmId/house-management"
+                element={
+                    <PrivateRoute>
+                        <HouseManagementPage/>
+                    </PrivateRoute>
+                }
+            />
+            <Route
+                path="/farm/:farmId/house-register"
+                element={
+                    <PrivateRoute>
+                        <HouseRegisterPage/>
+                    </PrivateRoute>
+                }
+            />
+            <Route
+                path="/farm/:farmId/house/:houseId/edit"
+                element={
+                    <PrivateRoute>
+                        <HousePatchPage/>
+                    </PrivateRoute>
+                }
+            />
+            <Route
+                path="/farm/:farmId/user-management"
+                element={
+                    <PrivateRoute>
+                        <UserManagementPage/>
+                    </PrivateRoute>
+                }
+            />
+            <Route path="/login" element={<Navigate to="/" replace/>}/>
             <Route path="*" element={<ErrorPage/>}/>
         </Routes>
     )

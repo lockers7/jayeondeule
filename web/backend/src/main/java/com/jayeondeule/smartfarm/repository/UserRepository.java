@@ -18,4 +18,9 @@ public interface UserRepository extends JpaRepository<User, String> {
     boolean existsByUserId(String userId);
 
     Page<User> findAllByFarmId(long farmId, Pageable pageable);
+
+    // dlteYn 조건 추가 메서드
+    Page<User> findAllByDlteYn(String dlteYn, Pageable pageable);
+
+    Page<User> findAllByFarmIdAndDlteYn(long farmId, String dlteYn, Pageable pageable);
 }

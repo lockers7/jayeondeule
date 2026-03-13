@@ -1,51 +1,67 @@
-import React, {useEffect, useState} from "react";
-import {NavDropdown} from "react-bootstrap";
-import {useDispatch} from "react-redux";
-import {Link, useNavigate} from "react-router-dom";
-import {logout} from "../../../store/auth/authSlice.js";
-import {getUser} from "../../../utils/userUtil.js";
+// 우측 상단 농장명 드롭다운 메뉴
+// 선택된 농장명 표시, 하위: 재배사 관리, 사용자 관리, 로그아웃
+import React, { useEffect } from "react";
+import { NavDropdown } from "react-bootstrap";
+import { useDispatch, useSelector } from "react-redux";
+import { Link, useNavigate } from "react-router-dom";
+import { logout, setSelectedFarm } from "../../../store/auth/authSlice.js";
+import { getMyFarm } from "../../../utils/farmUtil.js";
 
 export default function CommonNavLink() {
     const dispatch = useDispatch();
     const navigate = useNavigate();
+    const selectedFarm = useSelector((state) => state.auth.selectedFarm);
 
-    const [userInfo, setUserInfo] = useState({
-        userName: "",   // 서버에서 가져온 사용자 정보로 초기화
-        authLvel: "",
-    });
-
+    // 기본 농장 조회
     useEffect(() => {
-        const fetchUser = async () => {
+        const fetchData = async () => {
             try {
-                const res = await getUser(); // GET /users/me
-                setUserInfo({
-                    userName: res.data.userName,
-                    authLvel: res.data.authLvel,
-                });
+                if (!selectedFarm) {
+                    const farmRes = await getMyFarm();
+                    if (farmRes.data) {
+                        dispatch(setSelectedFarm({
+                            farmId: farmRes.data.farmId,
+                            farmName: farmRes.data.farmName,
+                        }));
+                    }
+                }
             } catch (err) {
                 console.error(err);
             }
         };
-        fetchUser();
+        fetchData();
     }, []);
 
     const handleLogout = (e) => {
-        e.preventDefault(); // href 이동 방지
+        e.preventDefault();
         try {
-            dispatch(logout()); // Redux 상태 초기화
-            navigate("/login"); // 로그인 페이지로 이동
+            dispatch(logout());
+            navigate("/login");
         } catch (err) {
             console.error(err);
         }
     };
 
+    const farmName = selectedFarm?.farmName || "농장";
+    const farmId = selectedFarm?.farmId;
+
     return (
-        <>
-            <NavDropdown title={userInfo.userName} id="basic-nav-dropdown" align="end">
-                <NavDropdown.Item as={Link} to="/mypage">정보수정</NavDropdown.Item>
-                <NavDropdown.Divider/>
-                <NavDropdown.Item onClick={handleLogout}>로그아웃</NavDropdown.Item>
-            </NavDropdown>
-        </>
-    )
+        <NavDropdown title={farmName} id="farm-nav-dropdown" align="end">
+            {farmId != null && (
+                <>
+                    <NavDropdown.Item as={Link} to={`/farm-edit`}>
+                        농장정보변경
+                    </NavDropdown.Item>
+                    <NavDropdown.Item as={Link} to={`/farm/${farmId}/house-management`}>
+                        재배사 관리
+                    </NavDropdown.Item>
+                    <NavDropdown.Item as={Link} to={`/farm/${farmId}/user-management`}>
+                        사용자 관리
+                    </NavDropdown.Item>
+                    <NavDropdown.Divider />
+                </>
+            )}
+            <NavDropdown.Item onClick={handleLogout}>로그아웃</NavDropdown.Item>
+        </NavDropdown>
+    );
 }

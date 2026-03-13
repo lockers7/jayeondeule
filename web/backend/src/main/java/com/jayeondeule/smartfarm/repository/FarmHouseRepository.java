@@ -12,5 +12,8 @@ public interface FarmHouseRepository extends JpaRepository<FarmHouse, FarmHouseI
     List<FarmHouse> findAllByFarmId(long farmId);
 
     List<FarmHouse> findAllByFarmIdOrderByHousNameAsc(long farmId);
+
+    // dlteYn 조건 추가 메서드
+    List<FarmHouse> findAllByFarmIdAndDlteYnOrderByHousNameAsc(long farmId, String dlteYn);
     //재배사 관련 데이터 CRUD 인터페이스
 }

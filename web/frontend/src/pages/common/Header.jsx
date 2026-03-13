@@ -8,11 +8,13 @@ import {useSelector} from "react-redux";
 
 export default function Header() {
     const auth = useSelector(state => state.auth);
+    const selectedFarm = useSelector(state => state.auth.selectedFarm);
+    const brandName = (auth.token && selectedFarm?.farmName) ? selectedFarm.farmName : "Jayeondeule";
 
     return (
         <Navbar bg="light" variant="white" fixed="top">
             <Container>
-                <Navbar.Brand as={Link} to="/">Jayeondeule</Navbar.Brand>
+                <Navbar.Brand as={Link} to="/">{brandName}</Navbar.Brand>
                 {auth.token != null && (
                     <Nav className="me-auto">
                         <Nav.Link as={Link} to="/ai-chat" style={{fontWeight: "bold"}}>AI 채팅</Nav.Link>

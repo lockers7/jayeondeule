@@ -24,6 +24,7 @@ export default function LatestSensorMonitor({latestSensorData, houses, setSelect
     const renderSensorItems = () => {
         return Object.entries(latestSensorData).map(([key, value]) => {
             const house = houses.find(h => h.housId === Number(key));
+            if (!house) return null; // 삭제된 재배사는 표시하지 않음
             return (
                 <LatestSensorItem
                     key={key}

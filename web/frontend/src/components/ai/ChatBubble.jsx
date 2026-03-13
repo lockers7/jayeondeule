@@ -123,11 +123,14 @@ export default function ChatBubble({role, content, sources = [], toolsUsed = [],
                 className={isUser ? "" : "chat-markdown"}
                 style={{
                     maxWidth: "75%",
+                    minWidth: 0,
                     padding: "10px 14px",
                     borderRadius: isUser ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
                     backgroundColor: isUser ? "#E8F5E9" : "#FFFFFF",
                     border: isUser ? "1px solid #C8E6C9" : "1px solid #E0E0E0",
                     wordBreak: "break-word",
+                    overflowWrap: "break-word",
+                    overflow: "hidden",
                     lineHeight: "1.6",
                     fontSize: "14px",
                     ...(isUser ? {whiteSpace: "pre-wrap"} : {}),
@@ -152,6 +155,12 @@ export default function ChatBubble({role, content, sources = [], toolsUsed = [],
                                     </a>
                                 );
                             },
+                            // 표를 스크롤 가능한 래퍼로 감싸서 말풍선 밖으로 넘치지 않도록 함
+                            table: ({children}) => (
+                                <div className="chat-table-wrapper">
+                                    <table>{children}</table>
+                                </div>
+                            ),
                         }}
                     >
                         {preserveLineBreaksForMarkdown(content || "")}

@@ -24,6 +24,8 @@ function AppLayout() {
             <div className="flex-grow-1 mt-5 overflow-x-hidden">
                 {!auth.token ? (
                     <GuestRoutes/>
+                ) : !auth.userInfo ? (
+                    <LoadingPage/>
                 ) : auth.userInfo.authLvel === "ADMIN" ? (
                     <AdminRoutes/>
                 ) : auth.userInfo.authLvel === "FARM_ADMIN" ? (

@@ -5,8 +5,11 @@ import FarmManagementPage from "../pages/farm/FarmManagementPage.jsx";
 import FarmRegisterPage from "../pages/farm/FarmRegisterPage.jsx";
 import CommonRoutes from "./CommonRoutes.jsx";
 import FarmPatchPage from "../pages/farm/FarmPatchPage.jsx";
+import FarmEditPage from "../pages/farm/FarmEditPage.jsx";
 import HouseRegisterPage from "../pages/house/HouseRegisterPage.jsx";
 import HousePatchPage from "../pages/house/HousePatchPage.jsx";
+import HouseManagementPage from "../pages/house/HouseManagementPage.jsx";
+import UserManagementPage from "../pages/user/UserManagementPage.jsx";
 
 export default function AdminRoutes() {
     return ( //"/assign-farm-roles"
@@ -29,6 +32,14 @@ export default function AdminRoutes() {
                 element={
                     <PrivateRoute>
                         <FarmRegisterPage/>
+                    </PrivateRoute>
+                }
+            />
+            <Route
+                path="/farm-edit"
+                element={
+                    <PrivateRoute>
+                        <FarmEditPage/>
                     </PrivateRoute>
                 }
             />
@@ -57,6 +68,23 @@ export default function AdminRoutes() {
                     </PrivateRoute>
                 }
             />
+            <Route
+                path="/farm/:farmId/house-management"
+                element={
+                    <PrivateRoute>
+                        <HouseManagementPage/>
+                    </PrivateRoute>
+                }
+            />
+            <Route
+                path="/farm/:farmId/user-management"
+                element={
+                    <PrivateRoute>
+                        <UserManagementPage/>
+                    </PrivateRoute>
+                }
+            />
+            <Route path="/login" element={<Navigate to="/farm-management" replace/>}/>
             <Route path="*" element={<CommonRoutes/>}/>
         </Routes>
     )
