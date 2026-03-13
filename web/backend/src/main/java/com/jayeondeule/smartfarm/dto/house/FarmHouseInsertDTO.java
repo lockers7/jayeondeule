@@ -12,4 +12,9 @@ public class FarmHouseInsertDTO {
     private long housId;
     private String housName; // 재배사 이름
     private String cropKind; // 작물 종류
+    private int cropLvel = 2; // 생육단계 (1:발이기, 2:생육기, 3:수확기, 4:휴지기)
+    private String snsrRfrsItvl = "3"; // 센서 측정 시간 간격
+    private boolean mnulCtrlFlag = false; // 릴레이 수동 조작 여부
+    private String ctrlType = "algorithm"; // 제어 유형 (algorithm, ai)
+    private boolean rfrsFlag = false; // 수동 센서 측정
 }

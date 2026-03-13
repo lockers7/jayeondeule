@@ -31,4 +31,5 @@ public class FarmDTO {
     private String rmks; // 농장 설명
 
     private LocalDateTime rgstDttm; // 등록일자
+    private String dlteYn; // 삭제여부 (Y/N)
 }

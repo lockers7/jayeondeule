@@ -106,11 +106,16 @@ public class UserService {
     public void patchUser(UserPatchDTO modifiedInfo, String userId) {
         User target = userRepository.findByUserId(userId);
 
-        target.changeUserName(modifiedInfo.getUserName());
-        target.changeUserPstn(modifiedInfo.getPstn());
-        target.changeUserHpNo(modifiedInfo.getHpNo());
+        if (modifiedInfo.getUserName() != null) target.changeUserName(modifiedInfo.getUserName());
+        if (modifiedInfo.getPstn() != null) target.changeUserPstn(modifiedInfo.getPstn());
+        if (modifiedInfo.getHpNo() != null) target.changeUserHpNo(modifiedInfo.getHpNo());
+        if (modifiedInfo.getAuthLvel() != null) target.changeUserAuthLvel(modifiedInfo.getAuthLvel());
+        if (modifiedInfo.getFarmId() != null) target.setFarmId(modifiedInfo.getFarmId());
+        if (modifiedInfo.getPasswd() != null && !modifiedInfo.getPasswd().isBlank()) {
+            target.changePassword(passwordEncoder.encode(modifiedInfo.getPasswd()));
+        }
 
-        userRepository.save(target);
+        userRepository.save(Objects.requireNonNull(target));
     }
 
     //사용자에게 농장 접근 권한 부여
@@ -133,6 +138,14 @@ public class UserService {
         if (target != null) {
             target.setDlteYn("Y");
             userRepository.save(target);
+        }
+    }
+
+    //사용자 완전 삭제 (hard delete — 레코드 삭제)
+    public void hardDeleteUser(String userId) {
+        User target = userRepository.findByUserId(userId);
+        if (target != null) {
+            userRepository.delete(Objects.requireNonNull(target));
         }
     }
 }

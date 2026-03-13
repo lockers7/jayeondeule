@@ -32,12 +32,17 @@ public class FarmService {
         farmRepository.save(Objects.requireNonNull(mapper.convertValue(farmInfo, Farm.class)));
     }
 
-    //전체 농장 목록 조회 — dlteYn='N'만 조회
+    //전체 농장 목록 조회 (관리자용 — 삭제 포함)
+    public Page<FarmDTO> getAllFarmsAll(int page, int size) {
+        Pageable pageable = PageRequest.of(page, size, Sort.by("rgstDttm").descending());
+        Page<Farm> farmList = farmRepository.findAllBy(pageable);
+        return farmList.map(farm -> mapper.convertValue(farm, FarmDTO.class));
+    }
+
+    //농장 목록 조회 — dlteYn='N'만 조회
     public Page<FarmDTO> getAllFarms(int page, int size) {
         Pageable pageable = PageRequest.of(page, size, Sort.by("rgstDttm").descending());
-
         Page<Farm> farmList = farmRepository.findAllByDlteYn("N", pageable);
-
         return farmList.map(farm -> mapper.convertValue(farm, FarmDTO.class));
     }
 
@@ -61,6 +66,23 @@ public class FarmService {
         if (target != null) {
             target.setDlteYn("Y");
             farmRepository.save(target);
+        }
+    }
+
+    //농장 복원 (soft delete 취소 — dlteYn='N')
+    public void restoreFarm(Long farmId) {
+        Farm target = farmRepository.findByFarmId(farmId);
+        if (target != null) {
+            target.setDlteYn("N");
+            farmRepository.save(target);
+        }
+    }
+
+    //농장 완전 삭제 (hard delete — 레코드 삭제)
+    public void hardDeleteFarm(Long farmId) {
+        Farm target = farmRepository.findByFarmId(farmId);
+        if (target != null) {
+            farmRepository.delete(Objects.requireNonNull(target));
         }
     }
 

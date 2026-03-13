@@ -52,6 +52,12 @@ const apiRoutes = {
         restoreById: (userId) => ({url: `${BASE_URL}/users/${userId}/restore`, method: "PATCH"}),
 
         /**
+         * 사용자 완전 삭제 API (관리자)<br>
+         * DELETE /api/users/{userId}/hard
+         */
+        hardDeleteById: (userId) => ({url: `${BASE_URL}/users/${userId}/hard`, method: "DELETE"}),
+
+        /**
          * 현재 사용자 정보 조회 API<br>
          * GET /api/user/me<br>
          * response: {UserDTO}
@@ -159,6 +165,24 @@ const apiRoutes = {
             url: `${BASE_URL}/farms/${farmId}`,
             method: "PATCH"
         }),
+
+        /**
+         * 농장 복원 API (관리자)<br>
+         * PATCH /api/farms/{farmId}/restore
+         */
+        restore: (farmId) => ({
+            url: `${BASE_URL}/farms/${farmId}/restore`,
+            method: "PATCH"
+        }),
+
+        /**
+         * 농장 완전 삭제 API (관리자)<br>
+         * DELETE /api/farms/{farmId}/hard
+         */
+        hardDelete: (farmId) => ({
+            url: `${BASE_URL}/farms/${farmId}/hard`,
+            method: "DELETE"
+        }),
     },
     houses: {
         /**
@@ -214,6 +238,15 @@ const apiRoutes = {
         restore: (farmId, houseId) => ({
             url: `${BASE_URL}/farms/${farmId}/houses/${houseId}/restore`,
             method: "PATCH"
+        }),
+
+        /**
+         * 재배사 완전 삭제 API (관리자)<br>
+         * DELETE /api/farms/${farmId}/houses/${houseId}/hard
+         */
+        hardDelete: (farmId, houseId) => ({
+            url: `${BASE_URL}/farms/${farmId}/houses/${houseId}/hard`,
+            method: "DELETE"
         }),
     },
     memos: {

@@ -55,3 +55,8 @@ export async function restoreUserById(userId) {
     const {url, method} = apiRoutes.users.restoreById(userId);
     return api({url, method});
 }
+
+export async function hardDeleteUserById(userId) {
+    const {url, method} = apiRoutes.users.hardDeleteById(userId);
+    return api({url, method});
+}

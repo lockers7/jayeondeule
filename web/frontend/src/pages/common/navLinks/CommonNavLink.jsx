@@ -1,7 +1,7 @@
-// 우측 상단 농장명 드롭다운 메뉴
-// 선택된 농장명 표시, 하위: 재배사 관리, 사용자 관리, 로그아웃
+// 우측 상단 농장명 드롭다운 메뉴 + 로그아웃
+// 선택된 농장명 표시, 하위: 재배사 관리, 사용자 관리
 import React, { useEffect } from "react";
-import { NavDropdown } from "react-bootstrap";
+import { Nav, NavDropdown } from "react-bootstrap";
 import { useDispatch, useSelector } from "react-redux";
 import { Link, useNavigate } from "react-router-dom";
 import { logout, setSelectedFarm } from "../../../store/auth/authSlice.js";
@@ -46,22 +46,25 @@ export default function CommonNavLink() {
     const farmId = selectedFarm?.farmId;
 
     return (
-        <NavDropdown title={farmName} id="farm-nav-dropdown" align="end">
-            {farmId != null && (
-                <>
-                    <NavDropdown.Item as={Link} to={`/farm-edit`}>
-                        농장정보변경
-                    </NavDropdown.Item>
-                    <NavDropdown.Item as={Link} to={`/farm/${farmId}/house-management`}>
-                        재배사 관리
-                    </NavDropdown.Item>
-                    <NavDropdown.Item as={Link} to={`/farm/${farmId}/user-management`}>
-                        사용자 관리
-                    </NavDropdown.Item>
-                    <NavDropdown.Divider />
-                </>
-            )}
-            <NavDropdown.Item onClick={handleLogout}>로그아웃</NavDropdown.Item>
-        </NavDropdown>
+        <>
+            <NavDropdown title={farmName} id="farm-nav-dropdown" align="end">
+                {farmId != null && (
+                    <>
+                        <NavDropdown.Item as={Link} to={`/farm-edit`}>
+                            농장정보변경
+                        </NavDropdown.Item>
+                        <NavDropdown.Item as={Link} to={`/farm/${farmId}/house-management`}>
+                            재배사 관리
+                        </NavDropdown.Item>
+                        <NavDropdown.Item as={Link} to={`/farm/${farmId}/user-management`}>
+                            사용자 관리
+                        </NavDropdown.Item>
+                    </>
+                )}
+            </NavDropdown>
+            <Nav.Link onClick={handleLogout} className="ms-2" style={{cursor: "pointer"}}>
+                로그아웃
+            </Nav.Link>
+        </>
     );
 }

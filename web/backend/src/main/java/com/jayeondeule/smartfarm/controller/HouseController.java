@@ -25,18 +25,21 @@ public class HouseController {
 
     //재배사 등록 (ADMIN: 모든 농장, 비admin: 자기 농장만)
     @PostMapping
-    public void insertFarmHouse(@RequestBody FarmHouseInsertDTO insertInfo,
+    public ResponseEntity<Void> insertFarmHouse(@RequestBody FarmHouseInsertDTO insertInfo,
                                 @PathVariable Long farmId,
                                 @AuthenticationPrincipal UserClaimDTO userInfo) {
-        if (userInfo == null) return;
+        if (userInfo == null) return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         if (userInfo.getAuthLvel().equals(AuthLvel.ADMIN)) {
             houseService.insertHouse(insertInfo);
+            return ResponseEntity.ok().build();
         } else {
             long myFarmId = userService.getUserOwnedFarmId(userInfo.getUserId());
             if (myFarmId == farmId) {
                 houseService.insertHouse(insertInfo);
+                return ResponseEntity.ok().build();
             }
         }
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
     }
 
     //농장의 재배사 조회 (ADMIN: 삭제 포함 전체, 비admin: 정상만)
@@ -109,5 +112,18 @@ public class HouseController {
         if (userInfo.getAuthLvel().equals(AuthLvel.ADMIN)) {
             houseService.restoreHouse(farmId, houseId);
         }
+    }
+
+    //관리자에 의한 재배사 완전 삭제 (hard delete)
+    @DeleteMapping("/{houseId}/hard")
+    public ResponseEntity<Void> hardDeleteHouse(@PathVariable Long farmId,
+                                                @PathVariable Long houseId,
+                                                @AuthenticationPrincipal UserClaimDTO userInfo) {
+        if (userInfo == null) return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        if (userInfo.getAuthLvel().equals(AuthLvel.ADMIN)) {
+            houseService.hardDeleteHouse(farmId, houseId);
+            return ResponseEntity.ok().build();
+        }
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
     }
 }

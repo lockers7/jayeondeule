@@ -5,7 +5,7 @@ import React, {useEffect, useState} from "react";
 import {Button, Container, Form, Spinner, Table, Row, Col, Card} from "react-bootstrap";
 import {useParams} from "react-router-dom";
 import {useSelector} from "react-redux";
-import {getHouseList, patchHouse, deleteHouse, registerHouse, restoreHouse} from "../../utils/houseUtil.js";
+import {getHouseList, patchHouse, deleteHouse, registerHouse, restoreHouse, hardDeleteHouse} from "../../utils/houseUtil.js";
 import {getMyFarm, getFarmList} from "../../utils/farmUtil.js";
 import AlertModal from "../../components/common/AlertModal.jsx";
 
@@ -21,6 +21,22 @@ const CTRL_TYPE_OPTIONS = [
     {value: "algorithm", label: "알고리즘"},
     {value: "ai", label: "AI"},
 ];
+const OPERATION_MODE_OPTIONS = [
+    {value: "manual", label: "수동제어"},
+    {value: "algorithm", label: "알고리즘"},
+    {value: "ai", label: "인공지능"},
+];
+
+// 모니터 페이지와 동일한 운용방식 결정 로직
+const getOperationMode = (house) => {
+    if (!house.mnulCtrlFlag) return "manual";
+    if (house.ctrlType === "ai") return "ai";
+    return "algorithm";
+};
+const getOperationModeLabel = (house) => {
+    const mode = getOperationMode(house);
+    return OPERATION_MODE_OPTIONS.find(o => o.value === mode)?.label || mode;
+};
 
 export default function HouseManagementPage() {
     const {farmId: urlFarmId} = useParams();
@@ -35,6 +51,8 @@ export default function HouseManagementPage() {
     const [modalMsg, setModalMsg] = useState({title: "", body: "", variant: "success"});
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [deleteTarget, setDeleteTarget] = useState(null);
+    const [showHardDeleteModal, setShowHardDeleteModal] = useState(false);
+    const [hardDeleteTarget, setHardDeleteTarget] = useState(null);
 
     // 수정 폼
     const [editId, setEditId] = useState(null);
@@ -43,8 +61,8 @@ export default function HouseManagementPage() {
     // 신규 등록 폼
     const [showRegister, setShowRegister] = useState(false);
     const [newForm, setNewForm] = useState({
-        housName: "", cropKind: "10", cropLvel: "2", ctrlType: "algorithm",
-        snsrRfrsItvl: "3", mnulCtrlFlag: false, rfrsFlag: false,
+        housName: "", cropKind: "10", cropLvel: "2", operationMode: "algorithm",
+        snsrRfrsItvl: "3", rfrsFlag: false,
     });
 
     // admin용 농장 리스트 (등록시 농장 선택)
@@ -110,9 +128,8 @@ export default function HouseManagementPage() {
             housName: house.housName || "",
             cropKind: house.cropKind || "10",
             cropLvel: String(house.cropLvel ?? 2),
-            ctrlType: house.ctrlType || "algorithm",
+            operationMode: getOperationMode(house),
             snsrRfrsItvl: house.snsrRfrsItvl || "3",
-            mnulCtrlFlag: house.mnulCtrlFlag ?? false,
             rfrsFlag: house.rfrsFlag ?? false,
         });
     };
@@ -126,7 +143,8 @@ export default function HouseManagementPage() {
 
     const saveEdit = async () => {
         try {
-            await patchHouse(editForm);
+            const {operationMode, ...rest} = editForm;
+            await patchHouse({...rest, ...modeToFields(operationMode)});
             setEditId(null);
             setModalMsg({title: "알림", body: "재배사 정보가 수정되었습니다.", variant: "success"});
             setShowModal(true);
@@ -146,13 +164,17 @@ export default function HouseManagementPage() {
         try {
             await deleteHouse(activeFarmId, deleteTarget.housId);
             setShowDeleteModal(false);
-            setModalMsg({title: "알림", body: "재배사가 삭제되었습니다.", variant: "success"});
-            setShowModal(true);
             fetchHouses();
+            setTimeout(() => {
+                setModalMsg({title: "알림", body: "재배사가 삭제되었습니다.", variant: "success"});
+                setShowModal(true);
+            }, 300);
         } catch (err) {
             setShowDeleteModal(false);
-            setModalMsg({title: "오류", body: "재배사 삭제에 실패했습니다.", variant: "danger"});
-            setShowModal(true);
+            setTimeout(() => {
+                setModalMsg({title: "오류", body: "재배사 삭제에 실패했습니다.", variant: "danger"});
+                setShowModal(true);
+            }, 300);
         }
     };
 
@@ -169,14 +191,45 @@ export default function HouseManagementPage() {
         }
     };
 
+    // 완전 삭제 확인 (관리자 전용)
+    const confirmHardDelete = (house) => {
+        setHardDeleteTarget(house);
+        setShowHardDeleteModal(true);
+    };
+    const handleHardDelete = async () => {
+        try {
+            await hardDeleteHouse(activeFarmId, hardDeleteTarget.housId);
+            setShowHardDeleteModal(false);
+            fetchHouses();
+            setTimeout(() => {
+                setModalMsg({title: "알림", body: "재배사가 완전 삭제되었습니다.", variant: "success"});
+                setShowModal(true);
+            }, 300);
+        } catch (err) {
+            setShowHardDeleteModal(false);
+            setTimeout(() => {
+                setModalMsg({title: "오류", body: "재배사 완전 삭제에 실패했습니다.", variant: "danger"});
+                setShowModal(true);
+            }, 300);
+        }
+    };
+
+    // operationMode → ctrlType + mnulCtrlFlag 변환
+    const modeToFields = (mode) => {
+        if (mode === "manual") return {mnulCtrlFlag: false, ctrlType: "algorithm"};
+        if (mode === "ai") return {mnulCtrlFlag: true, ctrlType: "ai"};
+        return {mnulCtrlFlag: true, ctrlType: "algorithm"};
+    };
+
     const handleRegister = async (e) => {
         e.preventDefault();
         try {
             const targetFarmId = isAdmin ? registerFarmId : activeFarmId;
-            await registerHouse({farmId: targetFarmId, ...newForm});
+            const {operationMode, ...rest} = newForm;
+            await registerHouse({farmId: targetFarmId, ...rest, ...modeToFields(operationMode)});
             setShowRegister(false);
-            setNewForm({housName: "", cropKind: "10", cropLvel: "2", ctrlType: "algorithm",
-                snsrRfrsItvl: "3", mnulCtrlFlag: false, rfrsFlag: false});
+            setNewForm({housName: "", cropKind: "10", cropLvel: "2", operationMode: "algorithm",
+                snsrRfrsItvl: "3", rfrsFlag: false});
             setModalMsg({title: "알림", body: "재배사가 등록되었습니다.", variant: "success"});
             setShowModal(true);
             fetchHouses();
@@ -263,11 +316,11 @@ export default function HouseManagementPage() {
                                 </td>
                             </tr>
                             <tr>
-                                <th style={{backgroundColor: "#e9ecef"}} className="text-center align-middle">제어유형</th>
+                                <th style={{backgroundColor: "#e9ecef"}} className="text-center align-middle">운용방식</th>
                                 <td>
-                                    <Form.Select size="sm" value={newForm.ctrlType}
-                                                 onChange={(e) => setNewForm({...newForm, ctrlType: e.target.value})}>
-                                        {CTRL_TYPE_OPTIONS.map((o) =>
+                                    <Form.Select size="sm" value={newForm.operationMode}
+                                                 onChange={(e) => setNewForm({...newForm, operationMode: e.target.value})}>
+                                        {OPERATION_MODE_OPTIONS.map((o) =>
                                             <option key={o.value} value={o.value}>{o.label}</option>)}
                                     </Form.Select>
                                 </td>
@@ -277,16 +330,11 @@ export default function HouseManagementPage() {
                                                   onChange={(e) => setNewForm({...newForm, snsrRfrsItvl: e.target.value})}
                                                   type="number" min="1"/>
                                 </td>
-                                <th style={{backgroundColor: "#e9ecef"}} className="text-center align-middle">제어및주기방법</th>
+                                <th style={{backgroundColor: "#e9ecef"}} className="text-center align-middle">갱신</th>
                                 <td>
-                                    <div className="d-flex gap-3 align-items-center">
-                                        <Form.Check type="switch" id="reg-mnulCtrlFlag" label="수동제어"
-                                                    checked={newForm.mnulCtrlFlag}
-                                                    onChange={(e) => setNewForm({...newForm, mnulCtrlFlag: e.target.checked})}/>
-                                        <Form.Check type="switch" id="reg-rfrsFlag" label="갱신"
-                                                    checked={newForm.rfrsFlag}
-                                                    onChange={(e) => setNewForm({...newForm, rfrsFlag: e.target.checked})}/>
-                                    </div>
+                                    <Form.Check type="switch" id="reg-rfrsFlag" label="갱신"
+                                                checked={newForm.rfrsFlag}
+                                                onChange={(e) => setNewForm({...newForm, rfrsFlag: e.target.checked})}/>
                                 </td>
                             </tr>
                             </tbody>
@@ -332,11 +380,11 @@ export default function HouseManagementPage() {
                             </td>
                         </tr>
                         <tr>
-                            <th style={{backgroundColor: "#e9ecef"}} className="text-center align-middle">제어유형</th>
+                            <th style={{backgroundColor: "#e9ecef"}} className="text-center align-middle">운용방식</th>
                             <td>
-                                <Form.Select size="sm" name="ctrlType" value={editForm.ctrlType}
+                                <Form.Select size="sm" name="operationMode" value={editForm.operationMode}
                                              onChange={handleEditChange}>
-                                    {CTRL_TYPE_OPTIONS.map((o) =>
+                                    {OPERATION_MODE_OPTIONS.map((o) =>
                                         <option key={o.value} value={o.value}>{o.label}</option>)}
                                 </Form.Select>
                             </td>
@@ -345,16 +393,11 @@ export default function HouseManagementPage() {
                                 <Form.Control size="sm" name="snsrRfrsItvl" value={editForm.snsrRfrsItvl}
                                               onChange={handleEditChange} type="number" min="1"/>
                             </td>
-                            <th style={{backgroundColor: "#e9ecef"}} className="text-center align-middle">제어및주기방법</th>
+                            <th style={{backgroundColor: "#e9ecef"}} className="text-center align-middle">갱신</th>
                             <td>
-                                <div className="d-flex gap-3 align-items-center">
-                                    <Form.Check type="switch" id="mnulCtrlFlag" label="수동제어"
-                                                name="mnulCtrlFlag" checked={editForm.mnulCtrlFlag}
-                                                onChange={handleEditChange}/>
-                                    <Form.Check type="switch" id="rfrsFlag" label="갱신"
-                                                name="rfrsFlag" checked={editForm.rfrsFlag}
-                                                onChange={handleEditChange}/>
-                                </div>
+                                <Form.Check type="switch" id="rfrsFlag" label="갱신"
+                                            name="rfrsFlag" checked={editForm.rfrsFlag}
+                                            onChange={handleEditChange}/>
                             </td>
                         </tr>
                         </tbody>
@@ -370,9 +413,8 @@ export default function HouseManagementPage() {
                     <th>재배사명</th>
                     <th>작물</th>
                     <th>생육단계</th>
-                    <th>제어유형</th>
+                    <th>운용방식</th>
                     <th>센서간격</th>
-                    <th>수동제어</th>
                     <th>갱신</th>
                     <th>등록일</th>
                     {canManage && <th>관리</th>}
@@ -386,18 +428,24 @@ export default function HouseManagementPage() {
                             className={editId === house.housId ? "table-warning" : isDeleted ? "table-secondary" : ""}>
                             {isAdmin && (
                                 <td className="text-center">
-                                    <span className={`badge bg-${isDeleted ? "danger" : "success"}`}>
-                                        {isDeleted ? "삭제" : "정상"}
-                                    </span>
+                                    {isDeleted ? (
+                                        <span
+                                            className="badge bg-danger"
+                                            style={{cursor: "pointer"}}
+                                            onClick={() => confirmHardDelete(house)}
+                                            title="완전삭제"
+                                        >삭제</span>
+                                    ) : (
+                                        <span className="badge bg-success">정상</span>
+                                    )}
                                 </td>
                             )}
                             <td>{house.housId}</td>
                             <td>{house.housName}</td>
                             <td>{getLabelByValue(CROP_KIND_OPTIONS, house.cropKind)}</td>
                             <td>{getLabelByValue(CROP_LVEL_OPTIONS, house.cropLvel)}</td>
-                            <td>{getLabelByValue(CTRL_TYPE_OPTIONS, house.ctrlType)}</td>
+                            <td>{getOperationModeLabel(house)}</td>
                             <td>{house.snsrRfrsItvl}초</td>
-                            <td>{house.mnulCtrlFlag ? "ON" : "OFF"}</td>
                             <td>{house.rfrsFlag ? "ON" : "OFF"}</td>
                             <td>{house.rgstDttm ? new Date(house.rgstDttm).toLocaleDateString() : "-"}</td>
                             {canManage && (
@@ -422,7 +470,7 @@ export default function HouseManagementPage() {
                 })}
                 {houses.length === 0 && (
                     <tr>
-                        <td colSpan={isAdmin ? 11 : canManage ? 10 : 9} className="text-center text-muted">등록된 재배사가 없습니다.</td>
+                        <td colSpan={isAdmin ? 10 : canManage ? 9 : 8} className="text-center text-muted">등록된 재배사가 없습니다.</td>
                     </tr>
                 )}
                 </tbody>
@@ -438,6 +486,13 @@ export default function HouseManagementPage() {
                         title="재배사 삭제"
                         body={`'${deleteTarget?.housName}' 재배사를 삭제하시겠습니까?`}
                         variant="danger" buttonMsg="삭제"/>
+
+            {/* 완전 삭제 확인 */}
+            <AlertModal show={showHardDeleteModal} hideModalFunc={() => setShowHardDeleteModal(false)}
+                        onClickFunc={handleHardDelete}
+                        title="재배사 완전 삭제"
+                        body={`'${hardDeleteTarget?.housName}' 재배사를 완전히 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.`}
+                        variant="danger" buttonMsg="완전삭제"/>
         </Container>
     );
 }
