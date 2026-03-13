@@ -2,6 +2,8 @@
 1. 코드개선이력누적
 2. 상시백업필수
 3. pip uninstall langchain langchain-community langchain-ollama langchain-chroma langgraph
+4. nohup streamlit run agent_project/app.py --server.port 8501 & 
+   # http://lockers7.iptime.org:8501/ 
 -----------------------------------------------------------------------------------------------------
 단, 항상, 모든기능 보완시 
 {
