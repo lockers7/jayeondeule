@@ -1,6 +1,5 @@
 import React, {useState} from "react";
 import {Button, Form, Spinner} from "react-bootstrap";
-import {StopCircleFill} from "react-bootstrap-icons";
 import VoiceMicButton from "./voice/VoiceMicButton.jsx";
 import "./ChatInput.css";
 
@@ -49,7 +48,7 @@ export default function ChatInput({value, onChange, onSend, isLoading, farmName,
                             onClick={onStop}
                             title="진행 중지"
                         >
-                            <StopCircleFill size={18}/>
+                            <span className="stop-square"/>
                         </button>
                     ) : (
                         <VoiceMicButton
