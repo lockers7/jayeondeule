@@ -29,16 +29,50 @@ export default function FarmMonitoringPage() {
     const dispatch = useDispatch();
     const navigate = useNavigate();
 
-    const [isAccordionOpened, setIsAccordionOpened] = useState(true);
+    // 페이지 이동 후 복귀 시 상태 유지용 sessionStorage 키 접두사
+    const SK = `fmon_${farmId}`;
+
+    const [isAccordionOpened, setIsAccordionOpened] = useState(
+        () => sessionStorage.getItem(`${SK}_acc`) ?? "0"
+    );
+    const [activeTab, setActiveTab] = useState(
+        () => sessionStorage.getItem(`${SK}_tab`) || "sensor"
+    );
 
     const [selectedHouse, setSelectedHouse] = useState(null);
     const [startDate, setStartDate] = useState(() => {
+        const stored = sessionStorage.getItem(`${SK}_sd`);
+        if (stored) return stored;
         const d = new Date();
         d.setMonth(d.getMonth() - 1);
         d.setDate(d.getDate() + 1);
         return d.toISOString().split("T")[0];
     });
-    const [endDate, setEndDate] = useState(new Date().toISOString().split("T")[0]);
+    const [endDate, setEndDate] = useState(
+        () => sessionStorage.getItem(`${SK}_ed`) || new Date().toISOString().split("T")[0]
+    );
+
+    const handleSetSelectedHouse = (house) => {
+        setSelectedHouse(house);
+        if (house) sessionStorage.setItem(`${SK}_hid`, String(house.housId));
+        else sessionStorage.removeItem(`${SK}_hid`);
+    };
+    const handleSetStartDate = (date) => {
+        setStartDate(date);
+        sessionStorage.setItem(`${SK}_sd`, date);
+    };
+    const handleSetEndDate = (date) => {
+        setEndDate(date);
+        sessionStorage.setItem(`${SK}_ed`, date);
+    };
+    const handleAccordionSelect = (key) => {
+        setIsAccordionOpened(key);
+        sessionStorage.setItem(`${SK}_acc`, key ?? "");
+    };
+    const handleTabChange = (tab) => {
+        setActiveTab(tab);
+        sessionStorage.setItem(`${SK}_tab`, tab);
+    };
 
     // 농장 정보
     const { data: farm, isLoading: farmLoading, error: farmError } = useQuery({
@@ -107,10 +141,12 @@ export default function FarmMonitoringPage() {
         }
     }, [farm]);
 
-    // selectedHouse 초기값
+    // selectedHouse 초기값: 이전 선택 재배사 복원 → 없으면 첫 번째
     useEffect(() => {
-        if (!selectedHouse && houses[0] != null) {
-            setSelectedHouse(houses[0]);
+        if (!selectedHouse && houses.length > 0) {
+            const storedId = Number(sessionStorage.getItem(`${SK}_hid`));
+            const saved = storedId ? houses.find(h => h.housId === storedId) : null;
+            handleSetSelectedHouse(saved || houses[0]);
         }
     }, [houses]);
 
@@ -137,7 +173,7 @@ export default function FarmMonitoringPage() {
             </div>
 
             {/* 최신 센서 데이터 */}
-            <Accordion onSelect={(key) => setIsAccordionOpened(key)} defaultActiveKey="0" className="mb-3">
+            <Accordion onSelect={handleAccordionSelect} activeKey={isAccordionOpened} className="mb-3">
                 <Accordion.Item eventKey="0">
                     <Accordion.Header>
                         <span style={{ fontWeight: "bold", fontSize: "150%", textAlign: "center" }}>실 시 간    재 배 사   현 황</span>
@@ -147,7 +183,7 @@ export default function FarmMonitoringPage() {
                             <LatestSensorMonitor
                                 latestSensorData={latestSensorData}
                                 houses={houses}
-                                setSelectedHouse={setSelectedHouse}
+                                setSelectedHouse={handleSetSelectedHouse}
                                 selectedHouse={selectedHouse}
                                 farmId={farmId}
                             />
@@ -176,7 +212,7 @@ export default function FarmMonitoringPage() {
             />*/}
 
             {/* 탭 */}
-            <Tabs id="custom-tabs" className="d-flex justify-content-end">
+            <Tabs id="custom-tabs" className="d-flex justify-content-end" activeKey={activeTab} onSelect={handleTabChange}>
                 <Tab
                     eventKey="sensor"
                     title={
@@ -189,9 +225,9 @@ export default function FarmMonitoringPage() {
                     <HouseSensorDashboard
                         sensorData={sensorData}
                         startDate={startDate}
-                        setStartDate={setStartDate}
+                        setStartDate={handleSetStartDate}
                         endDate={endDate}
-                        setEndDate={setEndDate}
+                        setEndDate={handleSetEndDate}
                         fetchSensorData={refetchSensor}
                         loading={sensorLoading}
                     />
@@ -207,7 +243,7 @@ export default function FarmMonitoringPage() {
                     }
                 >
                     {selectedHouse &&
-                        <RelayDashboard farmId={farmId} house={selectedHouse} setSelectedHouse={setSelectedHouse} />
+                        <RelayDashboard farmId={farmId} house={selectedHouse} setSelectedHouse={handleSetSelectedHouse} />
                     }
                 </Tab>
 

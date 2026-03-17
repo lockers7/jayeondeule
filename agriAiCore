@@ -450,9 +450,25 @@ searxng_stop() {
 }
 
 searxng_restart() {
-    searxng_stop
-    sleep 2
-    searxng_start
+    log_msg "${BLUE}[SearXNG]${NC} 재시작 중..."
+    docker restart searxng >/dev/null 2>&1
+    if wait_port 8888 15; then
+        log_msg "${GREEN}[SearXNG]${NC} 재시작 완료 (port 8888)"
+    else
+        log_msg "${RED}[SearXNG]${NC} 재시작 실패"
+        return 1
+    fi
+}
+
+searxng_logs() {
+    local lines="${1:-100}"
+    if docker ps -a --filter "name=searxng" --format "{{.Names}}" 2>/dev/null | grep -q "searxng"; then
+        log_msg "${BLUE}[SearXNG]${NC} Docker 로그 (Ctrl+C로 종료)..."
+        docker logs searxng --tail "$lines" -f 2>&1
+    else
+        log_msg "${RED}[SearXNG]${NC} 컨테이너가 존재하지 않습니다"
+        return 1
+    fi
 }
 
 # --- Web Build (프론트엔드 + 백엔드 빌드) ---
@@ -576,9 +592,12 @@ show_service_logs() {
     if [ -n "$searx_status" ]; then
         echo -e "${GREEN}●${NC} SearXNG (Docker)"
         echo "     Active: running ($searx_status)"
+        docker logs searxng --tail 3 2>/dev/null | sed 's/^/             /'
     else
+        local searx_exited
+        searx_exited=$(docker ps -a --filter "name=searxng" --format "{{.Status}}" 2>/dev/null)
         echo -e "${RED}○${NC} SearXNG (Docker)"
-        echo "     Active: inactive"
+        echo "     Active: inactive${searx_exited:+ ($searx_exited)}"
     fi
     echo ""
 }
@@ -656,6 +675,7 @@ execute_service() {
                 stop)    ollama_stop ;;
                 restart) ollama_restart ;;
                 status)  printf "  Ollama: "; check_status "Ollama" port 11434 ;;
+                logs)    journalctl -u ollama.service -n 100 --no-pager -f ;;
             esac
             ;;
         2) # PostgreSQL
@@ -664,6 +684,7 @@ execute_service() {
                 stop)    postgresql_stop ;;
                 restart) postgresql_restart ;;
                 status)  printf "  PostgreSQL: "; check_status "PostgreSQL" port 5432 ;;
+                logs)    journalctl -u postgresql.service -n 100 --no-pager -f ;;
             esac
             ;;
         3) # ChromaDB
@@ -672,6 +693,7 @@ execute_service() {
                 stop)    chromadb_stop ;;
                 restart) chromadb_restart ;;
                 status)  printf "  ChromaDB: "; check_status "ChromaDB" port 8000 ;;
+                logs)    journalctl -u chromadb.service -n 100 --no-pager -f ;;
             esac
             ;;
         4) # Scheduler
@@ -680,6 +702,7 @@ execute_service() {
                 stop)    scheduler_stop ;;
                 restart) scheduler_restart ;;
                 status)  printf "  Scheduler: "; check_status "Scheduler" pid_file "$SCHEDULER_PID" ;;
+                logs)    tail -n 100 -f "$LOG_DIR/scheduler.log" ;;
             esac
             ;;
         5) # FastAPI
@@ -688,6 +711,7 @@ execute_service() {
                 stop)    fastapi_stop ;;
                 restart) fastapi_restart ;;
                 status)  printf "  FastAPI: "; check_status "FastAPI" port "${API_PORT:-8002}" ;;
+                logs)    tail -n 100 -f "$LOG_DIR/api.log" ;;
             esac
             ;;
         6) # SearXNG
@@ -696,6 +720,7 @@ execute_service() {
                 stop)    searxng_stop ;;
                 restart) searxng_restart ;;
                 status)  printf "  SearXNG: "; check_status "SearXNG" port 8888 ;;
+                logs)    searxng_logs ;;
             esac
             ;;
         7) # Spring Boot
@@ -704,6 +729,7 @@ execute_service() {
                 stop)    springboot_stop ;;
                 restart) springboot_restart ;;
                 status)  printf "  Spring Boot: "; check_status "Spring Boot" port 9090 ;;
+                logs)    journalctl -u jayeondeule_web.service -n 100 --no-pager -f ;;
             esac
             ;;
         8) # Nginx
@@ -712,13 +738,15 @@ execute_service() {
                 stop)    nginx_stop ;;
                 restart) nginx_restart ;;
                 status)  printf "  Nginx: "; check_status "Nginx" port 80 ;;
+                logs)    journalctl -u nginx.service -n 100 --no-pager -f ;;
             esac
             ;;
         9) # Web Build (React + Spring Boot)
             case "$action" in
                 start|restart) web_build ;;
-                stop) log_msg "${YELLOW}[Web Build]${NC} 빌드 전용 서비스입니다 (stop 불필요)" ;;
+                stop)   log_msg "${YELLOW}[Web Build]${NC} 빌드 전용 서비스입니다 (stop 불필요)" ;;
                 status) echo -e "  Web Build: ${YELLOW}● 빌드 전용${NC}" ;;
+                logs)   tail -n 100 "$LOG_DIR/react_build.log" 2>/dev/null; tail -n 100 "$LOG_DIR/springboot_build.log" 2>/dev/null ;;
             esac
             ;;
         *)
@@ -739,7 +767,7 @@ usage() {
     echo -e "    ${CYAN}stop${NC}    [N]  서비스 중지"
     echo -e "    ${CYAN}restart${NC} [N]  서비스 재시작"
     echo -e "    ${CYAN}status${NC}  [N]  서비스 상태 확인"
-    echo -e "    ${CYAN}logs${NC}         실시간 로그 확인 (journalctl)"
+    echo -e "    ${CYAN}logs${NC}    [N]  로그 확인 (번호 없으면 전체 요약, 번호 지정 시 실시간 tail)"
     echo -e "    ${CYAN}enable${NC}       시스템 부팅 시 자동 시작 활성화"
     echo -e "    ${CYAN}disable${NC}      시스템 부팅 시 자동 시작 비활성화"
     echo ""
@@ -759,8 +787,12 @@ usage() {
     echo -e "    agriAiCore restart        # 메뉴에서 서비스 선택"
     echo -e "    agriAiCore restart 0      # 전체 재시작"
     echo -e "    agriAiCore restart 5      # FastAPI만 재시작"
+    echo -e "    agriAiCore restart 6      # SearXNG(Docker)만 재시작"
     echo -e "    agriAiCore restart 9      # Web 빌드"
     echo -e "    agriAiCore status         # 전체 상태 확인"
+    echo -e "    agriAiCore logs           # 전체 서비스 로그 요약"
+    echo -e "    agriAiCore logs 6         # SearXNG Docker 로그 실시간 확인"
+    echo -e "    agriAiCore logs 5         # FastAPI 로그 실시간 확인"
     echo ""
 }
 
@@ -770,11 +802,7 @@ ACTION="${1:-}"
 SERVICE_NUM="${2:-}"
 
 case "$ACTION" in
-    start|stop|restart|status)
-        ;;
-    logs)
-        show_service_logs
-        exit 0
+    start|stop|restart|status|logs)
         ;;
     enable)
         echo -e "${GREEN}AgriAI Core 자동 시작 활성화 중...${NC}"
@@ -804,6 +832,12 @@ esac
 if [ "$ACTION" = "status" ] && [ -z "$SERVICE_NUM" ]; then
     print_header
     show_status
+    exit 0
+fi
+
+# logs는 번호 없이 전체 요약 표시
+if [ "$ACTION" = "logs" ] && [ -z "$SERVICE_NUM" ]; then
+    show_service_logs
     exit 0
 fi
 

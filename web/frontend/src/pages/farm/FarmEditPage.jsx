@@ -14,6 +14,7 @@ import AlertModal from "../../components/common/AlertModal.jsx";
 export default function FarmEditPage() {
     const userInfo = useSelector((state) => state.auth?.userInfo);
     const isAdmin = userInfo?.authLvel === "ADMIN";
+    const isFarmAdmin = userInfo?.authLvel === "FARM_ADMIN";
 
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
@@ -155,6 +156,8 @@ export default function FarmEditPage() {
                         pattern="^[가-힣a-zA-Z0-9 ]{2,20}$"
                         errorMsg="한글, 영문, 숫자로 이루어진 2~20자로 입력해주세요."
                         required
+                        readOnly={isFarmAdmin}
+                        style={isFarmAdmin ? {backgroundColor: "#e9ecef"} : {}}
                     />
                     <LabeledInput
                         label="농장 도메인"

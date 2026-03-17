@@ -21,8 +21,14 @@ const AUTH_LVEL_OPTIONS_ADMIN = [
 ];
 const PSTN_OPTIONS = [
     {value: "1", label: "농장주"},
-    {value: "99", label: "농장관리"},
+    {value: "2", label: "농장관리"},
+    {value: "99", label: "농장모니터링"},
 ];
+
+const pstnToAuthLvel = (pstn) => {
+    if (pstn === "1" || pstn === "2") return "FARM_ADMIN";
+    return "MONITOR";
+};
 
 export default function UserManagementPage() {
     const {farmId: urlFarmId} = useParams();
@@ -55,7 +61,7 @@ export default function UserManagementPage() {
 
     // 신규 등록 폼
     const [showRegister, setShowRegister] = useState(false);
-    const [newForm, setNewForm] = useState({userId: "", passwd: "", userName: "", pstn: "99", hpNo: ""});
+    const [newForm, setNewForm] = useState({userId: "", passwd: "", userName: "", pstn: "2", hpNo: ""});
     const [idChecked, setIdChecked] = useState(false);
     const [idAvailable, setIdAvailable] = useState(false);
 
@@ -103,7 +109,7 @@ export default function UserManagementPage() {
         setEditId(user.userId);
         setEditForm({
             userName: user.userName || "",
-            pstn: user.pstn || "99",
+            pstn: user.pstn || "2",
             hpNo: user.hpNo || "",
             authLvel: user.authLvel || "MONITOR",
             farmId: user.farmId != null ? String(user.farmId) : "0",
@@ -114,7 +120,11 @@ export default function UserManagementPage() {
 
     const handleEditChange = (e) => {
         const {name, value} = e.target;
-        setEditForm({...editForm, [name]: value});
+        if (name === "pstn") {
+            setEditForm({...editForm, pstn: value, authLvel: pstnToAuthLvel(value)});
+        } else {
+            setEditForm({...editForm, [name]: value});
+        }
     };
 
     const saveEdit = async () => {
@@ -278,8 +288,10 @@ export default function UserManagementPage() {
             await registerUser(newForm);
             // 등록 후 농장 배정
             await patchUserFarmId(newForm.userId, {farmId: Number(activeFarmId)});
+            // pstn 기반 authLvel 자동 설정
+            await patchUserById(newForm.userId, {authLvel: pstnToAuthLvel(newForm.pstn)});
             setShowRegister(false);
-            setNewForm({userId: "", passwd: "", userName: "", pstn: "99", hpNo: ""});
+            setNewForm({userId: "", passwd: "", userName: "", pstn: "2", hpNo: ""});
             setIdChecked(false);
             setIdAvailable(false);
             setModalMsg({title: "알림", body: "사용자가 등록되었습니다.", variant: "success"});

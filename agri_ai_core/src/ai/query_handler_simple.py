@@ -45,7 +45,7 @@ web_logger = setup_web_logger("chat")
 _SYSTEM_FARM_ID = "0"
 
 _LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT_SECONDS", "600"))
-_STREAM_HEARTBEAT_SECONDS = max(3, int(os.getenv("STREAM_HEARTBEAT_SECONDS", "5")))
+_STREAM_HEARTBEAT_SECONDS = max(1, int(os.getenv("STREAM_HEARTBEAT_SECONDS", "3")))
 
 
 # ============================================================
@@ -104,7 +104,7 @@ _FILE_NAME_RE = re.compile(
 )
 
 
-def _build_default_tool_args(user_query, farm_id, house_id):
+def _build_default_tool_args(user_query, farm_id, house_id, auth_farm_id=None):
     # 질문에서 파일명 패턴 감지
     detected_file_name = None
     match = _FILE_NAME_RE.search(user_query or "")
@@ -116,14 +116,21 @@ def _build_default_tool_args(user_query, farm_id, house_id):
             detected_file_name = _fn_m.group(1)
         logger.info(f"[기본인자] 파일명 감지: {detected_file_name}")
 
+    # auth_farm_id: RAG 파일 목록/삭제 권한 결정용
+    # 시스템관리자(auth_farm_id=None) → 전체 농장 접근, 농장사용자 → 자기 농장만
+    _auth_fid = str(auth_farm_id) if auth_farm_id is not None else None
+
     return {
         "search_web": {"query": user_query},
         "search_farm_knowledge": {
             "query": user_query,
             "n_results": 5,
             "file_name": detected_file_name,
-            "farm_id": str(farm_id) if farm_id is not None else None,
+            "farm_id": _auth_fid,
             "house_id": str(house_id) if house_id is not None else None,
+        },
+        "delete_farm_knowledge": {
+            "farm_id": _auth_fid,
         },
         "get_farm_realtime_data": {
             "farm_id": str(farm_id) if farm_id is not None else None,
@@ -336,9 +343,13 @@ def _save_conversation_turn_hybrid(session_id, user_query, response_text, farm_i
         return
 
     # [1] PostgreSQL 저장 (기존 동기 방식)
+    # DB 저장 전 SPECIAL 내부 마커 제거 (오염 방지)
+    import re as _re
+    _clean_response = _re.sub(r'<SPECIAL_\d+>.*?(?=\n|$)', '', response_text or '', flags=_re.DOTALL | _re.IGNORECASE)
+    _clean_response = _re.sub(r'</?SPECIAL[^>]*>', '', _clean_response, flags=_re.IGNORECASE).strip()
     store = get_conversation_store()
     store.add_turn(session_id, "user", user_query, farm_id)
-    store.add_turn(session_id, "assistant", response_text, farm_id)
+    store.add_turn(session_id, "assistant", _clean_response, farm_id)
     logger.info(f"[{label}하이브리드] session={session_id[:12]}... PostgreSQL 저장 완료")
 
     # [2] VectorDB 저장 (기본: 비동기, 환경변수로 동기 전환 가능)
@@ -504,15 +515,17 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
 # LLM이 필요한 도구를 자율적으로 선택하고 호출하여 답변 생성
 # Args: user_query: 사용자 질의
 #       file_paths: 첨부 파일 경로
-#       farm_id: 농장 ID
+#       farm_id: 농장 ID (사이드바 선택, 실시간 데이터용)
 #       house_id: 재배사 ID
 #       farm_name: 농장명
 #       house_name: 재배사명
 #       session_id: 대화 세션 ID (멀티턴 대화용)
 #       speech_style: 대화체 (male/female)
+#       auth_farm_id: 인증 농장 ID (RAG 권한 결정용, 시스템관리자=None, 농장사용자=자기농장ID)
 # Returns: dict: 구조화된 응답 {response, sources, tools_used, response_type}
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-                           farm_name=None, house_name=None, session_id=None, speech_style=None):
+                           farm_name=None, house_name=None, session_id=None, speech_style=None,
+                           auth_farm_id=None):
     start_time = datetime.now()
 
     try:
@@ -542,7 +555,7 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
             file_content = process_uploaded_files(file_paths)
             full_query = f"{user_query}\n\n{file_content}"
 
-        default_tool_args = _build_default_tool_args(user_query, farm_id, house_id)
+        default_tool_args = _build_default_tool_args(user_query, farm_id, house_id, auth_farm_id=auth_farm_id)
 
         # [PERF:대화] 하이브리드 컨텍스트 로드 시간 측정
         _t_ctx = time.time()
@@ -655,7 +668,8 @@ def _split_for_streaming(text, target_size=30):
 
 
 async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
-                                   farm_name=None, house_name=None, session_id=None, speech_style=None):
+                                   farm_name=None, house_name=None, session_id=None, speech_style=None,
+                                   auth_farm_id=None):
     start_time = datetime.now()
 
     try:
@@ -675,7 +689,7 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
         )
 
         full_query = user_query
-        default_tool_args = _build_default_tool_args(user_query, farm_id, house_id)
+        default_tool_args = _build_default_tool_args(user_query, farm_id, house_id, auth_farm_id=auth_farm_id)
 
         # [PERF:대화] 하이브리드 컨텍스트 로드 시간 측정
         _t_ctx = time.time()
@@ -739,10 +753,21 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
                             _progress_history.append(evt)
                     latest = new_events[-1]
                     _last_progress_msg = latest.get("message", "")
+                    # 도구명 + 단계 정보 포함하여 상세 표시
+                    _tool_label = ""
+                    if latest.get("tool_display"):
+                        _iter_str = ""
+                        if latest.get("iteration") and latest.get("max_iterations"):
+                            _iter_str = f" {latest['iteration']}/{latest['max_iterations']}단계"
+                        _tool_label = f"[{latest['tool_display']}{_iter_str}] "
                     yield {
                         "type": "status",
-                        "content": f"{_last_progress_msg} ({elapsed_wait}초 경과)",
+                        "content": f"{_tool_label}{_last_progress_msg} ({elapsed_wait}초 경과)",
                         "phase": latest.get("phase", "processing"),
+                        "tool_name": latest.get("tool_name"),
+                        "tool_display": latest.get("tool_display"),
+                        "iteration": latest.get("iteration"),
+                        "max_iterations": latest.get("max_iterations"),
                     }
                 else:
                     # 새 이벤트 없음 → 이력/기본 메시지를 순환하며 표시
@@ -801,6 +826,9 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
             }, ensure_ascii=False, indent=2),
         )
 
+    except asyncio.CancelledError:
+        logger.warning("[스트리밍] 취소됨 (클라이언트 연결 종료 또는 서버 타임아웃)")
+        raise
     except Exception as e:
         logger.error(f"스트리밍 질의 처리 중 오류: {e}")
         logger.error(traceback.format_exc())

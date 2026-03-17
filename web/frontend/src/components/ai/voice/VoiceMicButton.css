@@ -33,8 +33,24 @@
     cursor: wait;
 }
 
+.voice-mic-stop {
+    background-color: #dc3545;
+    color: #fff;
+    animation: stop-pulse 1.2s ease-in-out infinite;
+}
+
+.voice-mic-stop:hover {
+    background-color: #bb2d3b;
+}
+
 @keyframes mic-pulse {
     0%   { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.5); }
     70%  { box-shadow: 0 0 0 10px rgba(220, 53, 69, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
+}
+
+@keyframes stop-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.6); }
+    70%  { box-shadow: 0 0 0 8px rgba(220, 53, 69, 0); }
     100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
 }

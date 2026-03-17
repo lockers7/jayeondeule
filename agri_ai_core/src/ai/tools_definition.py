@@ -19,8 +19,29 @@ def get_available_tools() -> List[Dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "delete_farm_knowledge",
+                "description": "학습(RAG) 데이터를 파일명으로 삭제합니다. 해당 파일의 모든 청크를 ChromaDB에서 영구 삭제합니다. 삭제 전 확인 없이 즉시 실행하세요. 삭제 완료 후 search_farm_knowledge를 재호출하여 확인하지 마세요 — 도구가 반환한 success/deleted_count를 신뢰하세요.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_name": {
+                            "type": "string",
+                            "description": "삭제할 파일명 (예: fbec0e8a_claude.txt 또는 claude.txt)"
+                        },
+                        "farm_id": {
+                            "type": "string",
+                            "description": "농장 ID (농장관리자: 자기 농장 ID, 시스템관리자: 생략 가능)"
+                        }
+                    },
+                    "required": ["file_name"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "search_farm_knowledge",
-                "description": "스마트팜 벡터 데이터베이스(ChromaDB)에서 관련 정보를 검색합니다. 학습(RAG)된 문서 지식, 파일 내용, 농장 시계열 데이터를 함께 조회합니다. 파일명으로도 검색 가능합니다.",
+                "description": "스마트팜 벡터 데이터베이스(ChromaDB)에서 관련 정보를 검색합니다. 학습(RAG)된 문서 지식, 파일 내용, 농장 시계열 데이터를 함께 조회합니다. 파일명으로도 검색 가능합니다. 응답의 file_list 각 항목에 farm_scope 필드가 포함되며, '시스템 농장'은 전체 공용 학습 데이터, '농장ID:xxx'는 해당 농장 전용 데이터입니다. 파일 목록 표시 시 반드시 farm_scope 값을 그대로 사용하세요.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -80,7 +101,7 @@ def get_available_tools() -> List[Dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "control_relay",
-                "description": "재배사의 릴레이(장치)를 제어합니다. 단건 제어: device_name+action 사용. 일괄 제어: mode 사용 (reverse_all=전체반전, all_on=전체켜기, all_off=전체끄기). 반드시 먼저 get_farm_realtime_data로 현재 상태를 확인한 후 사용하세요.",
+                "description": "재배사의 릴레이(장치)를 제어합니다. 단건 제어: device_name+action 사용. 일괄 제어: mode 사용 (reverse_all=전체반전, all_on=전체켜기, all_off=전체끄기). house_id='all'로 모든 재배사에 동시 일괄 제어 가능 (전 재배사 요청 시 사용). 사전 상태 조회 없이 즉시 제어 가능합니다.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -90,7 +111,7 @@ def get_available_tools() -> List[Dict[str, Any]]:
                         },
                         "house_id": {
                             "type": "string",
-                            "description": "재배사 ID (예: '1재배사' → '1')"
+                            "description": "재배사 ID. 특정 재배사: '1', '2', '3'. 모든 재배사 일괄 제어: 'all'"
                         },
                         "device_name": {
                             "type": "string",
@@ -98,8 +119,8 @@ def get_available_tools() -> List[Dict[str, Any]]:
                         },
                         "action": {
                             "type": "string",
-                            "description": "단건 제어 동작 (on: 켜기, off: 끄기)",
-                            "enum": ["on", "off"]
+                            "description": "단건 제어 동작 (on: 켜기, off: 끄기, reverse: 현재 상태 반전)",
+                            "enum": ["on", "off", "reverse"]
                         },
                         "mode": {
                             "type": "string",
@@ -209,12 +230,13 @@ def get_system_prompt_with_tools(farm_name: str = None, farm_info: str = None, s
 {tone_rules}
 
 **도구 사용 규칙:**
-1. 농장/센서/릴레이/생육 질문: `get_farm_realtime_data`(data_type='all')+`search_farm_knowledge` 반드시 모두 사용합니다. 수치/상태 추측은 금지합니다. 센서와 릴레이를 동시에 조회하려면 data_type='all'을 사용하세요(sensor/relay 분리 호출 금지).
+1. 농장/센서/릴레이/생육 **조회·분석** 질문: `get_farm_realtime_data`(data_type='all')+`search_farm_knowledge` 반드시 모두 사용합니다. 수치/상태 추측은 금지합니다. 센서와 릴레이를 동시에 조회하려면 data_type='all'을 사용하세요(sensor/relay 분리 호출 금지). 단, 장치 **제어(켜기/끄기/설정)** 요청에는 `search_farm_knowledge`를 호출하지 않습니다(규칙 8 참조).
    - **다중 재배사 질문 (절대 규칙)**: "각 재배사", "전체", "모든 재배사" 등 복수 재배사 요청 시 반드시 **모든 재배사**(1호, 2호, 3호)에 대해 각각 `get_farm_realtime_data`를 호출해야 합니다. 일부 재배사만 응답하는 것은 금지합니다. house_id는 재배사별로 정확히 지정하세요 (1호='1', 2호='2', 3호='3').
    - 도구 결과에 포함된 **모든 데이터**(센서값, 릴레이 상태)를 빠짐없이 답변에 포함해야 합니다. 데이터를 생략하거나 일부만 표시하는 것은 금지합니다.
    - **센서값 적정 여부 판단**: `get_farm_realtime_data` 응답의 `environment_thresholds`(적정 범위)와 실제 센서값을 비교하여 "적정/저온/고온/비상" 상태를 판단하세요. 임계값 없이 "적정 범위"를 추측하지 마세요.
    - **AI vs 알고리즘 제어값 비교**: `get_farm_realtime_data` 응답의 `ai_environment_judgment`에 알고리즘이 권장하는 릴레이 상태가 포함됩니다. 현재 릴레이(relay_mapping)와 비교하여 차이점을 분석하세요. 릴레이/제어값 비교 질문에는 `search_farm_knowledge` 대신 반드시 `get_farm_realtime_data`를 사용하세요.
-2. 파일/문서/학습/RAG/데이터/요약/내용/정리 관련 질문: `search_farm_knowledge` 반드시 사용합니다. 파일명이 포함된 질문은 해당 파일명을 query와 file_name 파라미터에 넣어 반드시 검색합니다. "없다/모른다" 답변 전에 반드시 도구로 검색해야 합니다.
+2. **학습데이터 삭제 요청** ("삭제", "지워", "제거" + 파일명): 반드시 `delete_farm_knowledge` 도구를 즉시 호출합니다. 확인 질문 없이 바로 실행하세요. farm_id는 현재 사용자의 농장 ID를 사용합니다. 삭제 결과(success/deleted_count)를 그대로 안내하세요. **삭제 완료 후 `search_farm_knowledge`를 재호출하여 확인하지 마세요** — 재검색 결과에는 웹 지식(web_knowledge) 항목이 포함될 수 있어 삭제 실패로 오인할 수 있습니다.
+2-1. 파일/문서/학습/RAG/데이터/요약/내용/정리 관련 질문: `search_farm_knowledge` 반드시 사용합니다. 파일명이 포함된 질문은 해당 파일명을 query와 file_name 파라미터에 넣어 반드시 검색합니다. "없다/모른다" 답변 전에 반드시 도구로 검색해야 합니다. 파일 목록 응답의 `file_list[].farm_scope` 값을 반드시 표시하세요 — "시스템 농장"은 전체 공용 데이터, "농장ID:xxx"는 해당 농장 전용 데이터입니다. 현재 대화 농장명으로 farm_scope를 추측하거나 변경하지 마세요.
 3. 사실·조사·검색 요청(주소/가격/찾아줘/알아봐줘/설명해줘/알려줘): `search_farm_knowledge` → 부족하면 `search_web` 사용합니다. 도구 없이 추측 답변은 절대 금지합니다.
 4. 일반 정보(날씨/뉴스/환율/맛집/최신): `search_web` 반드시 사용합니다.
 5. 인사/감정/의견/일상대화: 도구 없이 응답 가능합니다. 단, "파일/학습/자료/문서/리스트/목록"이 포함된 질문은 반드시 `search_farm_knowledge`를 사용하세요. 이전 대화에서 비슷한 답변을 했더라도 반드시 도구로 다시 검색하세요.
@@ -222,12 +244,16 @@ def get_system_prompt_with_tools(farm_name: str = None, farm_info: str = None, s
 6. 애매하면 도구를 더 사용합니다. 확인 안 된 정보는 "확인이 필요합니다"로 답변합니다.
 7. **절대 금지**: 도구를 호출하지 않고 "정보가 없습니다/확인되지 않았습니다"라고 답변하는 것은 금지합니다. 반드시 먼저 도구로 검색한 후 답변하세요.
 8. **장치 제어(켜기/끄기/중지/가동/작동/반대/반전/셋팅/설정/변경/전환) 요청**: 반드시 `control_relay` 도구를 호출하여 실제로 제어해야 합니다. 도구를 호출하지 않고 "중지했습니다/켰습니다/설정했습니다/설정했어요" 등의 답변은 절대 금지합니다.
+   - **사용자 명령 즉시 실행 (절대 규칙)**: 사용자가 장치 제어를 명령하면 AI 환경 판단·센서 적정범위·ai_conflict와 관계없이 즉시 `control_relay`를 호출합니다. 제어 실행 전에 확인을 요청하거나, AI 판단을 이유로 제어를 보류·거부하는 것은 절대 금지합니다. 제어 완료 후 결과 보고 시 AI 권장과 차이가 있으면 그때 안내합니다.
    - **절대 규칙**: 이전 대화에서 동일한 제어 요청에 성공한 답변이 있더라도, 반드시 `control_relay` 도구를 새로 호출해야 합니다. 이전 답변을 복사하거나 참고하여 도구 없이 제어 결과를 답변하는 것은 금지합니다.
-   - 먼저 `get_farm_realtime_data`(data_type='relay')로 현재 상태를 확인합니다.
+   - 현재 상태 확인이 필요한 경우 `get_farm_realtime_data`(data_type='relay')를 먼저 호출할 수 있습니다.
+   - **house_id / farm_id 규칙 (절대 준수)**: 장치 제어 시 house_id는 특정 재배사의 경우 '1', '2', '3' 중 하나를 사용합니다. house_id='0'(공통 재배사)은 장치 제어 대상에서 절대 제외합니다. farm_id는 반드시 사용자 소속 농장 ID를 사용하며, 시스템 농장(farm_id='0')으로 제어를 요청하는 것은 금지입니다.
+   - **전 재배사(모든 재배사) 제어 (절대 규칙)**: "전 재배사", "모든 재배사", "전체 재배사" 등 모든 재배사 제어 요청 시 반드시 `control_relay(house_id='all', device_name=..., action=...)` 한 번만 호출합니다. house_id='all'이 모든 재배사를 자동으로 일괄 제어합니다. 사전 상태 조회(`get_farm_realtime_data`) 없이 즉시 호출하세요. 개별 house_id='1','2','3'으로 나눠 호출하는 것은 금지합니다. 예시: "전 재배사 조명 꺼줘" → `control_relay(house_id='all', device_name='lighting_flag', action='off')`, "모든 재배사 조명 반대로" → `control_relay(house_id='all', device_name='lighting_flag', action='reverse')` (mode 파라미터 사용 금지).
+   - **재배사+장치 붙여쓰기 파싱**: "1재배사조명", "1호재배사조명", "2재배사 조명", "3호 관수" 등은 재배사 번호와 장치명을 분리하여 house_id와 device_name으로 매핑합니다. 예: "1재배사조명" → house_id='1', device_name='lighting_flag'. "모든재배사조명", "전체조명" → house_id='all', device_name='lighting_flag'로 단 1번 호출.
    - 제어가 필요하면 `control_relay`로 실제 제어를 수행합니다.
    - `control_relay` 결과의 success 값을 확인하고, 성공/실패 여부를 정확히 답변합니다.
    - 장치명 매핑: 흡입팬/흡기팬=intake_fan_flag, 배출팬/배기팬=exhaust_fan_flag, 수온히터/물가열기/칠러=water_heater_flag, 포그생성/분사펌프/순환모터=fog_occurs_flag, 배수밸브=drainage_motor_flag, 조명=lighting_flag, 관수=irrigation_flag, 실내히터/열풍기=indoor_heater_flag, 히터밸브/열풍댐퍼=indoor_heater_valve_flag, 순환밸브/순환댐퍼=air_circulation_valve_flag, 흡입밸브/흡기댐퍼=air_intake_valve_flag, 배출밸브/배기댐퍼=air_exhaust_valve_flag, 라디에이터=radiator_flag
-   - 전체 반전/전체 ON/OFF가 필요하면 `control_relay`에 mode를 사용합니다. 전체 반전은 mode='reverse_all', 전체 켜기는 mode='all_on', 전체 끄기는 mode='all_off'로 호출합니다.
+   - **⚠️ mode 사용 규칙 (절대 준수)**: mode='all_on'/'all_off'/'reverse_all'은 사용자가 명시적으로 "모든 장치(조명·팬 등 구분 없이) 전체 켜기/끄기/반전"을 요청한 경우에만 사용합니다. **조명·관수·팬 등 특정 장치명이 언급된 경우에는 반드시 device_name+action으로 해당 장치만 개별 제어**합니다. 특정 장치를 반전시킬 때는 action='reverse'를 사용하세요. 예: "조명을 모두 켜줘" → `control_relay(device_name='lighting_flag', action='on')`, "조명을 반대로 해줘" → `control_relay(device_name='lighting_flag', action='reverse')` (mode='reverse_all' 금지). mode='reverse_all'은 장치명 없이 "전체 반전"만 요청한 경우에만 사용합니다.
    - **AI 환경 판단 정보 (필수 출력)**: `control_relay` 결과에 `ai_judgment`(현재 센서 기반 AI 권장)와 `ai_conflict`(수동 제어와 AI 권장의 차이)가 포함됩니다. 반드시 다음 형식으로 답변에 포함하세요:
      * "📊 AI 환경 판단: [reason]"
      * "🌡️ 현재 센서: [sensor]"

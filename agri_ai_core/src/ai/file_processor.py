@@ -122,32 +122,80 @@ def read_text_file(file_path: str, max_chars: int = 10000) -> str:
 #     str: PDF 텍스트 내용
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 def read_pdf_file(file_path: str) -> str:
+    # 1차 시도: PyMuPDF (fitz) — 일반 텍스트 PDF 추출
+    # 2차 시도: PyMuPDF OCR — 이미지 스캔 PDF (tesseract 필요)
+    # 3차 시도: PyPDF2 폴백
+    try:
+        import fitz  # PyMuPDF
+
+        doc = fitz.open(file_path)
+        total_pages = doc.page_count
+        extracted = []
+
+        for i in range(total_pages):
+            text = doc[i].get_text("text")
+            if text and text.strip():
+                extracted.append(f"[페이지 {i+1}]\n{text.strip()}")
+
+        if extracted:
+            doc.close()
+            header = f"총 {total_pages}페이지입니다.\n\n"
+            logger.debug(f"[PDF] PyMuPDF 추출 성공: {file_path} ({len(extracted)}/{total_pages}페이지)")
+            return header + "\n\n".join(extracted)
+
+        # 텍스트 추출 실패 → OCR 시도 (doc 아직 열려 있음)
+        logger.info(f"[PDF] 텍스트 없음 → OCR 시도 (이미지 PDF): {file_path}")
+        try:
+            ocr_extracted = []
+            for i in range(total_pages):
+                page = doc[i]
+                tp = page.get_textpage_ocr(flags=0, full=True)
+                text = page.get_text(textpage=tp).strip()
+                if text:
+                    ocr_extracted.append(f"[페이지 {i+1}]\n{text}")
+            doc.close()
+            if ocr_extracted:
+                header = f"총 {total_pages}페이지입니다. (OCR 추출)\n\n"
+                logger.info(f"[PDF] OCR 추출 성공: {file_path} ({len(ocr_extracted)}/{total_pages}페이지)")
+                return header + "\n\n".join(ocr_extracted)
+            logger.warning(f"[PDF] OCR 텍스트 없음: {file_path}")
+            doc.close()
+        except Exception as ocr_err:
+            logger.warning(f"[PDF] OCR 실패: {ocr_err}")
+            try:
+                doc.close()
+            except Exception:
+                pass
+
+        logger.warning(f"[PDF] PyMuPDF 텍스트/OCR 없음, PyPDF2로 폴백: {file_path}")
+    except Exception as e:
+        logger.warning(f"[PDF] PyMuPDF 실패, PyPDF2로 폴백: {file_path} ({e})")
+
+    # 2차 시도: PyPDF2 폴백
     try:
         from PyPDF2 import PdfReader
 
         reader = PdfReader(file_path)
         total_pages = len(reader.pages)
-
         extracted = []
 
         for i, page in enumerate(reader.pages):
             text = page.extract_text()
-            if not text:
+            if not text or not text.strip():
                 continue
-            text = text.strip()
-            if not text:
-                continue
-            extracted.append(f"[페이지 {i+1}]\n{text}")
+            extracted.append(f"[페이지 {i+1}]\n{text.strip()}")
 
-        if not extracted:
-            return "PDF 파일에서 텍스트를 추출할 수 없습니다. (이미지 PDF일 수 있습니다)"
+        if extracted:
+            header = f"총 {total_pages}페이지입니다.\n\n"
+            logger.debug(f"[PDF] PyPDF2 폴백 추출 성공: {file_path}")
+            return header + "\n\n".join(extracted)
 
-        header = f"총 {total_pages}페이지입니다.\n\n"
-        return header + "\n\n".join(extracted)
+        logger.warning(f"[PDF] 두 라이브러리 모두 텍스트 추출 실패 (이미지 PDF + tesseract 미설치): {file_path}")
+        return ""
 
     except Exception as e:
         logger.error(f"PDF 파일 읽기 오류 ({file_path}): {e}")
-        return f"PDF 파일을 읽을 수 없습니다: {str(e)}"
+        return ""
 
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

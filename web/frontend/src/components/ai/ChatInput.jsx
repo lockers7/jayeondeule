@@ -1,11 +1,12 @@
 import React, {useState} from "react";
 import {Button, Form, Spinner} from "react-bootstrap";
+import {StopCircleFill} from "react-bootstrap-icons";
 import VoiceMicButton from "./voice/VoiceMicButton.jsx";
 import "./ChatInput.css";
 
 const DEFAULT_PLACEHOLDER = "메시지를 입력하세요... (Shift+Enter: 줄바꿈, Enter: 전송)";
 
-export default function ChatInput({value, onChange, onSend, isLoading, farmName}) {
+export default function ChatInput({value, onChange, onSend, isLoading, farmName, onStop}) {
     const [placeholder, setPlaceholder] = useState(DEFAULT_PLACEHOLDER);
 
     const handleKeyDown = (e) => {
@@ -42,20 +43,30 @@ export default function ChatInput({value, onChange, onSend, isLoading, farmName}
                     >
                         {isLoading ? <Spinner animation="border" size="sm"/> : "전송"}
                     </Button>
-                    <VoiceMicButton
-                        onTranscribed={(text) => {
-                            onChange(text);
-                            onSend(text);
-                        }}
-                        onStatusChange={(status) => {
-                            if (status === "recording") {
-                                setPlaceholder("🎤 질문을 말씀하세요!");
-                            } else {
-                                setPlaceholder(DEFAULT_PLACEHOLDER);
-                            }
-                        }}
-                        disabled={isLoading}
-                    />
+                    {isLoading ? (
+                        <button
+                            className="voice-mic-btn voice-mic-stop"
+                            onClick={onStop}
+                            title="진행 중지"
+                        >
+                            <StopCircleFill size={18}/>
+                        </button>
+                    ) : (
+                        <VoiceMicButton
+                            onTranscribed={(text) => {
+                                onChange(text);
+                                onSend(text);
+                            }}
+                            onStatusChange={(status) => {
+                                if (status === "recording") {
+                                    setPlaceholder("🎤 질문을 말씀하세요!");
+                                } else {
+                                    setPlaceholder(DEFAULT_PLACEHOLDER);
+                                }
+                            }}
+                            disabled={isLoading}
+                        />
+                    )}
                 </div>
             </div>
         </div>

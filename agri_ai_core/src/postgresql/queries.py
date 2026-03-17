@@ -4,7 +4,8 @@
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # farm_id=0(시스템/가상 농장)을 제외한 실제 운영 농장을 기본값으로 사용
 GET_ONE_FARM = "SELECT farm_id, farm_name FROM FARM_M_INFO WHERE farm_id != 0 ORDER BY farm_id LIMIT 1"
-GET_ONE_HOUSE = "SELECT hous_id, hous_name FROM FARMHOUSE_M_INFO WHERE farm_id = %s ORDER BY hous_id LIMIT 1"
+GET_ONE_HOUSE = "SELECT hous_id, hous_name FROM FARMHOUSE_M_INFO WHERE farm_id = %s AND hous_id != 0 ORDER BY hous_id LIMIT 1"
+GET_ALL_HOUSES = "SELECT hous_id FROM FARMHOUSE_M_INFO WHERE farm_id = %s AND hous_id != 0 ORDER BY hous_id"
 GET_LIST_FARM = "SELECT farm_id, farm_name FROM FARM_M_INFO"
 
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

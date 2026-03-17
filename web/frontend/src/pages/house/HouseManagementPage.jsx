@@ -227,7 +227,13 @@ export default function HouseManagementPage() {
         try {
             const targetFarmId = isAdmin ? registerFarmId : activeFarmId;
             const {operationMode, housId, ...rest} = newForm;
-            const sendHousId = isAdmin ? Number(housId) : 0;
+            const sendHousId = Number(housId);
+            // housId=0은 시스템관리자만 생성 가능
+            if (sendHousId === 0 && !isAdmin) {
+                setModalMsg({title: "오류", body: "housId=0은 시스템관리자만 생성할 수 있습니다.", variant: "danger"});
+                setShowModal(true);
+                return;
+            }
             await registerHouse({farmId: targetFarmId, housId: sendHousId, ...rest, ...modeToFields(operationMode)});
             setShowRegister(false);
             setNewForm({housId: "", housName: "", cropKind: "10", cropLvel: "2", operationMode: "algorithm",
@@ -316,7 +322,7 @@ export default function HouseManagementPage() {
                                 <td style={{width: "19%"}}>
                                     <Form.Control size="sm" value={newForm.housId}
                                                   onChange={(e) => setNewForm({...newForm, housId: e.target.value})}
-                                                  type="number" min="1"
+                                                  type="number" min={isAdmin ? "0" : "1"}
                                                   readOnly={!isAdmin}
                                                   style={!isAdmin ? {backgroundColor: "#e9ecef"} : {}}/>
                                 </td>

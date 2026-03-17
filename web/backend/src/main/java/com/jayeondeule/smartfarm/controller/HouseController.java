@@ -33,6 +33,10 @@ public class HouseController {
             houseService.insertHouse(insertInfo);
             return ResponseEntity.ok().build();
         } else {
+            // housId=0은 시스템관리자만 생성 가능
+            if (insertInfo.getHousId() == 0) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+            }
             long myFarmId = userService.getUserOwnedFarmId(userInfo.getUserId());
             if (myFarmId == farmId) {
                 houseService.insertHouse(insertInfo);

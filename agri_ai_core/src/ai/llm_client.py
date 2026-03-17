@@ -68,7 +68,7 @@ except Exception:
     ollama = None
 
 from agri_ai_core.logs import setup_logger
-from agri_ai_core.config import settings, NUM_PREDICT, NUM_CTX, get_ollama_url, get_model_name
+from agri_ai_core.config import settings, NUM_PREDICT, NUM_CTX, get_ollama_url, get_model_name, GPU_CTX_TIERS, FREE_VRAM_CTX_TIERS
 from agri_ai_core.src.utils.validators import is_true
 from agri_ai_core.src.ai.utils import GREETING_RE as _GREETING_RE
 
@@ -140,6 +140,93 @@ _llm_warmed = False
 _cached_model_name = None
 _model_cache_lock = threading.Lock()
 _direct_ollama_disabled_reason: Optional[str] = None
+
+# GPU 비율 캐시: {model_name: (gpu_ratio, cached_at)}
+_gpu_ratio_cache: Dict[str, tuple] = {}
+_GPU_RATIO_CACHE_TTL = 60  # 초: 60초마다 재조회 (VRAM 변동 반영)
+
+def _get_model_gpu_ratio(model_name: str) -> float:
+    """Ollama /api/ps 에서 모델의 실제 GPU 탑재 비율을 조회 후 1.2배 적용.
+    캐시 TTL 60초. 조회 실패 시 0.0 반환 (보수적 설정 적용).
+    × 1.2 적용 이유: VRAM 증설로 탑재율이 올라갈수록 자동으로 높은 티어 선택.
+    예) 실제 89.6% × 1.2 = 107.5% → 95%+ 최상위 티어 적용
+        실제 60.0% × 1.2 = 72.0%  → 70%+ 티어 적용
+    """
+    now = time.time()
+    if model_name in _gpu_ratio_cache:
+        ratio, cached_at = _gpu_ratio_cache[model_name]
+        if now - cached_at < _GPU_RATIO_CACHE_TTL:
+            return ratio
+    # 모델별 GPU 비율 보정 계수: mistral 계열 1.2, 그 외 1.0
+    _boost = 1.2 if "mistral" in model_name.lower() else 1.0
+    try:
+        ollama_url = get_ollama_url().rstrip("/")
+        req = urlrequest.Request(f"{ollama_url}/api/ps")
+        with urlrequest.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode())
+        for m in data.get("models", []):
+            if m.get("name", "").startswith(model_name.split(":")[0]):
+                total = m.get("size", 0)
+                vram  = m.get("size_vram", 0)
+                raw_ratio = (vram / total) if total > 0 else 0.0
+                ratio = raw_ratio * _boost
+                _gpu_ratio_cache[model_name] = (ratio, now)
+                logger.debug(
+                    f"[GPU비율] {model_name}: {vram/1e9:.1f}GB / {total/1e9:.1f}GB"
+                    f" = {raw_ratio*100:.1f}% × {_boost} = {ratio*100:.1f}%"
+                )
+                return ratio
+    except Exception as e:
+        logger.debug(f"[GPU비율] 조회 실패 ({e}), 보수적 설정 적용")
+    _gpu_ratio_cache[model_name] = (0.0, now)
+    return 0.0
+
+def _get_free_vram_mib() -> int:
+    """nvidia-smi로 현재 여유 VRAM(MiB) 반환. 조회 실패 시 0 반환 (보수적 설정 적용)."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=3
+        )
+        free_mib = int(result.stdout.strip().split("\n")[0])
+        logger.debug(f"[VRAM여유] {free_mib} MiB")
+        return free_mib
+    except Exception as e:
+        logger.debug(f"[VRAM여유] 조회 실패 ({e}), 보수적 설정 적용")
+        return 0
+
+def _get_model_ctx_options(model_name: str, num_predict: int) -> dict:
+    """GPU 탑재 비율(1차) + 잔여 VRAM(2차 안전장치) 기반 최적 num_ctx / num_predict 반환.
+    - num_ctx : KV 캐시 → VRAM 직접 소비 → VRAM 안전장치 적용 (min)
+    - num_predict : 출력 길이 → VRAM 추가 소비 없음 → GPU 비율만으로 결정 (VRAM cap 미적용)
+    VRAM 업그레이드 시 코드 변경 없이 자동으로 더 큰 설정 적용.
+    """
+    # 1차: GPU 탑재 비율 기준
+    ratio = _get_model_gpu_ratio(model_name)
+    ratio_ctx, ratio_predict = NUM_CTX, num_predict
+    for min_ratio, ctx, predict in GPU_CTX_TIERS:
+        if ratio >= min_ratio:
+            ratio_ctx, ratio_predict = ctx, max(num_predict, predict)
+            break
+
+    # 2차: 잔여 VRAM 안전장치 — num_ctx(KV 캐시)만 제한, num_predict는 제외
+    free_mib = _get_free_vram_mib()
+    free_ctx = NUM_CTX
+    for min_mib, ctx, _predict in FREE_VRAM_CTX_TIERS:
+        if free_mib >= min_mib:
+            free_ctx = ctx
+            break
+
+    # num_ctx: VRAM 안전장치 적용 / num_predict: GPU 비율 기준값 그대로 사용
+    final_ctx     = min(ratio_ctx, free_ctx)
+    final_predict = ratio_predict
+    logger.debug(
+        f"[CTX옵션] {model_name} GPU={ratio*100:.1f}% freeVRAM={free_mib}MiB "
+        f"→ GPU기준(ctx={ratio_ctx}/predict={ratio_predict}) VRAM기준(ctx={free_ctx}) "
+        f"→ 최종 num_ctx={final_ctx} num_predict={final_predict}"
+    )
+    return {"num_ctx": final_ctx, "num_predict": final_predict}
 
 # 환경 변수 설정
 os.environ['OLLAMA_MAX_LOADED_MODELS'] = '1'
@@ -667,27 +754,52 @@ def _normalize_tool_arguments(
             "auto_fetch_max": _pick("auto_fetch_max"),
         }
     if tool_name == "search_farm_knowledge":
+        # farm_id: LLM 오버라이드 허용하지 않음 → 항상 auth 컨텍스트 값 사용
+        # (시스템관리자=None→전체, 농장사용자=자기농장ID→필터)
         return {
             "query": _pick("query"),
             "n_results": _pick("n_results", 3),
             "file_name": _pick("file_name"),
-            "farm_id": _pick("farm_id"),
+            "farm_id": default_args.get("farm_id"),
             "house_id": _pick("house_id"),
         }
+    if tool_name == "delete_farm_knowledge":
+        # farm_id: LLM이 검색 결과에서 읽은 farm_id를 사용하면 안 됨 → 항상 auth 컨텍스트 값 사용
+        return {
+            "file_name": _pick("file_name"),
+            "farm_id": default_args.get("farm_id"),
+        }
     if tool_name == "get_farm_realtime_data":
-        farm_id = _pick("farm_id")
-        house_id = _pick("house_id")
+        # farm_id: 세션(default_tool_args)값 강제 사용
+        # LLM이 RAG 메타데이터의 farm_id=0 등을 참조해 잘못 오버라이드하는 것을 방지
         default_farm_id = default_args.get("farm_id")
         default_house_id = default_args.get("house_id")
+        farm_id = _coerce_numeric_id(default_farm_id, default_farm_id)
 
-        # LLM이 farm_name 같은 비정수 값을 farm_id로 넣는 경우를 방지한다.
-        farm_id = _coerce_numeric_id(farm_id, default_farm_id)
-        house_id = _coerce_numeric_id(house_id, default_house_id)
+        # house_id: LLM이 선택 가능 (특정 재배사 조회 허용), 미지정 시 세션값 사용
+        # house_id=0은 생육정보 전용 공통재배사이므로 센서/릴레이 데이터 없음 → 세션값으로 보정
+        house_id = _coerce_numeric_id(_pick("house_id"), default_house_id)
+        if str(house_id or "").strip() == "0":
+            logger.warning(
+                f"[보안] get_farm_realtime_data house_id=0(공통재배사) 차단: "
+                f"LLM요청=0 → 세션값={default_house_id} 강제 적용"
+            )
+            house_id = default_house_id
+
+        if farm_id != _coerce_numeric_id(args.get("farm_id"), default_farm_id):
+            logger.warning(
+                f"[보안] get_farm_realtime_data farm_id 오버라이드 차단: "
+                f"LLM요청={args.get('farm_id')} → 세션값={farm_id} 강제 적용"
+            )
+
+        # data_type: 'relay'/'sensor' 단독 요청 시 AI분석·알고리즘 추천값 없어 모델이 hallucination
+        # → 항상 'all'로 강제하여 완전한 데이터(센서+릴레이+AI권장) 반환
+        data_type = "all"
 
         return {
             "house_id": house_id,
             "farm_id": farm_id,
-            "data_type": _pick("data_type", "all"),
+            "data_type": data_type,
         }
     return args
 
@@ -1125,6 +1237,18 @@ def _refine_farm_knowledge(tool_result: str) -> str:
     if not results or not isinstance(results, list):
         return tool_result[:_MAX_TOTAL_REFINED] if len(tool_result or "") > _MAX_TOTAL_REFINED else (tool_result or "")
 
+    # 동일 content가 document/farm_knowledge 두 컬렉션에 중복 포함되는 경우 제거
+    seen_contents: set = set()
+    deduped = []
+    for item in results:
+        content_key = (item.get("content") or "")[:100]
+        if content_key and content_key in seen_contents:
+            continue
+        seen_contents.add(content_key)
+        deduped.append(item)
+    data["results"] = deduped
+    results = deduped
+
     for item in results:
         # 1) 네비게이션 잡음 제거
         content = item.get("content", "")
@@ -1310,6 +1434,11 @@ def clean_llm_response(response_text):
     response_text = re.sub(r'</?think[^>]*>', '', response_text, flags=re.IGNORECASE)
     response_text = re.sub(r'<meta[^>]*>', '', response_text, flags=re.IGNORECASE)
 
+    # 1-2. SPECIAL 내부 마커 제거 (모델이 학습으로 재생성하는 내부 도구 호출 마커 필터)
+    # 예: <SPECIAL_27>search_farm_knowledge[ARGS]{"query": "..."} 형태
+    response_text = re.sub(r'<SPECIAL_\d+>.*?(?=\n|$)', '', response_text, flags=re.DOTALL | re.IGNORECASE)
+    response_text = re.sub(r'</?SPECIAL[^>]*>', '', response_text, flags=re.IGNORECASE)
+
     # 2. 마크다운 헤더 제거
     for hdr in (r"^(### )?Final Answer:?\s*", r"^(### )?Final Output:?\s*",
                 r"^(### )?Response:?\s*", r"^(### )?Answer:?\s*", r"^(### )?결론:?\s*"):
@@ -1473,6 +1602,40 @@ def _filter_greeting_turns(history: List[Dict[str, str]]) -> List[Dict[str, str]
 
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 일반 대화 여부 판단
+# 요구/지시(데이터 조회·장치 제어·정보 요청)가 아닌 순수 대화인지 판단
+# True → 이전(직전) 대화 맥락 사용 가능 (인사·감탄·짧은 반응·이전 대화 참조 등)
+# False → 최신 데이터/도구 우선, 이전 assistant 맥락 미포함 (기본값)
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+_CONVERSATIONAL_EXTRA_RE = re.compile(
+    r"^(맞아|그렇구나|알겠어|알겠습니다|응|넵|네|오케이|오케|ㅎㅎ|ㅋㅋ|ㄱㄱ"
+    r"|잘됐|잘됐네|좋네|좋겠다|다행|아 그래|그렇군|그렇구|알았어|이해"
+    r"|그랬군|저런|힘드셨겠다|괜찮아|괜찮으세요)"
+)
+_PREV_CONV_REF_WORDS = ("아까", "방금", "이전에", "그때 뭐", "지난번", "이전 대화", "아까 말한", "방금 말한")
+
+
+def _is_conversational_query(query: str) -> bool:
+    """요구/지시가 아닌 순수 일반 대화인지 판단한다.
+    True: 인사·감탄·짧은 반응·이전 대화 참조 등 → 직전 대화 맥락 포함 가능
+    False(기본): 데이터 조회·장치 제어·정보 요청 등 → 최신 도구 데이터 우선, assistant 맥락 불포함
+    """
+    q = (query or "").strip()
+    if not q:
+        return True
+    # 인사 패턴 (기존 GREETING_RE)
+    if len(q) <= 30 and _GREETING_RE.search(q):
+        return True
+    # 추가 감탄/반응 패턴 (짧은 경우만)
+    if len(q) <= 20 and _CONVERSATIONAL_EXTRA_RE.search(q):
+        return True
+    # 이전 대화 참조 질문 ("아까 뭐라고 했어?", "방금 말한 온도가 뭐야?")
+    if any(ref in q for ref in _PREV_CONV_REF_WORDS):
+        return True
+    return False
+
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 농장 기본 정보 텍스트 생성
 # DB에서 농장/재배사 정보를 조회하여 system prompt에 삽입할 텍스트 생성
 # Returns: str | None: 농장 정보 텍스트
@@ -1608,6 +1771,12 @@ def get_llm_response_with_tools(
             _user_query_stripped = (user_query or "").strip()
             # [FIX] 현재 질문에 "N번" 참조가 있으면 이전 답변의 목록을 보존해야 함
             _user_refs_number = bool(re.search(r'\d+번', _user_query_stripped))
+            # 쿼리 유형 판단: 요구/지시(False) vs 일반 대화(True)
+            # 요구/지시: assistant 이전 응답 맥락 불포함 (최신 도구 데이터 우선)
+            # 일반 대화: 직전 대화 맥락 포함 (대화 연속성 유지)
+            _query_is_conversational = _is_conversational_query(user_query)
+            if not _query_is_conversational:
+                logger.info("[멀티턴] 요구/지시 쿼리 감지 → assistant 이전 맥락 제외 (최신 데이터 우선)")
             _context_parts = []
             _skip_next_assistant = False
             _prev_assistant_prefix = ""  # 직전 assistant 답변의 앞부분 (유사도 비교용)
@@ -1666,20 +1835,24 @@ def get_llm_response_with_tools(
                 # 길이 제한 (참고용이므로 핵심 주제만 보존)
                 # [FIX] 파일 목록/번호가 포함된 답변은 800자까지 확대 (사용자가 "N번" 참조 시 필요)
                 if role == "assistant":
-                    # [FIX] 릴레이 제어 결과 답변 축약: LLM이 이전 제어 답변을 복사하여
-                    # 도구 없이 거짓 응답하는 문제 방지. 상세 데이터를 제거하여
-                    # LLM이 반드시 control_relay 도구를 호출하도록 유도
+                    # 요구/지시 쿼리: assistant 이전 응답 전체 제외 (최신 도구 우선)
+                    # → LLM이 이전 제어/조회 결과를 복사하는 문제 근본 차단
+                    if not _query_is_conversational:
+                        continue
+                    # 일반 대화 쿼리: 릴레이 제어 결과는 내용 완전 대체 (복사 방지)
                     _relay_result_indicators = ("릴레이", "AI 환경 판단", "AI 권장", "반대로")
                     _relay_done_indicators = ("설정했어요", "변경했어요", "제어했어요", "반전했어요", "전환했어요",
-                                              "설정했습니다", "변경했습니다", "제어했습니다")
+                                              "설정했습니다", "변경했습니다", "제어했습니다",
+                                              "켜드렸어요", "꺼드렸어요", "켰어요", "껐어요",
+                                              "켜줬어요", "꺼줬어요", "켜드렸습니다", "꺼드렸습니다",
+                                              "성공적으로 켜", "성공적으로 꺼")
                     _is_relay_result = (
                         any(ind in content for ind in _relay_result_indicators)
                         and any(ind in content for ind in _relay_done_indicators)
                     )
                     if _is_relay_result:
-                        # 릴레이 제어 답변은 첫 줄만 보존 (상세 표/데이터 제거)
-                        _first_line = content.split("\n")[0][:80]
-                        content = f"{_first_line} (상세 생략 — 새 요청 시 control_relay 도구 호출 필수)"
+                        # 릴레이 제어 답변: 내용 완전 대체 (복사 유발 문구 제거)
+                        content = "(이전 제어 완료)"
                     else:
                         # 파일 목록 패턴 감지: "1. file.pdf" 또는 "| 1 | file.pdf |" 형식
                         _has_numbered_list = bool(
@@ -1699,17 +1872,25 @@ def get_llm_response_with_tools(
 
             if _context_parts:
                 _prev_context = "\n".join(_context_parts)
-                messages.append({
-                    "role": "system",
-                    "content": (
+                if _query_is_conversational:
+                    # 일반 대화: 이전 대화 맥락 포함 (대화 연속성 유지)
+                    _ctx_header = (
                         "[직전 대화 맥락 - 대화 연속성 참고용]\n"
                         "아래는 직전 대화예요. 현재 질문이 직전 대화와 자연스럽게 이어지는 경우(예: '그럼', '그래서', '또', '다른') 맥락을 이어서 답변하세요.\n"
                         "중요: 이 맥락은 참고용이며, 파일/학습/자료/문서/데이터 관련 질문에는 반드시 search_farm_knowledge 도구를 사용하세요.\n"
                         "이전 대화에서 비슷한 답변이 있더라도, 도구를 다시 호출하여 최신 정보를 검색하세요.\n"
                         "이전 답변을 그대로 복사하거나 반복하는 것은 금지합니다.\n"
-                        "**장치 제어/릴레이 제어 관련 (절대 규칙)**: 이전 대화에서 릴레이 제어 성공 답변이 있더라도, 사용자가 다시 제어를 요청하면 반드시 control_relay 도구를 새로 호출하세요. 이전 제어 결과를 복사하여 도구 없이 답변하면 실제 하드웨어가 제어되지 않습니다.\n"
-                        f"{_prev_context}"
                     )
+                else:
+                    # 요구/지시: 사용자 이전 질문만 포함 (대화 흐름 파악용), AI 이전 답변 없음
+                    _ctx_header = (
+                        "[직전 대화 흐름 - 사용자 질문 맥락 파악용]\n"
+                        "아래는 사용자의 이전 질문 흐름이에요. 현재 요청의 맥락(예: '그럼', '그것도')을 파악하는 데만 참고하세요.\n"
+                        "중요: 반드시 도구를 호출하여 최신 데이터로 응답하세요. 이전 답변 내용은 포함되지 않으므로 절대 추측하거나 복사하지 마세요.\n"
+                    )
+                messages.append({
+                    "role": "system",
+                    "content": _ctx_header + _prev_context
                 })
 
             logger.info(
@@ -1735,26 +1916,41 @@ def get_llm_response_with_tools(
         # 도구 호출 반복 (최대 max_tool_iterations회)
         _prev_had_tool_calls = True  # 첫 반복은 항상 도구 제공
         _empty_response_count = 0  # 빈 응답 연속 횟수
+        _ctrl_retry_sent = False        # 제어 요청 강제 재시도 중복 방지 플래그
+        _relay_done_retry_sent = False  # relay_done_phrases 강제 재시도 중복 방지 플래그
+        _short_answer_retry_sent = False  # 짧은 답변 재시도 중복 방지 플래그
         for iteration in range(max_tool_iterations):
             logger.info(f"[Tool Use] --- 반복 {iteration + 1}/{max_tool_iterations} ---")
 
             # 진행 상태 보고: LLM 호출 시작
             if iteration == 0:
-                _report_progress(progress_queue, "질문을 분석하고 필요한 정보를 파악하고 있습니다...", "llm_analyzing",
+                _report_progress(progress_queue,
+                                 f"질문을 분석하고 필요한 도구/데이터를 파악하고 있습니다... (1/{max_tool_iterations}단계)",
+                                 "llm_analyzing",
+                                 iteration=iteration + 1, max_iterations=max_tool_iterations)
+            elif iteration == max_tool_iterations - 1:
+                _report_progress(progress_queue,
+                                 f"수집된 정보를 종합하여 최종 답변을 작성하고 있습니다... ({iteration + 1}/{max_tool_iterations}단계)",
+                                 "llm_generating",
                                  iteration=iteration + 1, max_iterations=max_tool_iterations)
             else:
-                _report_progress(progress_queue, "수집된 정보를 바탕으로 답변을 작성하고 있습니다...", "llm_generating",
+                _report_progress(progress_queue,
+                                 f"추가 데이터를 조회하고 답변을 구성하고 있습니다... ({iteration + 1}/{max_tool_iterations}단계)",
+                                 "llm_generating",
                                  iteration=iteration + 1, max_iterations=max_tool_iterations)
 
             # LLM 호출
             # 이전 반복에서 도구 호출이 있었으면 → 다음에도 도구 제공 (다단계 호출 지원)
             # 이전 반복에서 도구 호출이 없었으면 → 도구 제거 (최종 답변 생성)
+            # GPU 탑재 비율 기반 컨텍스트 옵션 (모델·VRAM 변경 시 자동 적용)
+            _ctx_opts = _get_model_ctx_options(model_name, NUM_PREDICT)
             if _prev_had_tool_calls:
-                # 첫 반복은 도구 호출 전용 (보통 50~100토큰) → 384로 제한하여 생성 시간 절약
-                iter_num_predict = 384 if iteration == 0 else NUM_PREDICT
+                # 전 반복 동일 num_predict 사용 (첫 반복 384 최적화 제거)
+                # 이전 설계: iteration==0에서 384/512로 제한 → 직접 답변 시 잘림, 복잡 쿼리 품질 저하
+                iter_num_predict = _ctx_opts["num_predict"]
                 iter_tools = tools
             else:
-                iter_num_predict = NUM_PREDICT
+                iter_num_predict = _ctx_opts["num_predict"]
                 iter_tools = None
             t_iter = time.time()
             response = _ollama_chat(
@@ -1766,8 +1962,8 @@ def get_llm_response_with_tools(
                     "top_p": 0.9,
                     "top_k": 40,
                     "num_predict": iter_num_predict,
-                    "num_ctx": NUM_CTX,
-                    "think": False,
+                    "num_ctx": _ctx_opts["num_ctx"],
+                    "think": False,   # 항상 적용: 모든 모델 thinking 비활성화
                 },
                 keep_alive='1h'
             )
@@ -1811,7 +2007,6 @@ def get_llm_response_with_tools(
                 )
 
                 # 1차 반복에서 도구 호출 없이 토큰 한도 도달 → 도구 사용 강제 재시도
-                # LLM이 도구 대신 직접 답변을 생성하다 num_predict(384) 한도에 걸린 경우
                 if iteration == 0 and _done_reason == "length" and iter_tools is not None:
                     # 릴레이 제어 키워드가 있으면 control_relay 도구를 명시적으로 안내
                     _relay_hint_keywords = ("반대로", "반전", "셋팅", "설정", "제어", "켜", "꺼", "가동", "중지")
@@ -1838,16 +2033,57 @@ def get_llm_response_with_tools(
                     _prev_had_tool_calls = True
                     continue
 
-                # 릴레이 제어 답변인데 도구를 사용하지 않은 경우 로깅 (모니터링 전용)
-                # 컨텍스트 절삭(Change 4)으로 근본 원인은 해결됨 — 여기서는 감지·기록만 수행
+                # 릴레이 제어 답변인데 도구를 사용하지 않은 경우 → 강제 재시도
+                # LLM이 이전 대화의 제어 응답을 복사하여 도구 없이 답하는 문제 방지
                 _stripped = final_answer.strip()
-                _relay_done_phrases = ("설정했어요", "설정했습니다", "제어했어요", "제어했습니다", "완료했어요", "완료했습니다", "변경했어요", "변경했습니다", "반전했어요", "반전했습니다", "전환했어요", "전환했습니다")
+                _relay_done_phrases = ("설정했어요", "설정했습니다", "제어했어요", "제어했습니다", "완료했어요", "완료했습니다", "변경했어요", "변경했습니다", "반전했어요", "반전했습니다", "전환했어요", "전환했습니다",
+                                       "켜드렸어요", "꺼드렸어요", "켰어요", "껐어요",
+                                       "켜줬어요", "꺼줬어요", "켜드렸습니다", "꺼드렸습니다",
+                                       "성공적으로 켜", "성공적으로 꺼")
                 _has_relay_done = any(phrase in _stripped for phrase in _relay_done_phrases)
-                if _has_relay_done and "control_relay" not in _tools_used:
+                if _has_relay_done and "control_relay" not in _tools_used and iteration < max_tool_iterations - 1 and not _relay_done_retry_sent:
+                    _relay_done_retry_sent = True
                     logger.warning(
-                        f"[Tool Use] 릴레이 제어 답변인데 control_relay 미호출 감지 (반복{iteration + 1}) — "
-                        f"모니터링 기록 (강제 재시도 없음)"
+                        f"[Tool Use] 릴레이 제어 답변인데 control_relay 미호출 감지 (반복{iteration + 1}) — 강제 재시도"
                     )
+                    messages.pop()
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"이전 대화의 답변을 복사하지 말고, "
+                            f"반드시 control_relay 도구를 호출하여 실제 제어를 수행하세요. "
+                            f"원래 요청: \"{user_query}\""
+                        ),
+                    })
+                    _prev_had_tool_calls = True
+                    continue
+
+                # 도구 결과 raw 덤프 감지: LLM이 get_farm_realtime_data 결과를 그대로 텍스트 출력하고 종료
+                # 키워드 기반이 아닌 응답 내용 기반으로 감지 — 모든 장치·상황에 동일 적용
+                _data_dump_detected = _stripped.startswith('{"content":')
+                if (
+                    _data_dump_detected
+                    and "get_farm_realtime_data" in _tools_used
+                    and "control_relay" not in _tools_used
+                    and iteration < max_tool_iterations - 1
+                    and not _ctrl_retry_sent
+                ):
+                    _ctrl_retry_sent = True
+                    logger.warning(
+                        f"[Tool Use] 도구 결과 raw 덤프 응답 감지 (반복{iteration + 1}) → 강제 재시도"
+                    )
+                    messages.pop()
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"도구 결과를 그대로 출력하지 말고, 원래 요청을 처리하세요. "
+                            f"제어 요청이라면 control_relay 도구를 호출하고, "
+                            f"조회 요청이라면 한국어로 자연스럽게 설명하세요. "
+                            f"원래 요청: \"{user_query}\""
+                        ),
+                    })
+                    _prev_had_tool_calls = True
+                    continue
 
                 # JSON 형식 응답 감지: LLM이 도구 결과 JSON을 그대로 텍스트로 출력한 경우
                 # 예: {"content": "[생육 RAG] ..."} 또는 {"success": true, ...}
@@ -1875,12 +2111,15 @@ def get_llm_response_with_tools(
 
                 # 도구 호출 후 짧은 답변 감지: 도구 결과를 종합하지 않고 대기/예고 문구만 출력한 경우
                 # 예: "재배차이점을 분석하기 전에 먼저 관련 지식을 검색해볼게요." (도구 결과가 이미 있는데 종합하지 않음)
+                # _short_answer_retry_sent 플래그로 최대 1회만 발동 (중복 재시도 시 컨텍스트 오염 방지)
                 if (
                     _tools_used  # 도구를 1개 이상 호출한 상태
                     and len(_stripped) < 80  # 짧은 답변
                     and iteration < max_tool_iterations - 1
                     and not _stripped.startswith("|")  # 마크다운 표 시작이 아닌 경우
+                    and not _short_answer_retry_sent
                 ):
+                    _short_answer_retry_sent = True
                     logger.warning(
                         f"[Tool Use] 도구 호출 후 짧은 답변 감지 (반복{iteration + 1}, {len(_stripped)}자) → "
                         f"도구 결과 기반 답변 재생성 유도: \"{_stripped[:40]}...\""
@@ -1992,11 +2231,15 @@ def get_llm_response_with_tools(
                 logger.info(f"[도구결과] [{tc_idx}/{len(tool_calls)}] {tool_name} ({tool_elapsed:.1f}s) 결과길이={result_len}자")
 
                 # 진행 상태 보고: 도구 실행 완료
+                _result_len = len(tool_result or "")
+                _done_detail = f"{tool_elapsed:.1f}초, {_result_len}자 수신"
                 _report_progress(
                     progress_queue,
-                    f"{display_name} 완료 ({tool_elapsed:.1f}초)",
+                    f"{display_name} 완료 ({_done_detail})",
                     "tool_done",
                     tool_name=tool_name,
+                    iteration=iteration + 1,
+                    max_iterations=max_tool_iterations,
                 )
                 logger.info(f"[도구결과데이터] {tool_name}:\n{tool_result}")
 
