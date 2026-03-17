@@ -29,14 +29,21 @@ server {
 		proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 	}
 
-		location /ai-api/ {
-			proxy_pass http://localhost:8002/;
-			proxy_set_header Host $host;
-			proxy_set_header X-Real-IP $remote_addr;
-			proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-			proxy_read_timeout 900s;
-			proxy_send_timeout 900s;
-			send_timeout 900s;
-			client_max_body_size 100M;
-		}
+	location /ai-api/ {
+		proxy_pass http://localhost:8002/;
+		proxy_set_header Host $host;
+		proxy_set_header X-Real-IP $remote_addr;
+		proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+		proxy_read_timeout 900s;
+		proxy_send_timeout 900s;
+		send_timeout 900s;
+		client_max_body_size 100M;
+
+		# SSE(Server-Sent Events) 스트리밍 필수 설정
+		proxy_buffering off;
+		proxy_cache off;
+		proxy_set_header Connection '';
+		proxy_http_version 1.1;
+		chunked_transfer_encoding off;
 	}
+}

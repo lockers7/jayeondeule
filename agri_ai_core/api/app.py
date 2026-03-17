@@ -356,6 +356,7 @@ async def query_llm(request: QueryRequest, _=Depends(verify_api_key)):
             house_name=request.house_name,
             session_id=session_id,
             speech_style=request.speech_style or "male",
+            auth_farm_id=request.auth_farm_id,
         ):
             result_data = chunk
             break
@@ -436,6 +437,7 @@ async def query_llm_stream(request: QueryRequest, _=Depends(verify_api_key)):
             house_name=request.house_name,
             session_id=session_id,
             speech_style=request.speech_style or "male",
+            auth_farm_id=request.auth_farm_id,
         ):
             yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
@@ -569,6 +571,24 @@ async def rag_save(request: RagSaveRequest, _=Depends(verify_api_key)):
             message=f"RAG 저장 중 오류: {str(e)}",
             processing_time=round(time.time() - start, 3),
         )
+
+
+# ============================================================
+# 대화 이력 조회 API
+# ============================================================
+
+@app.get("/api/v1/conversation/history")
+async def get_conversation_history(session_id: str, limit: int = 10, _=Depends(verify_api_key)):
+    """세션의 최근 대화 이력을 반환합니다 (최대 limit 개 Q&A 쌍)."""
+    try:
+        from agri_ai_core.src.ai.conversation_store import get_conversation_store
+        store = get_conversation_store()
+        rows = store.get_recent_turns(session_id, n_turns=limit)
+        # [{"role": "user"|"assistant", "content": "..."}] 형태
+        return {"success": True, "history": rows, "session_id": session_id}
+    except Exception as e:
+        logger.warning(f"[대화이력조회] 실패: {e}")
+        return {"success": False, "history": [], "session_id": session_id}
 
 
 # ============================================================

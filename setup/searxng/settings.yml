@@ -71,3 +71,19 @@ engines:
     engine: google_scholar
     shortcut: gs
     disabled: true
+
+  # 기본 활성화되는 엔진 중 검색 품질 저하 엔진 명시 비활성화
+  - name: brave
+    engine: brave
+    shortcut: br
+    disabled: true
+
+  - name: yahoo
+    engine: yahoo
+    shortcut: yh
+    disabled: true
+
+  - name: qwant
+    engine: qwant
+    shortcut: qw
+    disabled: true

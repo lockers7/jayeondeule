@@ -330,6 +330,7 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None, origin
 
         if farm_id is not None:
             metadata["farm_id"] = farm_id
+            metadata["house_id"] = "0"  # 학습 데이터는 항상 house_id='0'(공통)으로 저장
 
         if crop_name:
             metadata["crop_name"] = crop_name
@@ -340,6 +341,20 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None, origin
 
         if isinstance(chunks_result, dict) and not chunks_result.get("success", False):
             logger.warning(f"문서 청크 저장 실패: {chunks_result.get('error', '알 수 없는 오류')}")
+
+        # 청크가 0개이면 텍스트 추출 실패 (이미지 PDF 등) — 메타데이터도 저장하지 않고 조기 반환
+        if result["chunks_stored"] == 0:
+            logger.warning(f"[문서학습] 청크 0개 — 텍스트 추출 실패 (이미지 PDF일 수 있음): {filename}")
+            result["error"] = (
+                f"텍스트를 추출할 수 없습니다: {_orig_name or filename}\n"
+                f"이미지 스캔 PDF인 경우 서버에 tesseract-ocr 설치 후 재시도하세요: "
+                f"sudo apt-get install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-kor"
+            )
+            result["message"] = (
+                f"학습 실패 — 이미지 PDF에서 텍스트를 추출하지 못했습니다: {_orig_name or filename}\n"
+                f"(OCR 지원 필요: sudo apt-get install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-kor)"
+            )
+            return result
 
         # 2. 구조화된 정보 추출 및 저장
         #    embed_text 호출이 있으므로, enrichment 스레드 시작 전에 완료하여 Ollama GPU 경합 방지

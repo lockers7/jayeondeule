@@ -130,8 +130,11 @@ DEVICE_ALIASES = {
     '배출': 'exhaust_fan_flag',
     # lighting_flag 별칭
     '조명': 'lighting_flag',
+    'light': 'lighting_flag',
+    'lighting': 'lighting_flag',
     # irrigation_flag 별칭
     '관수': 'irrigation_flag',
+    'irrigation': 'irrigation_flag',
     # indoor_heater_flag 별칭
     '실내히터': 'indoor_heater_flag',
     '열풍기': 'indoor_heater_flag',

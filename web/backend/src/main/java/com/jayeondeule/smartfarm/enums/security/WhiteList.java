@@ -6,7 +6,7 @@ import lombok.Getter;
 public enum WhiteList {
     LOGIN("/api/auth", "POST"),
     REGISTER("/api/users", "POST"),
-    ID_DUPLICATION_CHECK("/api/users/id-dupl-check**", "GET"),
+    ID_DUPLICATION_CHECK("/api/users/id-dupl-check", "GET"),
     ERROR("/error", "GET"),
     SERVER_TIME("/serverTime", "GET");
 

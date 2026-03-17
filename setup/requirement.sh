@@ -140,7 +140,7 @@ esac
 log_info "[5/5] 핵심 패키지 검증..."
 
 FAILED=0
-for pkg in pydantic fastapi psycopg2 numpy pandas ollama chromadb uvicorn dotenv requests apscheduler faster_whisper edge_tts av; do
+for pkg in pydantic fastapi psycopg2 numpy pandas ollama chromadb uvicorn dotenv requests apscheduler faster_whisper edge_tts av fitz PyPDF2; do
     if python3 -c "import $pkg" 2>/dev/null; then
         echo "  [OK] $pkg"
     else

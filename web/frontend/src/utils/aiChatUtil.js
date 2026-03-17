@@ -19,7 +19,7 @@ export async function sendQuery(query, farmId, houseId, farmName, houseName, ses
  * SSE 스트리밍 질의 — 실시간 status/token/done 이벤트를 콜백으로 전달
  * @returns {AbortController} 스트림 중단용 컨트롤러
  */
-export function streamQuery(query, farmId, houseId, farmName, houseName, sessionId, speechStyle, callbacks) {
+export function streamQuery(query, farmId, houseId, farmName, houseName, sessionId, speechStyle, callbacks, authFarmId) {
     const {onStatus, onToken, onDone, onError} = callbacks;
     const controller = new AbortController();
 
@@ -34,6 +34,7 @@ export function streamQuery(query, farmId, houseId, farmName, houseName, session
             farm_name: farmName,
             house_name: houseName,
             speech_style: speechStyle || "male",
+            auth_farm_id: authFarmId !== undefined ? authFarmId : null,
         }),
         signal: controller.signal,
     })
@@ -92,7 +93,7 @@ export function streamQuery(query, farmId, houseId, farmName, houseName, session
     return controller;
 }
 
-export async function ragPerform(files, farmId) {
+export async function ragPerform(files, farmId, signal) {
     const formData = new FormData();
     for (const file of files) {
         formData.append("files", file);
@@ -100,14 +101,21 @@ export async function ragPerform(files, farmId) {
     if (farmId) formData.append("farm_id", farmId);
     return aiApi.post("/api/v1/rag/perform", formData, {
         headers: {"Content-Type": "multipart/form-data"},
+        signal,
     });
 }
 
-export async function ragSave(messages, farmId, farmName, houseName) {
+export async function ragSave(messages, farmId, farmName, houseName, signal) {
     return aiApi.post("/api/v1/rag/save", {
         messages,
         farm_id: farmId,
         farm_name: farmName,
         house_name: houseName,
+    }, {signal});
+}
+
+export async function getConversationHistory(sessionId, limit = 10) {
+    return aiApi.get("/api/v1/conversation/history", {
+        params: { session_id: sessionId, limit },
     });
 }
