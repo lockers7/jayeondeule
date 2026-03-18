@@ -126,6 +126,7 @@ export default function HouseManagementPage() {
         setEditForm({
             farmId: activeFarmId,
             housId: house.housId,
+            newHousId: String(house.housId),
             housName: house.housName || "",
             cropKind: house.cropKind || "10",
             cropLvel: String(house.cropLvel ?? 2),
@@ -144,8 +145,13 @@ export default function HouseManagementPage() {
 
     const saveEdit = async () => {
         try {
-            const {operationMode, ...rest} = editForm;
-            await patchHouse({...rest, ...modeToFields(operationMode)});
+            const {operationMode, newHousId, ...rest} = editForm;
+            const patchData = {...rest, ...modeToFields(operationMode)};
+            // ADMIN: 재배사번호 변경 시 newHousId 전달
+            if (isAdmin && newHousId !== String(editForm.housId)) {
+                patchData.newHousId = Number(newHousId);
+            }
+            await patchHouse(patchData);
             setEditId(null);
             setModalMsg({title: "알림", body: "재배사 정보가 수정되었습니다.", variant: "success"});
             setShowModal(true);
@@ -391,29 +397,37 @@ export default function HouseManagementPage() {
                     <table className="table table-bordered mb-0" style={{fontSize: "0.875rem"}}>
                         <tbody>
                         <tr>
+                            <th style={{backgroundColor: "#e9ecef", width: "14%"}} className="text-center align-middle">재배사번호</th>
+                            <td style={{width: "19%"}}>
+                                <Form.Control size="sm" name="newHousId" value={editForm.newHousId}
+                                              onChange={handleEditChange}
+                                              type="number" min={isAdmin ? "0" : "1"}
+                                              readOnly={!isAdmin}
+                                              style={!isAdmin ? {backgroundColor: "#e9ecef"} : {}}/>
+                            </td>
                             <th style={{backgroundColor: "#e9ecef", width: "14%"}} className="text-center align-middle">재배사명</th>
                             <td style={{width: "19%"}}>
                                 <Form.Control size="sm" name="housName" value={editForm.housName}
                                               onChange={handleEditChange}/>
                             </td>
                             <th style={{backgroundColor: "#e9ecef", width: "14%"}} className="text-center align-middle">작물</th>
-                            <td style={{width: "19%"}}>
+                            <td style={{width: "20%"}}>
                                 <Form.Select size="sm" name="cropKind" value={editForm.cropKind}
                                              onChange={handleEditChange}>
                                     {CROP_KIND_OPTIONS.map((o) =>
                                         <option key={o.value} value={o.value}>{o.label}</option>)}
                                 </Form.Select>
                             </td>
-                            <th style={{backgroundColor: "#e9ecef", width: "14%"}} className="text-center align-middle">생육단계</th>
-                            <td style={{width: "20%"}}>
+                        </tr>
+                        <tr>
+                            <th style={{backgroundColor: "#e9ecef"}} className="text-center align-middle">생육단계</th>
+                            <td>
                                 <Form.Select size="sm" name="cropLvel" value={editForm.cropLvel}
                                              onChange={handleEditChange}>
                                     {CROP_LVEL_OPTIONS.map((o) =>
                                         <option key={o.value} value={o.value}>{o.label}</option>)}
                                 </Form.Select>
                             </td>
-                        </tr>
-                        <tr>
                             <th style={{backgroundColor: "#e9ecef"}} className="text-center align-middle">운용방식</th>
                             <td>
                                 <Form.Select size="sm" name="operationMode" value={editForm.operationMode}

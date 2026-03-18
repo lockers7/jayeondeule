@@ -21,6 +21,7 @@ export default function ChatSidebar({
 
     // 관리자 전용: LLM 모델 관리
     const userInfo = useSelector((state) => state.auth?.userInfo);
+    const globalSelectedFarm = useSelector((state) => state.auth.selectedFarm);
     const isAdmin = userInfo?.authLvel === "ADMIN";
     const [availableModels, setAvailableModels] = useState([]);
     const [currentModel, setCurrentModel] = useState("");
@@ -90,7 +91,13 @@ export default function ChatSidebar({
                     const list = res.data.content || [];
                     setFarms(list);
                     if (list.length > 0 && !selectedFarm) {
-                        setSelectedFarm(list[0]);
+                        // Redux에 선택된 농장이 있으면 그것을 기본값으로 사용
+                        if (globalSelectedFarm) {
+                            const match = list.find(f => f.farmId === globalSelectedFarm.farmId);
+                            setSelectedFarm(match || list[0]);
+                        } else {
+                            setSelectedFarm(list[0]);
+                        }
                     }
                 })
                 .catch(err => { console.error(err); });

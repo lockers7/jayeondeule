@@ -17,4 +17,5 @@ public class FarmHousePatchDTO {
     private boolean mnulCtrlFlag; // 릴레이 수동 조작 여부
     private String ctrlType; // 제어 유형 (algorithm, ai)
     private int cropLvel; // 생육단계 (1:발이기, 2:생육기, 3:수확기, 4:휴지기)
+    private Long newHousId; // 관리자 전용: 재배사 번호 변경 (null이면 변경 안 함)
 }
