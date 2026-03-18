@@ -86,16 +86,21 @@ public class HouseController {
 
     //재배사 정보 수정
     @PatchMapping("/{houseId}")
-    public void patchFarmHouse(@RequestBody FarmHousePatchDTO modifiedInfo,
+    public ResponseEntity<Void> patchFarmHouse(@RequestBody FarmHousePatchDTO modifiedInfo,
                                @PathVariable Long farmId,
                                @PathVariable Long houseId,
                                @AuthenticationPrincipal UserClaimDTO userInfo) {
-        if (userInfo != null) {
-            if (userInfo.getAuthLvel().equals(AuthLvel.ADMIN) ||
-                    userService.getUserOwnedFarmId(userInfo.getUserId()) == farmId) {
-                houseService.patchHouse(modifiedInfo, farmId, houseId);
-            }
+        if (userInfo == null) return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        // housId 변경은 ADMIN만 허용
+        if (!userInfo.getAuthLvel().equals(AuthLvel.ADMIN)) {
+            modifiedInfo.setNewHousId(null);
         }
+        if (userInfo.getAuthLvel().equals(AuthLvel.ADMIN) ||
+                userService.getUserOwnedFarmId(userInfo.getUserId()) == farmId) {
+            houseService.patchHouse(modifiedInfo, farmId, houseId);
+            return ResponseEntity.ok().build();
+        }
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
     }
 
     //재배사 삭제 — soft delete (ADMIN: 모든 농장, FARM_ADMIN: 자기 농장만)

@@ -1,19 +1,11 @@
-import React, {useEffect, useState} from "react";
+import React from "react";
 import {Nav, NavDropdown} from "react-bootstrap";
 import {Link} from "react-router-dom";
-import {getFarmList} from "../../../utils/farmUtil.js";
+import {useSelector} from "react-redux";
 
 export default function AdminNavLink() {
-    const [farmId, setFarmId] = useState(null);
-
-    useEffect(() => {
-        getFarmList(0, 1)
-            .then((res) => {
-                const first = res.data?.content?.[0];
-                if (first?.farmId != null) setFarmId(first.farmId);
-            })
-            .catch(() => {});
-    }, []);
+    const selectedFarm = useSelector(state => state.auth.selectedFarm);
+    const farmId = selectedFarm?.farmId ?? null;
 
     return (
         <>

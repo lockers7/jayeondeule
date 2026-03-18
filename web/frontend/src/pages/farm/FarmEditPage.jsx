@@ -13,6 +13,7 @@ import AlertModal from "../../components/common/AlertModal.jsx";
 
 export default function FarmEditPage() {
     const userInfo = useSelector((state) => state.auth?.userInfo);
+    const globalSelectedFarm = useSelector((state) => state.auth.selectedFarm);
     const isAdmin = userInfo?.authLvel === "ADMIN";
     const isFarmAdmin = userInfo?.authLvel === "FARM_ADMIN";
 
@@ -53,8 +54,11 @@ export default function FarmEditPage() {
                     const listRes = await getFarmList(0, 100);
                     const farms = listRes.data?.content || [];
                     setFarmList(farms);
-                    if (farms.length > 0) {
-                        const farmRes = await getFarm({farmId: farms[0].farmId});
+                    // Redux에 선택된 농장이 있으면 그것을 기본 로드, 없으면 첫 번째 농장
+                    const targetId = globalSelectedFarm?.farmId
+                        || (farms.length > 0 ? farms[0].farmId : null);
+                    if (targetId) {
+                        const farmRes = await getFarm({farmId: targetId});
                         setFarm(farmRes.data);
                     }
                 } else {

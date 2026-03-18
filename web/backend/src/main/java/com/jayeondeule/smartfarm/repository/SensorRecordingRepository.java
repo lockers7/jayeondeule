@@ -18,6 +18,10 @@ public interface SensorRecordingRepository extends JpaRepository<SensorRecording
     @Query("DELETE FROM SensorRecording s WHERE s.farmId = :farmId AND s.housId = :housId")
     void deleteAllByFarmIdAndHousId(@Param("farmId") long farmId, @Param("housId") long housId);
 
+    @Modifying
+    @Query(value = "UPDATE sensor_l_recording SET hous_id = :newHousId WHERE farm_id = :farmId AND hous_id = :oldHousId", nativeQuery = true)
+    void updateHousId(@Param("farmId") long farmId, @Param("oldHousId") long oldHousId, @Param("newHousId") long newHousId);
+
     @Query(value = """
             WITH data AS (
             SELECT *
