@@ -4,13 +4,14 @@ import { Spinner, Alert, Button } from "react-bootstrap";
 /**
  * 재배사별 카메라 MJPEG 실시간 스트림 컴포넌트
  *
- * - houseId에 해당하는 /camera/{houseId}/ 경로로 연결
- * - 카메라 미설치 시: RPi에서 "카메라 없음" 안내 이미지 반환 (오류 없음)
- * - 카메라 오프라인(RPi 미응답) 시: 오프라인 안내 표시
+ * URL: /camera/{farmId}/{houseId}/
+ * - 카메라 있음: 실시간 MJPEG 스트림
+ * - 카메라 없음: RPi에서 "카메라 없음" 안내 이미지 반환 (오류 없음)
+ * - RPi 오프라인: 오프라인 안내 표시
  * - MJPEG 실패 시: 2초 스냅샷 폴백
  */
-export default function CameraView({ houseId }) {
-    const baseUrl = `/camera/${houseId}`;
+export default function CameraView({ farmId, houseId }) {
+    const baseUrl = `/camera/${farmId}/${houseId}`;
     const [status, setStatus] = useState("connecting"); // connecting | ok | error | offline
     const [useSnapshot, setUseSnapshot] = useState(false);
     const imgRef = useRef(null);
@@ -21,16 +22,12 @@ export default function CameraView({ houseId }) {
         setStatus("connecting");
         setUseSnapshot(false);
         clearInterval(snapshotTimer.current);
-    }, [houseId]);
 
-    // 오프라인 여부 확인
-    useEffect(() => {
         fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(5000) })
-            .then(r => { if (r.ok) setStatus(prev => prev === "connecting" ? "connecting" : prev); })
+            .then(r => { if (!r.ok) throw new Error(); })
             .catch(() => setStatus("offline"));
-    }, [houseId]);
+    }, [farmId, houseId]);
 
-    // MJPEG 스트림 상태 감시
     const handleStreamLoad = () => setStatus("ok");
     const handleStreamError = () => {
         setStatus("error");
@@ -46,7 +43,7 @@ export default function CameraView({ houseId }) {
         refresh();
         snapshotTimer.current = setInterval(refresh, 2000);
         return () => clearInterval(snapshotTimer.current);
-    }, [useSnapshot, houseId]);
+    }, [useSnapshot, farmId, houseId]);
 
     const handleRetry = () => {
         setStatus("connecting");
