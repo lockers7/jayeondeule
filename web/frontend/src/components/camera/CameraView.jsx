@@ -2,15 +2,33 @@ import React, { useState, useEffect, useRef } from "react";
 import { Spinner, Alert, Button } from "react-bootstrap";
 
 /**
- * 라즈베리파이 카메라 MJPEG 실시간 스트림 컴포넌트
- * - /camera/stream : MJPEG 연속 스트림
- * - /camera/snapshot : 단일 프레임 (스트림 실패 시 폴백)
+ * 재배사별 카메라 MJPEG 실시간 스트림 컴포넌트
+ *
+ * - houseId에 해당하는 /camera/{houseId}/ 경로로 연결
+ * - 카메라 미설치 시: RPi에서 "카메라 없음" 안내 이미지 반환 (오류 없음)
+ * - 카메라 오프라인(RPi 미응답) 시: 오프라인 안내 표시
+ * - MJPEG 실패 시: 2초 스냅샷 폴백
  */
-export default function CameraView() {
+export default function CameraView({ houseId }) {
+    const baseUrl = `/camera/${houseId}`;
     const [status, setStatus] = useState("connecting"); // connecting | ok | error | offline
     const [useSnapshot, setUseSnapshot] = useState(false);
     const imgRef = useRef(null);
     const snapshotTimer = useRef(null);
+
+    // 재배사 변경 시 초기화
+    useEffect(() => {
+        setStatus("connecting");
+        setUseSnapshot(false);
+        clearInterval(snapshotTimer.current);
+    }, [houseId]);
+
+    // 오프라인 여부 확인
+    useEffect(() => {
+        fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(5000) })
+            .then(r => { if (r.ok) setStatus(prev => prev === "connecting" ? "connecting" : prev); })
+            .catch(() => setStatus("offline"));
+    }, [houseId]);
 
     // MJPEG 스트림 상태 감시
     const handleStreamLoad = () => setStatus("ok");
@@ -23,33 +41,23 @@ export default function CameraView() {
     useEffect(() => {
         if (!useSnapshot) return;
         const refresh = () => {
-            if (imgRef.current) {
-                imgRef.current.src = `/camera/snapshot?t=${Date.now()}`;
-            }
+            if (imgRef.current) imgRef.current.src = `${baseUrl}/snapshot?t=${Date.now()}`;
         };
         refresh();
         snapshotTimer.current = setInterval(refresh, 2000);
         return () => clearInterval(snapshotTimer.current);
-    }, [useSnapshot]);
+    }, [useSnapshot, houseId]);
 
-    // 스트림 재시도
     const handleRetry = () => {
         setStatus("connecting");
         setUseSnapshot(false);
     };
 
-    // 카메라 오프라인 여부 확인
-    useEffect(() => {
-        fetch("/camera/health")
-            .then(r => { if (!r.ok) throw new Error(); })
-            .catch(() => setStatus("offline"));
-    }, []);
-
     if (status === "offline") {
         return (
             <Alert variant="warning" className="mt-3">
                 <Alert.Heading>카메라 오프라인</Alert.Heading>
-                <p>라즈베리파이 카메라 서버에 연결할 수 없습니다. 장치 전원 및 네트워크 상태를 확인해 주세요.</p>
+                <p className="mb-0">재배사 {houseId}번 라즈베리파이에 연결할 수 없습니다. 장치 전원 및 네트워크 상태를 확인해 주세요.</p>
             </Alert>
         );
     }
@@ -58,16 +66,12 @@ export default function CameraView() {
         <div style={{ padding: "12px 0" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
                 <span style={{ fontSize: "13px", color: "#6c757d" }}>
-                    {useSnapshot ? "스냅샷 모드 (2초 갱신)" : "실시간 MJPEG 스트림"}
+                    재배사 {houseId}번 카메라 {useSnapshot ? "— 스냅샷 모드 (2초 갱신)" : "— 실시간 스트림"}
                 </span>
                 <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                    {status === "ok" && (
-                        <span style={{ fontSize: "12px", color: "#28a745" }}>● 연결됨</span>
-                    )}
+                    {status === "ok" && <span style={{ fontSize: "12px", color: "#28a745" }}>● 연결됨</span>}
                     {status === "error" && (
-                        <Button size="sm" variant="outline-secondary" onClick={handleRetry}>
-                            스트림 재시도
-                        </Button>
+                        <Button size="sm" variant="outline-secondary" onClick={handleRetry}>재시도</Button>
                     )}
                 </div>
             </div>
@@ -77,41 +81,28 @@ export default function CameraView() {
                     <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "#1a1a1a" }}>
                         <div style={{ textAlign: "center", color: "#fff" }}>
                             <Spinner animation="border" variant="light" size="sm" />
-                            <div style={{ marginTop: "8px", fontSize: "13px" }}>카메라 연결 중...</div>
+                            <div style={{ marginTop: "8px", fontSize: "13px" }}>연결 중...</div>
                         </div>
                     </div>
                 )}
-
                 {!useSnapshot ? (
                     <img
-                        src="/camera/stream"
-                        alt="카메라 실시간 영상"
+                        src={`${baseUrl}/stream`}
+                        alt={`재배사 ${houseId}번 카메라`}
                         onLoad={handleStreamLoad}
                         onError={handleStreamError}
-                        style={{
-                            maxWidth: "100%",
-                            width: "100%",
-                            height: "auto",
-                            display: "block",
-                            opacity: status === "ok" ? 1 : 0,
-                        }}
+                        style={{ maxWidth: "100%", width: "100%", height: "auto", display: "block", opacity: status === "ok" ? 1 : 0 }}
                     />
                 ) : (
                     <img
                         ref={imgRef}
-                        alt="카메라 스냅샷"
+                        alt={`재배사 ${houseId}번 스냅샷`}
                         onLoad={() => setStatus("ok")}
                         onError={() => setStatus("error")}
                         style={{ maxWidth: "100%", width: "100%", height: "auto", display: "block" }}
                     />
                 )}
             </div>
-
-            {status === "error" && !useSnapshot && (
-                <Alert variant="danger" className="mt-2" style={{ fontSize: "13px" }}>
-                    스트림 연결 오류 — 스냅샷 모드로 전환됩니다.
-                </Alert>
-            )}
         </div>
     );
 }
