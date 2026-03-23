@@ -287,7 +287,7 @@ export default function FarmMonitoringPage() {
                         </>
                     }
                 >
-                    <CameraView />
+                    {selectedHouse && <CameraView houseId={selectedHouse.housId} />}
                 </Tab>
             </Tabs>
         </Container>
