@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Button, Form, Alert } from "react-bootstrap";
-import { useSelector } from "react-redux";
+import { useSelector, useDispatch } from "react-redux";
+import { setSelectedFarm as setGlobalSelectedFarm } from "../../store/auth/authSlice.js";
 import { getFarmList, getMyFarm } from "../../utils/farmUtil.js";
 import { getHouseList } from "../../utils/houseUtil.js";
 
@@ -15,6 +16,7 @@ export default function ChatSidebar({
     modelAlert,
     setModelAlert,
 }) {
+    const dispatch = useDispatch();
     const [farms, setFarms] = useState([]);
     const [houses, setHouses] = useState([]);
     const [region, setRegion] = useState("확인 중...");
@@ -23,6 +25,7 @@ export default function ChatSidebar({
     const userInfo = useSelector((state) => state.auth?.userInfo);
     const globalSelectedFarm = useSelector((state) => state.auth.selectedFarm);
     const isAdmin = userInfo?.authLvel === "ADMIN";
+    const isSysMonitor = userInfo?.authLvel === "SYS_MONITOR";
     const [availableModels, setAvailableModels] = useState([]);
     const [currentModel, setCurrentModel] = useState("");
 
@@ -83,9 +86,9 @@ export default function ChatSidebar({
             });
     };
 
-    // 농장 목록 로드 (admin: 전체 농장, 비admin: 소속 농장)
+    // 농장 목록 로드 (admin/시스템모니터링: 전체 농장, 비admin: 소속 농장)
     useEffect(() => {
-        if (isAdmin) {
+        if (isAdmin || isSysMonitor) {
             getFarmList(0, 100)
                 .then((res) => {
                     const list = res.data.content || [];
@@ -113,7 +116,7 @@ export default function ChatSidebar({
                 })
                 .catch(err => { console.error(err); });
         }
-    }, [isAdmin]);
+    }, [isAdmin, isSysMonitor]);
 
     // 재배사 목록 로드 (농장 선택 변경 시)
     useEffect(() => {
@@ -131,7 +134,13 @@ export default function ChatSidebar({
 
     const handleFarmChange = (e) => {
         const farm = farms.find((f) => String(f.farmId) === e.target.value);
-        if (farm) setSelectedFarm(farm);
+        if (farm) {
+            setSelectedFarm(farm);
+            // ADMIN/SYS_MONITOR: 농장 콤보 변경 시 헤더 농장명(Redux)도 동기화
+            if (isAdmin || isSysMonitor) {
+                dispatch(setGlobalSelectedFarm({ farmId: farm.farmId, farmName: farm.farmName }));
+            }
+        }
     };
 
     const handleHouseChange = (e) => {

@@ -18,29 +18,10 @@ EMBEDDING_MODEL_NAME = "bge-m3"
 STATS_INTERVAL_MINUTES = 10
 AI_CONTROL_LOOP_DELAY_SEC = 30    # AI 순환 제어: 재배사 간 대기 시간(초)
 TRAINING_SCHEDULE_TIME = ["09:00", "21:00"]
-NUM_PREDICT = 3072
-NUM_PREDICT_REWRITE = 1536
-NUM_CTX = 6144  # Ollama 컨텍스트 윈도우 크기 (기본 4096 → 6144, 도구 3건+대화 컨텍스트 여유 확보)
-
-# GPU 탑재 비율별 num_ctx / num_predict 기준표 (1차 기준)
-# (gpu_ratio_min, num_ctx, num_predict)
-GPU_CTX_TIERS = [
-    (0.95, 12288, 4096),   # 95~100% GPU 탑재
-    (0.70, 10240, 4096),   # 70~95%  GPU 탑재
-    (0.50,  8192, 4096),   # 50~70%  GPU 탑재
-    (0.00,  6144, 3072),   # 0~50%   GPU 탑재 → 보수적 설정
-]
-
-# 잔여 VRAM(MiB) 기반 num_ctx 상한 (2차 안전장치)
-# KV 캐시 VRAM 초과 방지: GPU 비율과 무관하게 절대 여유 VRAM이 부족하면 num_ctx 제한
-# VRAM 업그레이드 시 자동으로 더 큰 설정 적용 (코드 변경 불필요)
-# (free_vram_mib_min, num_ctx_cap, num_predict_cap)
-FREE_VRAM_CTX_TIERS = [
-    (4096, 12288, 4096),   # 여유 VRAM ≥ 4GB: 대형 컨텍스트 허용
-    (2048, 10240, 4096),   # 여유 VRAM ≥ 2GB
-    (1024,  8192, 4096),   # 여유 VRAM ≥ 1GB
-    (   0,  6144, 3072),   # 여유 VRAM < 1GB: 원래 설정 유지 (KV 캐시 초과 방지)
-]
+NUM_PREDICT = 8192   # LLM 응답 최대 토큰 (A4 ~5장, RAG 요약/삭제/릴레이 제어 충분)
+NUM_PREDICT_REWRITE = 2048
+NUM_CTX = 16384      # 컨텍스트 윈도우 (고정: GPU 100% 유지, CPU 오프로딩 방지)
+NUM_PREDICT_TOOL_CALL = 512  # 도구 호출 반복 시 출력 제한 (도구 JSON만 생성)
 
 try:
     _default_learning_time = TRAINING_SCHEDULE_TIME[0]

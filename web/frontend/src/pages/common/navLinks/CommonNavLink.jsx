@@ -1,4 +1,4 @@
-// 우측 상단 고정 메뉴: [농장관리(FARM_ADMIN)] | 재배사관리 | 사용자관리 | 로그아웃
+// 우측 상단 고정 메뉴: [농장관리(FARM_ADMIN=농장관리자)] | 재배사관리 | 사용자관리 | 로그아웃
 import React, { useEffect } from "react";
 import { Nav } from "react-bootstrap";
 import { useDispatch, useSelector } from "react-redux";

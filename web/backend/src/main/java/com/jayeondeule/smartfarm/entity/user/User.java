@@ -31,7 +31,7 @@ public class User {
 
     @Column(nullable = false)
     @Convert(converter = AuthLvelConverter.class)
-    private AuthLvel authLvel = AuthLvel.MONITOR; // 권한 (ADMIN, FARM_ADMIN, HOUS_MANAGER, MONITOR)
+    private AuthLvel authLvel = AuthLvel.FARM_MONITOR; // 권한 (ADMIN, SYS_MONITOR, FARM_ADMIN, FARM_MONITOR)
 
     @Column
     private String hpNo; // 전화번호

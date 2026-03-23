@@ -116,9 +116,12 @@ def _build_default_tool_args(user_query, farm_id, house_id, auth_farm_id=None):
             detected_file_name = _fn_m.group(1)
         logger.info(f"[기본인자] 파일명 감지: {detected_file_name}")
 
-    # auth_farm_id: RAG 파일 목록/삭제 권한 결정용
+    # auth_farm_id: RAG 파일 검색/목록 권한 결정용
     # 시스템관리자(auth_farm_id=None) → 전체 농장 접근, 농장사용자 → 자기 농장만
     _auth_fid = str(auth_farm_id) if auth_farm_id is not None else None
+    # session_farm_id: 현재 UI에서 선택된 농장 (삭제 시 기준)
+    # 시스템관리자도 선택된 농장 기준으로 삭제 (전체 삭제 방지)
+    _session_fid = str(farm_id) if farm_id is not None else _auth_fid
 
     return {
         "search_web": {"query": user_query},
@@ -126,11 +129,11 @@ def _build_default_tool_args(user_query, farm_id, house_id, auth_farm_id=None):
             "query": user_query,
             "n_results": 5,
             "file_name": detected_file_name,
-            "farm_id": _auth_fid,
+            "farm_id": _session_fid,
             "house_id": str(house_id) if house_id is not None else None,
         },
         "delete_farm_knowledge": {
-            "farm_id": _auth_fid,
+            "farm_id": _session_fid,
         },
         "get_farm_realtime_data": {
             "farm_id": str(farm_id) if farm_id is not None else None,

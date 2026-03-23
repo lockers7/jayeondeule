@@ -12,13 +12,12 @@ import {useDispatch, useSelector} from "react-redux";
 import {logout} from "../../store/auth/authSlice.js";
 
 // 권한 레벨 (AuthLvel enum — API 응답값 기준)
-// admin(code < 1000): ADMIN, MONITOR
-// 비admin(code >= 1000): FARM_ADMIN, HOUS_MANAGER
+// ADMIN(0)=시스템관리자, SYS_MONITOR(1)=시스템모니터링, FARM_ADMIN(2)=농장관리자, FARM_MONITOR(3)=농장모니터링
 const AUTH_LVEL_OPTIONS = [
     {value: "ADMIN", label: "시스템관리자"},
-    {value: "MONITOR", label: "모니터링"},
+    {value: "SYS_MONITOR", label: "시스템모니터링"},
     {value: "FARM_ADMIN", label: "농장관리자"},
-    {value: "HOUS_MANAGER", label: "재배사관리자"},
+    {value: "FARM_MONITOR", label: "농장모니터링"},
 ];
 
 // 코드 테이블 값 (code_m_info, code_id='pstn')

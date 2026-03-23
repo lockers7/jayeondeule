@@ -36,7 +36,10 @@ function saveMessagesToSession(msgs) {
 
 export default function AiChatPage() {
     const userInfo = useSelector(state => state.auth.userInfo);
-    const isMonitor = userInfo?.authLvel === "MONITOR";
+    const globalSelectedFarm = useSelector(state => state.auth.selectedFarm);
+    const isAdmin = userInfo?.authLvel === "ADMIN";
+    const isSysMonitor = userInfo?.authLvel === "SYS_MONITOR";
+    const isMonitor = isSysMonitor || userInfo?.authLvel === "FARM_MONITOR";
 
     const [messages, setMessages] = useState(() => loadMessagesFromSession() || []);
     const [historyLoaded, setHistoryLoaded] = useState(() => !!sessionStorage.getItem(MESSAGES_STORAGE_KEY));
@@ -45,6 +48,17 @@ export default function AiChatPage() {
     const [ragLoading, setRagLoading] = useState("");
     const [selectedFarm, setSelectedFarm] = useState(null);
     const [selectedHouse, setSelectedHouse] = useState(null);
+
+    // ADMIN/SYS_MONITOR: Redux selectedFarm 변경 시 로컬 상태 동기화 (헤더 선택 농장 = 절대 기준)
+    useEffect(() => {
+        if ((isAdmin || isSysMonitor) && globalSelectedFarm?.farmId != null) {
+            setSelectedFarm(prev => {
+                if (prev?.farmId === globalSelectedFarm.farmId) return prev;
+                setSelectedHouse(null); // 농장 변경 시 재배사 선택 초기화
+                return globalSelectedFarm;
+            });
+        }
+    }, [isAdmin, isSysMonitor, globalSelectedFarm?.farmId]);
     const [speechStyle, setSpeechStyle] = useState(() => localStorage.getItem("ai_chat_speech_style") || "male");
     const [modelAlert, setModelAlert] = useState(null);
     const fileInputRef = useRef(null);
@@ -66,7 +80,7 @@ export default function AiChatPage() {
     // 농장 사용자: farm_id 기반 고정 세션 (브라우저 무관, 동일 농장 = 동일 세션)
     useEffect(() => {
         if (!userInfo) return;
-        if (userInfo.authLvel !== "ADMIN" && userInfo.farmId) {
+        if (userInfo.authLvel !== "ADMIN" && userInfo.authLvel !== "SYS_MONITOR" && userInfo.farmId) {
             const farmSid = `farm_${userInfo.farmId}`;
             setSessionId(prev => prev === farmSid ? prev : farmSid);
         }
@@ -98,9 +112,9 @@ export default function AiChatPage() {
             .catch(() => { /* 서버 이력 없으면 빈 화면 유지 */ });
     }, [sessionId, historyLoaded]);
 
-    // ADMIN만 localStorage에 세션 저장 (농장 사용자는 farm_id로 고정이므로 저장 불필요)
+    // ADMIN/SYS_MONITOR만 localStorage에 세션 저장 (농장 사용자는 farm_id로 고정이므로 저장 불필요)
     useEffect(() => {
-        if (sessionId && (!userInfo || userInfo.authLvel === "ADMIN")) {
+        if (sessionId && (!userInfo || userInfo.authLvel === "ADMIN" || userInfo.authLvel === "SYS_MONITOR")) {
             localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
         }
     }, [sessionId, userInfo?.authLvel]);
@@ -144,8 +158,8 @@ export default function AiChatPage() {
         let tokenStarted = false;
 
         // auth_farm_id: RAG 파일 목록/삭제 권한 결정용
-        // 시스템관리자 → null(전체 접근), 농장사용자 → 자기 farmId
-        const authFarmId = (!userInfo || userInfo.authLvel === "ADMIN")
+        // 시스템관리자 → null(전체 접근), SYS_MONITOR → null(전체 접근), 농장사용자 → 자기 farmId
+        const authFarmId = (!userInfo || userInfo.authLvel === "ADMIN" || userInfo.authLvel === "SYS_MONITOR")
             ? null
             : userInfo.farmId ? String(userInfo.farmId) : null;
 
@@ -347,8 +361,8 @@ export default function AiChatPage() {
         setIsLoading(false);
         setMessages([]);
         sessionStorage.removeItem(MESSAGES_STORAGE_KEY);
-        if (!userInfo || userInfo.authLvel === "ADMIN") {
-            // ADMIN: 새 UUID 세션 생성 (현행)
+        if (!userInfo || userInfo.authLvel === "ADMIN" || userInfo.authLvel === "SYS_MONITOR") {
+            // ADMIN/SYS_MONITOR: 새 UUID 세션 생성
             const nextSessionId = generateSessionId();
             setSessionId(nextSessionId);
             localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);

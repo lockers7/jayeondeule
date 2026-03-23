@@ -68,7 +68,7 @@ except Exception:
     ollama = None
 
 from agri_ai_core.logs import setup_logger
-from agri_ai_core.config import settings, NUM_PREDICT, NUM_CTX, get_ollama_url, get_model_name, GPU_CTX_TIERS, FREE_VRAM_CTX_TIERS
+from agri_ai_core.config import settings, NUM_PREDICT, NUM_CTX, NUM_PREDICT_TOOL_CALL, get_ollama_url, get_model_name
 from agri_ai_core.src.utils.validators import is_true
 from agri_ai_core.src.ai.utils import GREETING_RE as _GREETING_RE
 
@@ -81,6 +81,7 @@ _TOOL_DISPLAY_NAMES = {
     "search_web": "웹 검색",
     "fetch_url_content": "웹페이지 내용 수집",
     "control_relay": "장치 제어",
+    "search_gas_price": "유가 정보 조회",
 }
 
 
@@ -103,6 +104,11 @@ def _build_tool_detail_message(tool_name: str, tool_args: dict) -> str:
     elif tool_name == "fetch_url_content":
         url = tool_args.get("url", "")[:40]
         return f"{url}"
+    elif tool_name == "search_gas_price":
+        qt = tool_args.get("query_type", "")
+        sido = tool_args.get("sido", "")
+        label = {"avg_national": "전국 평균", "avg_sido": "시도별", "avg_sigun": "시군구별", "low_price": "최저가"}.get(qt, qt)
+        return f"{sido} {label} 유가 (Opinet)" if sido else f"{label} 유가 (Opinet)"
     elif tool_name == "control_relay":
         device = tool_args.get("device_flag", "")
         action = tool_args.get("action", "")
@@ -197,41 +203,13 @@ def _get_free_vram_mib() -> int:
         return 0
 
 def _get_model_ctx_options(model_name: str, num_predict: int) -> dict:
-    """GPU 탑재 비율(1차) + 잔여 VRAM(2차 안전장치) 기반 최적 num_ctx / num_predict 반환.
-    - num_ctx : KV 캐시 → VRAM 직접 소비 → VRAM 안전장치 적용 (min)
-    - num_predict : 출력 길이 → VRAM 추가 소비 없음 → GPU 비율만으로 결정 (VRAM cap 미적용)
-    VRAM 업그레이드 시 코드 변경 없이 자동으로 더 큰 설정 적용.
-    """
-    # 1차: GPU 탑재 비율 기준
-    ratio = _get_model_gpu_ratio(model_name)
-    ratio_ctx, ratio_predict = NUM_CTX, num_predict
-    for min_ratio, ctx, predict in GPU_CTX_TIERS:
-        if ratio >= min_ratio:
-            ratio_ctx, ratio_predict = ctx, max(num_predict, predict)
-            break
-
-    # 2차: 잔여 VRAM 안전장치 — num_ctx(KV 캐시)만 제한, num_predict는 제외
-    free_mib = _get_free_vram_mib()
-    free_ctx = NUM_CTX
-    for min_mib, ctx, _predict in FREE_VRAM_CTX_TIERS:
-        if free_mib >= min_mib:
-            free_ctx = ctx
-            break
-
-    # num_ctx: VRAM 안전장치 적용 / num_predict: GPU 비율 기준값 그대로 사용
-    final_ctx     = min(ratio_ctx, free_ctx)
-    final_predict = ratio_predict
-    logger.debug(
-        f"[CTX옵션] {model_name} GPU={ratio*100:.1f}% freeVRAM={free_mib}MiB "
-        f"→ GPU기준(ctx={ratio_ctx}/predict={ratio_predict}) VRAM기준(ctx={free_ctx}) "
-        f"→ 최종 num_ctx={final_ctx} num_predict={final_predict}"
-    )
-    return {"num_ctx": final_ctx, "num_predict": final_predict}
+    """num_ctx 고정(16384) — GPU 100% 유지, CPU 오프로딩/모델 언로드 방지."""
+    return {"num_ctx": NUM_CTX, "num_predict": num_predict}
 
 # 환경 변수 설정
 os.environ['OLLAMA_MAX_LOADED_MODELS'] = '1'
 os.environ['OLLAMA_NUM_PARALLEL'] = '2'
-os.environ['OLLAMA_KEEP_ALIVE'] = '1h'
+os.environ['OLLAMA_KEEP_ALIVE'] = '-1'  # 모델 상시 GPU 상주 (언로드 방지)
 _SEARCH_WEB_REFINE_MAX_RESULTS = max(1, int(os.getenv("SEARCH_WEB_REFINE_MAX_RESULTS", "5")))
 _SEARCH_WEB_REFINE_DESC_CHARS = max(80, int(os.getenv("SEARCH_WEB_REFINE_DESC_CHARS", "200")))
 _SEARCH_WEB_REFINE_CONTENT_CHARS = max(120, int(os.getenv("SEARCH_WEB_REFINE_CONTENT_CHARS", "400")))
@@ -735,6 +713,7 @@ def _normalize_tool_arguments(
     tool_name: str,
     tool_args: Dict[str, Any],
     default_tool_args: Optional[Dict[str, Dict[str, Any]]] = None,
+    user_query: str = "",
 ) -> Dict[str, Any]:
     args = tool_args or {}
     default_args = (default_tool_args or {}).get(tool_name, {}) or {}
@@ -753,44 +732,70 @@ def _normalize_tool_arguments(
             "n_results": _pick("n_results"),
             "auto_fetch_max": _pick("auto_fetch_max"),
         }
+    # 시스템관리자 farm_id 결정: LLM 대화에서 구체적 농장 지정 → 해당 농장, 미지정 → 세션 선택 농장
+    def _resolve_admin_farm_id(session_fid, llm_fid_raw):
+        """시스템관리자(세션=0)일 때 LLM 판단값으로 farm_id 결정.
+        숫자 → 그대로, 농장명 → DB 역조회, 무효 → 세션값 유지."""
+        if str(session_fid) != "0":
+            return session_fid  # 농장사용자는 세션값 강제
+        _llm_fid = str(llm_fid_raw or "").strip()
+        if not _llm_fid or _llm_fid == "0":
+            return session_fid
+        if _llm_fid.isdigit():
+            return _llm_fid  # LLM이 숫자 farm_id 전달 (정상)
+        # 농장명(문자열) → farm_id 역조회
+        try:
+            from agri_ai_core.src.ai.tools_executor import _get_farm_name, _farm_name_cache, _farm_name_cache_loaded
+            if not _farm_name_cache_loaded:
+                _get_farm_name("0")  # 캐시 로드 트리거
+            for fid, fname in _farm_name_cache.items():
+                if fname == _llm_fid or _llm_fid in fname:
+                    logger.info(f"[farm_id해석] 농장명 '{_llm_fid}' → farm_id={fid}")
+                    return fid
+        except Exception as e:
+            logger.warning(f"[farm_id해석] 농장명 역조회 실패: {e}")
+        return session_fid  # 매칭 실패 → 세션값 유지
+
     if tool_name == "search_farm_knowledge":
-        # farm_id: LLM 오버라이드 허용하지 않음 → 항상 auth 컨텍스트 값 사용
-        # (시스템관리자=None→전체, 농장사용자=자기농장ID→필터)
-        return {
-            "query": _pick("query"),
-            "n_results": _pick("n_results", 3),
+        _tool_query = _pick("query") or ""
+        _meta_kws = ("파일", "학습", "목록", "리스트", "자료", "문서", "업로드", "RAG", "데이터")
+        _user_has_meta = any(kw in (user_query or "") for kw in _meta_kws)
+        _query_has_meta = any(kw in _tool_query for kw in _meta_kws)
+        _session_fid = default_args.get("farm_id")
+        _farm_id = _resolve_admin_farm_id(_session_fid, args.get("farm_id"))
+        result = {
+            "query": _tool_query,
+            "n_results": _pick("n_results", 5),
             "file_name": _pick("file_name"),
-            "farm_id": default_args.get("farm_id"),
+            "farm_id": _farm_id,
             "house_id": _pick("house_id"),
         }
+        if _user_has_meta and not _query_has_meta:
+            result["_meta_hint"] = True
+        return result
     if tool_name == "delete_farm_knowledge":
-        # farm_id: LLM이 검색 결과에서 읽은 farm_id를 사용하면 안 됨 → 항상 auth 컨텍스트 값 사용
+        _session_fid = default_args.get("farm_id")
+        _farm_id = _resolve_admin_farm_id(_session_fid, args.get("farm_id"))
         return {
             "file_name": _pick("file_name"),
-            "farm_id": default_args.get("farm_id"),
+            "farm_id": _farm_id,
         }
     if tool_name == "get_farm_realtime_data":
-        # farm_id: 세션(default_tool_args)값 강제 사용
-        # LLM이 RAG 메타데이터의 farm_id=0 등을 참조해 잘못 오버라이드하는 것을 방지
         default_farm_id = default_args.get("farm_id")
         default_house_id = default_args.get("house_id")
-        farm_id = _coerce_numeric_id(default_farm_id, default_farm_id)
+
+        # farm_id 결정: _resolve_admin_farm_id 공용 로직 사용
+        # 시스템관리자(세션=0) → LLM 판단값 허용, 농장사용자 → 세션값 강제
+        farm_id = _resolve_admin_farm_id(default_farm_id, args.get("farm_id"))
 
         # house_id: LLM이 선택 가능 (특정 재배사 조회 허용), 미지정 시 세션값 사용
         # house_id=0은 생육정보 전용 공통재배사이므로 센서/릴레이 데이터 없음 → 세션값으로 보정
         house_id = _coerce_numeric_id(_pick("house_id"), default_house_id)
         if str(house_id or "").strip() == "0":
-            logger.warning(
-                f"[보안] get_farm_realtime_data house_id=0(공통재배사) 차단: "
-                f"LLM요청=0 → 세션값={default_house_id} 강제 적용"
+            logger.info(
+                f"[farm_id] house_id=0(공통재배사) → 세션값={default_house_id} 보정"
             )
             house_id = default_house_id
-
-        if farm_id != _coerce_numeric_id(args.get("farm_id"), default_farm_id):
-            logger.warning(
-                f"[보안] get_farm_realtime_data farm_id 오버라이드 차단: "
-                f"LLM요청={args.get('farm_id')} → 세션값={farm_id} 강제 적용"
-            )
 
         # data_type: 'relay'/'sensor' 단독 요청 시 AI분석·알고리즘 추천값 없어 모델이 hallucination
         # → 항상 'all'로 강제하여 완전한 데이터(센서+릴레이+AI권장) 반환
@@ -800,6 +805,14 @@ def _normalize_tool_arguments(
             "house_id": house_id,
             "farm_id": farm_id,
             "data_type": data_type,
+        }
+    if tool_name == "search_gas_price":
+        return {
+            "query_type": _pick("query_type", "avg_national"),
+            "sido": _pick("sido"),
+            "sigun": _pick("sigun"),
+            "prodcd": _pick("prodcd", "B027"),
+            "fuel_name": _pick("fuel_name"),
         }
     return args
 
@@ -1031,8 +1044,12 @@ def _refine_search_web(tool_result: str, user_query: str) -> tuple:
 
     lines.append(
         "지시: 위 검색 결과를 종합하여 사용자의 원래 질문에 정확히 맞는 답변을 작성하세요. "
-        "사용자가 'N곳/N개' 등 구체적 개수를 요청했다면 반드시 해당 개수만큼 번호를 매겨 리스트로 답변하세요. "
-        "검색 결과에서 핵심 수치, 날짜, 사실 정보를 추출하여 답변에 반드시 포함하세요."
+        "사용자가 'N곳/N개' 등 구체적 개수를 요청했다면 해당 개수만큼 번호를 매겨 리스트로 답변하되, "
+        "검색 결과에서 확인된 것이 부족하면 확인된 것만 답변하고 나머지는 '추가 검색이 필요합니다'라고 안내하세요. "
+        "검색 결과에서 핵심 수치, 날짜, 사실 정보를 추출하여 답변에 반드시 포함하세요. "
+        "절대 규칙: 위 검색 결과의 제목/URL/요약/본문에 명시적으로 언급된 장소명, 시설명, 주소만 사용하세요. "
+        "검색 결과에 없는 장소, 시설, 공원, 교육장, 주소, 전화번호를 만들어내는 것은 엄격히 금지합니다. "
+        "검색 결과에 없는 정보를 추측하거나 일반 지식으로 보충하지 마세요."
     )
 
     refined_text = "\n".join(lines)
@@ -1221,12 +1238,14 @@ def _refine_farm_knowledge(tool_result: str) -> str:
     - description이 content와 중복이면 제거
     - 불필요한 metadata 키 제거
     - 네비게이션 잡음 제거
-    - content 개별 항목 500자 제한 + 전체 결과 1500자 제한 (num_ctx 포화 방지)
-    기존: 정제 후에도 ~5800자/건 → 다중 호출 시 num_ctx 초과로 다른 도구 결과 누락
-    변경: 핵심 내용만 보존하여 1500자 이내로 제한, 다른 도구 결과와 공존 가능
+    - content 개별 항목 5000자 제한 + 전체 결과 20000자 제한 (A4 30장 대응)
+    기존: 1500자 제한 → A4 1장도 못 채우는 빈약한 답변
+    변경: 20000자로 확장하여 대용량 문서 학습 내용 기반 상세 답변 지원
     """
-    _MAX_CONTENT_PER_ITEM = 500   # 개별 항목 content 최대 길이
-    _MAX_TOTAL_REFINED = 1500     # 정제 결과 전체 최대 길이
+    # 참조 자료 크기 고정 — num_ctx(16384)에서 시스템프롬프트+대화+도구결과+답변 공간 확보
+    # 시스템프롬프트 ~3000토큰 + 대화 ~2000토큰 + 답변 ~8192토큰 = ~13000 → 참조 자료 ~3000토큰 ≈ 4500자
+    _MAX_TOTAL_REFINED = 4500   # 전체 참조 자료 최대 (3/14 안정화 1500 → RAG 대응 4500)
+    _MAX_CONTENT_PER_ITEM = 1500  # 개별 항목 content 최대
 
     try:
         data = json.loads(tool_result)
@@ -1249,50 +1268,62 @@ def _refine_farm_knowledge(tool_result: str) -> str:
     data["results"] = deduped
     results = deduped
 
-    for item in results:
-        # 1) 네비게이션 잡음 제거
-        content = item.get("content", "")
-        if content:
-            content = _strip_nav_noise(content)
-            # 2) 개별 content 길이 제한
-            if len(content) > _MAX_CONTENT_PER_ITEM:
-                content = content[:_MAX_CONTENT_PER_ITEM] + "..."
-            item["content"] = content
+    # 결과가 많으면(파일명 검색 등) content를 하나로 합쳐 전달 — 메타데이터 오버헤드 제거
+    if len(results) > 5:
+        merged_content = ""
+        first_meta = {}
+        for item in results:
+            content = _strip_nav_noise(item.get("content", ""))
+            if content:
+                merged_content += content + "\n\n"
+            if not first_meta:
+                first_meta = {k: v for k, v in item.get("metadata", {}).items()
+                              if k not in _UNNECESSARY_META_KEYS}
+        if len(merged_content) > _MAX_TOTAL_REFINED:
+            merged_content = merged_content[:_MAX_TOTAL_REFINED] + "..."
+        data["results"] = [{"content": merged_content.strip(), "metadata": first_meta}]
+        logger.info(f"[RAG정제] {len(results)}건 → 1건 병합 ({len(merged_content)}자)")
+    else:
+        for item in results:
+            # 1) 네비게이션 잡음 제거
+            content = item.get("content", "")
+            if content:
+                content = _strip_nav_noise(content)
+                # 2) 개별 content 길이 제한
+                if len(content) > _MAX_CONTENT_PER_ITEM:
+                    content = content[:_MAX_CONTENT_PER_ITEM] + "..."
+                item["content"] = content
 
-        # 3) description이 content와 중복이면 제거
-        meta = item.get("metadata", {})
-        desc = meta.get("description", "")
-        if desc and content and desc[:50] in content:
-            del meta["description"]
+            # 3) description이 content와 중복이면 제거
+            meta = item.get("metadata", {})
+            desc = meta.get("description", "")
+            if desc and content and desc[:50] in content:
+                del meta["description"]
 
-        # 4) 불필요한 metadata 키 제거
-        for key in _UNNECESSARY_META_KEYS:
-            meta.pop(key, None)
+            # 4) 불필요한 metadata 키 제거
+            for key in _UNNECESSARY_META_KEYS:
+                meta.pop(key, None)
 
     # [FIX] file_list가 있으면 (메타 질문: 학습/파일/목록 등) 파일 목록을 우선 포함
-    # → LLM이 학습 자료 리스트를 답변할 수 있도록 file_list 정보를 보존
+    # file_list 중심으로 전달하고, results(검색 내용)는 최소화하여 LLM이 file_list에 집중하도록 함
     _file_list = data.get("file_list")
     if _file_list and isinstance(_file_list, list):
-        _file_summary = "학습된 파일 목록:\n"
-        for idx, f in enumerate(_file_list, 1):
-            fn = f.get("file_name", "")
-            dt = f.get("document_type", "")
-            col = f.get("collection", "")
-            _file_summary += f"{idx}. {fn} (유형: {dt}, 출처: {col})\n"
-        # file_list가 있으면 파일 목록 + 축약된 결과를 합산
+        # results에서 growth_rag 제거 (파일 목록 질문에 센서 데이터 혼입 방지)
+        data["results"] = [
+            r for r in data.get("results", [])
+            if (r.get("metadata") or {}).get("data_type") != "growth_rag"
+        ][:3]  # 최대 3건만 유지 (file_list가 주요 정보)
+        for item in data.get("results", []):
+            c = item.get("content", "")
+            if len(c) > 500:
+                item["content"] = c[:500] + "..."
         refined = json.dumps(data, ensure_ascii=False)
         if len(refined) > _MAX_TOTAL_REFINED:
-            # 파일 목록은 보존하고 results만 축약
-            data["results"] = data.get("results", [])[:2]
-            for item in data.get("results", []):
-                c = item.get("content", "")
-                if len(c) > 200:
-                    item["content"] = c[:200] + "..."
+            data["results"] = []
             refined = json.dumps(data, ensure_ascii=False)
         return refined
 
     refined = json.dumps(data, ensure_ascii=False)
-    # 전체 결과 길이 제한 (num_ctx 포화 방지)
     if len(refined) > _MAX_TOTAL_REFINED:
         refined = refined[:_MAX_TOTAL_REFINED] + "..."
     return refined
@@ -1919,6 +1950,8 @@ def get_llm_response_with_tools(
         _ctrl_retry_sent = False        # 제어 요청 강제 재시도 중복 방지 플래그
         _relay_done_retry_sent = False  # relay_done_phrases 강제 재시도 중복 방지 플래그
         _short_answer_retry_sent = False  # 짧은 답변 재시도 중복 방지 플래그
+        _knowledge_retry_sent = False    # 학습/파일 질문 search_farm_knowledge 미호출 강제 재시도 플래그
+        _delete_retry_sent = False       # 삭제 요청 delete_farm_knowledge 미호출 강제 재시도 플래그
         for iteration in range(max_tool_iterations):
             logger.info(f"[Tool Use] --- 반복 {iteration + 1}/{max_tool_iterations} ---")
 
@@ -1945,9 +1978,9 @@ def get_llm_response_with_tools(
             # GPU 탑재 비율 기반 컨텍스트 옵션 (모델·VRAM 변경 시 자동 적용)
             _ctx_opts = _get_model_ctx_options(model_name, NUM_PREDICT)
             if _prev_had_tool_calls:
-                # 전 반복 동일 num_predict 사용 (첫 반복 384 최적화 제거)
-                # 이전 설계: iteration==0에서 384/512로 제한 → 직접 답변 시 잘림, 복잡 쿼리 품질 저하
-                iter_num_predict = _ctx_opts["num_predict"]
+                # 도구 호출 모드: 첫 반복은 도구 JSON만 생성하면 되므로 출력 제한
+                # → 도구 호출 속도 향상 + LLM이 도구 대신 장문 답변 생성하는 환각 방지
+                iter_num_predict = NUM_PREDICT_TOOL_CALL if iteration == 0 else _ctx_opts["num_predict"]
                 iter_tools = tools
             else:
                 iter_num_predict = _ctx_opts["num_predict"]
@@ -2033,9 +2066,67 @@ def get_llm_response_with_tools(
                     _prev_had_tool_calls = True
                     continue
 
+                # LLM 답변에 삭제 관련 문구가 있는데 delete 도구를 호출하지 않은 경우 → 강제 재시도
+                # LLM이 search만 하고 "삭제 실패" 등으로 답변하는 판단 오류 방지
+                _stripped = final_answer.strip()
+                _delete_done_phrases = ("삭제", "지웠", "제거", "지울 수 없", "찾을 수 없어 삭제")
+                _has_delete_intent = any(phrase in _stripped for phrase in _delete_done_phrases)
+                if (
+                    _has_delete_intent
+                    and "delete_farm_knowledge" not in _tools_used
+                    and iteration < max_tool_iterations - 1
+                    and not _delete_retry_sent
+                ):
+                    _delete_retry_sent = True
+                    logger.warning(
+                        f"[Tool Use] LLM 답변에 삭제 의도 감지되나 delete_farm_knowledge 미호출 "
+                        f"(반복{iteration + 1}) — 강제 재시도"
+                    )
+                    messages.pop()
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"반드시 delete_farm_knowledge 도구를 호출하여 삭제를 실행하세요. "
+                            f"검색만 하지 말고 실제 삭제를 수행하세요. "
+                            f"원래 요청: \"{user_query}\""
+                        ),
+                    })
+                    _prev_had_tool_calls = True
+                    continue
+
+                # LLM 답변에 학습/파일/문서 관련 내용이 있는데 search 도구를 호출하지 않은 경우 → 강제 재시도
+                # LLM이 도구 없이 허구의 파일명/farm_scope를 생성하는 환각 방지
+                _knowledge_answer_hints = (
+                    "학습", "파일", "문서", "목록", "리스트", ".pdf", ".csv", ".txt",
+                    "farm_scope", "자료", "업로드",
+                )
+                _answer_has_knowledge = any(kw in _stripped for kw in _knowledge_answer_hints)
+                if (
+                    _answer_has_knowledge
+                    and "search_farm_knowledge" not in _tools_used
+                    and "delete_farm_knowledge" not in _tools_used  # 삭제 요청은 search 강제 불필요
+                    and iteration < max_tool_iterations - 1
+                    and not _knowledge_retry_sent
+                ):
+                    _knowledge_retry_sent = True
+                    logger.warning(
+                        f"[Tool Use] 학습/파일 관련 질문인데 search_farm_knowledge 미호출 감지 "
+                        f"(반복{iteration + 1}) — 강제 재시도"
+                    )
+                    messages.pop()
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"반드시 search_farm_knowledge 도구를 호출하여 실제 데이터를 검색한 후 답변하세요. "
+                            f"도구를 호출하지 않고 파일명이나 학습 정보를 추측하거나 지어내지 마세요. "
+                            f"원래 요청: \"{user_query}\""
+                        ),
+                    })
+                    _prev_had_tool_calls = True
+                    continue
+
                 # 릴레이 제어 답변인데 도구를 사용하지 않은 경우 → 강제 재시도
                 # LLM이 이전 대화의 제어 응답을 복사하여 도구 없이 답하는 문제 방지
-                _stripped = final_answer.strip()
                 _relay_done_phrases = ("설정했어요", "설정했습니다", "제어했어요", "제어했습니다", "완료했어요", "완료했습니다", "변경했어요", "변경했습니다", "반전했어요", "반전했습니다", "전환했어요", "전환했습니다",
                                        "켜드렸어요", "꺼드렸어요", "켰어요", "껐어요",
                                        "켜줬어요", "꺼줬어요", "켜드렸습니다", "꺼드렸습니다",
@@ -2197,6 +2288,7 @@ def get_llm_response_with_tools(
                     tool_name,
                     tool_args,
                     default_tool_args=default_tool_args,
+                    user_query=user_query,
                 )
 
                 # 중복 도구 호출 감지: 같은 반복 내 동일 함수+동일 인자면 캐시 사용
