@@ -22,6 +22,7 @@ import MemoDashboard from "../../components/memo/MemoDashboard.jsx";
 import { getUser } from "../../utils/userUtil.js";
 import SensorSettingDashboard from "../../components/sensor/SensorSettingDashboard.jsx";
 import LatestSensorSelected from "../../components/sensor/LatestSensorSelected.jsx";
+import CameraView from "../../components/camera/CameraView.jsx";
 
 export default function FarmMonitoringPage() {
     const { farmId } = useParams();
@@ -275,6 +276,18 @@ export default function FarmMonitoringPage() {
                     {selectedHouse &&
                         <SensorSettingDashboard farmId={farmId} selectedHouse={selectedHouse.housId} />
                     }
+                </Tab>
+
+                <Tab
+                    eventKey="camera"
+                    title={
+                        <>
+                            <span className="d-none d-md-inline">카메라</span>
+                            <span className="d-inline d-md-none">카메라</span>
+                        </>
+                    }
+                >
+                    <CameraView />
                 </Tab>
             </Tabs>
         </Container>
