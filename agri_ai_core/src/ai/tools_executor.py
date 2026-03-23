@@ -518,31 +518,78 @@ def delete_farm_knowledge(file_name: str, farm_id: str = None) -> Dict[str, Any]
         if not file_name:
             return {"success": False, "error": "file_name이 필요합니다."}
 
-        is_admin = (not farm_id or str(farm_id) == _SYSTEM_FARM_ID)
+        # farm_id가 없으면(None) 전체 농장, 있으면(0 포함) 해당 농장만 삭제
+        is_admin = not farm_id  # farm_id=None일 때만 전체 삭제 (farm_id="0"은 시스템 농장만)
+        _is_delete_all = file_name.strip().lower() in ("all", "*", "전체", "모두")
+
+        # 복수 파일명 지원: 파이프(|) 또는 줄바꿈(\n)으로 구분된 파일명 → 개별 루핑 삭제
+        # 주의: 쉼표(,)는 파일명에 포함될 수 있으므로 구분자로 사용하지 않음
+        _file_names = []
+        if not _is_delete_all:
+            for part in file_name.replace("\n", "|").split("|"):
+                part = part.strip()
+                if part:
+                    _file_names.append(part)
+            if not _file_names:
+                return {"success": False, "error": "file_name이 필요합니다."}
+
         collections = [document_collection(), farm_knowledge_collection()]
         total_deleted = 0
+        deleted_files = []  # 삭제 성공한 파일명 목록
+        failed_files = []   # 삭제 실패한 파일명 목록
+
+        def _collect_ids_for_file(coll, target_name):
+            """특정 파일명에 대한 삭제 대상 ID 수집 (공백↔밑줄 자동 변환 검색)"""
+            ids = set()
+            # 원본 + 공백↔밑줄 변환명으로 양쪽 시도
+            name_variants = [target_name]
+            if " " in target_name:
+                name_variants.append(target_name.replace(" ", "_"))
+            elif "_" in target_name:
+                name_variants.append(target_name.replace("_", " "))
+            for name in name_variants:
+                for field in ("file_name", "file_name_stored"):
+                    if is_admin:
+                        wl = [{field: {"$eq": name}}]
+                    else:
+                        wl = [{"$and": [{field: {"$eq": name}}, {"farm_id": {"$eq": str(farm_id)}}]}]
+                        if str(farm_id).isdigit():
+                            wl.append({"$and": [{field: {"$eq": name}}, {"farm_id": {"$eq": int(farm_id)}}]})
+                    for w in wl:
+                        res = get_documents(coll, where=w, include=["metadatas"], limit=10000)
+                        for doc_id in (res.get("ids") or []):
+                            ids.add(doc_id)
+            return ids
 
         for coll in collections:
             if not coll:
                 continue
-            # file_name / file_name_stored 두 필드로 검색 후 ID 취합
             all_ids: set = set()
-            for field in ("file_name", "file_name_stored"):
+
+            if _is_delete_all:
+                # 전체 삭제: 문서 학습 데이터만 삭제 (growth_rag 등 자동 생성 데이터는 보존)
                 if is_admin:
-                    where_list = [{field: {"$eq": file_name}}]
+                    where_list = [None]
                 else:
-                    # farm_id가 str/int로 저장될 수 있으므로 양쪽 시도
-                    where_list = [
-                        {"$and": [{field: {"$eq": file_name}}, {"farm_id": {"$eq": str(farm_id)}}]},
-                    ]
+                    where_list = [{"farm_id": {"$eq": str(farm_id)}}]
                     if str(farm_id).isdigit():
-                        where_list.append(
-                            {"$and": [{field: {"$eq": file_name}}, {"farm_id": {"$eq": int(farm_id)}}]}
-                        )
+                        where_list.append({"farm_id": {"$eq": int(farm_id)}})
                 for where in where_list:
                     res = get_documents(coll, where=where, include=["metadatas"], limit=10000)
-                    for doc_id in (res.get("ids") or []):
+                    for doc_id, meta in zip(res.get("ids") or [], res.get("metadatas") or []):
+                        if isinstance(meta, dict) and meta.get("data_type") == "growth_rag":
+                            continue
                         all_ids.add(doc_id)
+            else:
+                # 단일 또는 복수 파일명 루핑 삭제
+                for fn in _file_names:
+                    fn_ids = _collect_ids_for_file(coll, fn)
+                    if fn_ids:
+                        all_ids.update(fn_ids)
+                        if fn not in deleted_files:
+                            deleted_files.append(fn)
+                    elif fn not in deleted_files and fn not in failed_files:
+                        failed_files.append(fn)
 
             if not all_ids:
                 continue
@@ -554,20 +601,37 @@ def delete_farm_knowledge(file_name: str, farm_id: str = None) -> Dict[str, Any]
                 total_deleted += len(all_ids)
                 logger.info(f"[학습삭제] {coll}: {len(all_ids)}개 청크 삭제 완료")
 
+        # 복수 파일 삭제 시 실제 삭제 성공 파일에서 failed 제거
+        failed_files = [f for f in failed_files if f not in deleted_files]
+
         elapsed = time.time() - t_start
+        if _is_delete_all:
+            _label = "전체 문서 학습데이터"
+        elif len(_file_names) > 1:
+            _label = f"{len(_file_names)}개 파일"
+        else:
+            _label = f"'{_file_names[0]}'"
+
         if total_deleted > 0:
-            logger.info(f"[학습삭제] 완료 ({elapsed:.1f}s) '{file_name}' 총 {total_deleted}개 청크 삭제")
+            msg = f"{_label} {total_deleted}개 청크를 삭제했습니다."
+            if deleted_files:
+                msg += f" (삭제: {', '.join(deleted_files)})"
+            if failed_files:
+                msg += f" (미발견: {', '.join(failed_files)})"
+            logger.info(f"[학습삭제] 완료 ({elapsed:.1f}s) {_label} 총 {total_deleted}개 청크 삭제")
             return {
                 "success": True,
-                "message": f"'{file_name}' 학습데이터 {total_deleted}개 청크를 삭제했습니다.",
+                "message": msg,
                 "deleted_count": total_deleted,
+                "deleted_files": deleted_files,
+                "failed_files": failed_files,
                 "file_name": file_name,
             }
         else:
-            logger.info(f"[학습삭제] '{file_name}' 해당 데이터 없음 또는 권한 없음")
+            logger.info(f"[학습삭제] {_label} 해당 데이터 없음 또는 권한 없음")
             return {
                 "success": False,
-                "message": f"'{file_name}' 파일을 찾을 수 없습니다.",
+                "message": f"{_label}을(를) 찾을 수 없습니다.",
                 "file_name": file_name,
             }
     except Exception as e:
@@ -577,10 +641,11 @@ def delete_farm_knowledge(file_name: str, farm_id: str = None) -> Dict[str, Any]
 
 def search_farm_knowledge(
     query: str,
-    n_results: int = 3,
+    n_results: int = 5,
     file_name: str = None,
     farm_id: str = None,
     house_id: str = None,
+    _meta_hint: bool = False,
 ) -> Dict[str, Any]:
     t_start = time.time()
     logger.info(
@@ -606,7 +671,10 @@ def search_farm_knowledge(
             except Exception:
                 return default
 
-        max_results = _parse_positive_int(n_results, 3)
+        max_results = _parse_positive_int(n_results, 5)
+        # 파일명이 지정된 경우: 해당 파일의 청크를 최대한 많이 가져옴 (상세 답변 지원)
+        if file_name:
+            max_results = max(max_results, 30)
         def _parse_optional_int(value):
             if value in (None, ""):
                 return None
@@ -821,15 +889,23 @@ def search_farm_knowledge(
         # [FIX] 메타 질문(파일/학습/목록/리스트/자료 등) 감지 시 Reranker 바이패스
         # → "학습한 자료 리스트" 같은 질문은 문서 내용과 직접 관련이 없어 Reranker가 모두 1점 처리하는 문제 방지
         _meta_query_keywords = ("파일", "학습", "목록", "리스트", "자료", "문서", "업로드", "RAG", "데이터")
-        _is_meta_query = any(kw in (query or "") for kw in _meta_query_keywords)
+        _is_meta_query = any(kw in (query or "") for kw in _meta_query_keywords) or bool(_meta_hint)
+        if _meta_hint and not any(kw in (query or "") for kw in _meta_query_keywords):
+            logger.info(f"[VectorDB검색] _meta_hint로 메타 쿼리 활성화 (원본 query에 키워드 없음)")
         if file_name or _is_meta_query:
-            if _is_meta_query and not file_name:
+            if _is_meta_query:
                 logger.info(f"[VectorDB검색] 메타 질문 감지 → Reranker 바이패스 (query=\"{query[:40]}\")")
-                # 메타 쿼리 시 web_knowledge 결과 제외 — 파일 목록에 웹 데이터가 혼입되어 LLM 오인 방지
+                # 메타 쿼리 시 web_knowledge 및 growth_rag 결과 제외 (file_name 유무 무관)
+                # — 파일 목록 질문에 생육 RAG 센서 데이터나 웹 검색 결과가 혼입되어 LLM 오인 방지
                 before_count = len(deduped_results)
-                deduped_results = [r for r in deduped_results if r.get("collection") != "web_knowledge"]
-                if len(deduped_results) < before_count:
-                    logger.info(f"[VectorDB검색] web_knowledge {before_count - len(deduped_results)}건 제외 (메타 쿼리)")
+                deduped_results = [
+                    r for r in deduped_results
+                    if r.get("collection") != "web_knowledge"
+                    and (r.get("metadata") or {}).get("data_type") != "growth_rag"
+                ]
+                excluded = before_count - len(deduped_results)
+                if excluded:
+                    logger.info(f"[VectorDB검색] 메타 쿼리: web_knowledge/growth_rag {excluded}건 제외")
             # file_name 필터로 검색한 document_collection 결과를 우선 반환
             doc_results = [r for r in deduped_results if r.get("collection") == "document"]
             if doc_results:
@@ -908,9 +984,11 @@ def search_farm_knowledge(
                             if not isinstance(_meta, dict):
                                 continue
                             _fn = _meta.get("file_name") or _meta.get("file_name_stored") or ""
-                            if _fn and _fn not in _seen_files:
-                                _seen_files.add(_fn)
-                                _raw_fid = str(_meta.get("farm_id", "")) if _meta.get("farm_id") is not None else ""
+                            _raw_fid = str(_meta.get("farm_id", "")) if _meta.get("farm_id") is not None else ""
+                            # 동일 파일이 여러 농장에 학습된 경우 각각 표시 (파일명+farm_id로 중복 판정)
+                            _dedup_key = f"{_fn}|{_raw_fid}"
+                            if _fn and _dedup_key not in _seen_files:
+                                _seen_files.add(_dedup_key)
                                 _farm_scope = "시스템 농장" if _raw_fid in ("0", "") else f"{_get_farm_name(_raw_fid)}({_raw_fid})"
                                 _file_entries.append({
                                     "file_name": _fn,
@@ -936,9 +1014,10 @@ def search_farm_knowledge(
                     _fn = _meta.get("file_name") or _meta.get("file_name_stored") or ""
                     if not _is_admin_list and str(_meta.get("farm_id", "")) != str(farm_id):
                         continue
-                    if _fn and _fn not in _seen_files:
-                        _seen_files.add(_fn)
-                        _raw_fid = str(_meta.get("farm_id", "")) if _meta.get("farm_id") is not None else ""
+                    _raw_fid = str(_meta.get("farm_id", "")) if _meta.get("farm_id") is not None else ""
+                    _dedup_key = f"{_fn}|{_raw_fid}"
+                    if _fn and _dedup_key not in _seen_files:
+                        _seen_files.add(_dedup_key)
                         _farm_scope = "시스템 농장" if _raw_fid in ("0", "") else f"{_get_farm_name(_raw_fid)}({_raw_fid})"
                         _file_entries.append({
                             "file_name": _fn,
@@ -1007,6 +1086,30 @@ def get_farm_realtime_data(house_id: str = None, farm_id: str = None, data_type:
                 "error": "farm_id를 확인할 수 없습니다.",
                 "house_id": house_id
             }
+
+        # 시스템 농장(farm_id=0)은 센서/릴레이 없음 → 첫 번째 실제 농장으로 자동 대체
+        if target_farm_id == "0":
+            try:
+                from agri_ai_core.src.postgresql.queries import GET_LIST_FARM
+                with db_session() as database:
+                    farms = database.fetch_all(GET_LIST_FARM)
+                    real_farm = next((f for f in (farms or []) if str(f.get("farm_id", "0")) != "0"), None)
+                    if real_farm:
+                        target_farm_id = str(real_farm["farm_id"])
+                        logger.info(f"[PostgreSQL조회] farm_id=0 → 실제 농장 자동 대체: farm_id={target_farm_id}")
+                    else:
+                        return {
+                            "success": False,
+                            "error": "시스템 농장(farm_id=0)은 센서 데이터가 없고, 등록된 실제 농장도 없어요.",
+                            "house_id": house_id, "farm_id": "0"
+                        }
+            except Exception as e:
+                logger.warning(f"[PostgreSQL조회] 실제 농장 조회 실패: {e}")
+                return {
+                    "success": False,
+                    "error": "시스템 농장(farm_id=0)은 센서 데이터가 없어요. 실제 농장을 선택해 주세요.",
+                    "house_id": house_id, "farm_id": "0"
+                }
 
         target_house_id = _normalize_id(house_id)
         if not target_house_id:
@@ -1470,15 +1573,45 @@ def _auto_fetch_urls(results: list, max_fetch: int = 3) -> None:
 # 웹 검색 결과 관련성 필터
 # 쿼리 키워드와 무관한 검색 결과를 제거합니다.
 # 검색 엔진이 복합어(예: "상황버섯")를 분리("상황"+"버섯")하여 무관한 결과를 반환하는 문제를 방지합니다.
+# 지역명만 매칭되고 핵심 키워드가 없는 무관한 결과(경매, 이사 등)를 필터링합니다.
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+_NOISE_KEYWORDS = ("경매", "이사", "이삿짐", "이사짐", "부동산", "매매", "분양", "임대", "중개", "공인")
+_PROVINCE_NAMES = frozenset(("전북", "전남", "경북", "경남", "충북", "충남", "강원", "제주", "서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종"))
+# 지역명 판별: "XX시", "XX군" 등 3글자 이상이고 행정구역 접미사로 끝나는 단어
+import re
+_LOCATION_RE = re.compile(r'^.{2,}(?:특별자치도|광역시|특별시|시|군|구|면|읍|리|동|도)$')
+
+
+def _is_location(word: str) -> bool:
+    """지역명 여부 판별 (3글자 이상 + 행정구역 접미사, 또는 광역시도 약칭)"""
+    if word in _PROVINCE_NAMES:
+        return True
+    if len(word) < 3:
+        return False
+    return bool(_LOCATION_RE.match(word))
+
+
 def _filter_relevant_results(query: str, results: list) -> list:
     if not query or not results:
         return results
 
     # 쿼리에서 2글자 이상 키워드 추출
-    keywords = [w for w in query.split() if len(w) >= 2]
-    if not keywords:
+    all_keywords = [w for w in query.split() if len(w) >= 2]
+    if not all_keywords:
         return results
+
+    # 지역명과 핵심 키워드 분리
+    location_kws = []
+    core_kws = []
+    for kw in all_keywords:
+        if _is_location(kw):
+            location_kws.append(kw.lower())
+        else:
+            core_kws.append(kw.lower())
+
+    # 핵심 키워드가 없으면 전체를 핵심으로 취급 (지역 검색 등)
+    if not core_kws:
+        core_kws = [kw.lower() for kw in all_keywords]
 
     filtered = []
     for item in results:
@@ -1488,18 +1621,46 @@ def _filter_relevant_results(query: str, results: list) -> list:
         desc = (item.get("description") or item.get("snippet") or "").lower()
         text = f"{title} {desc}"
 
-        # 키워드 중 최소 1개 이상이 제목+설명에 포함되어야 함
-        matched = sum(1 for kw in keywords if kw.lower() in text)
-        if matched >= 1:
+        # 노이즈 키워드가 제목에 포함되면 제거 (경매, 이사 등 무관 광고)
+        if any(nk in title for nk in _NOISE_KEYWORDS):
+            # 단, 핵심 키워드도 함께 포함되어 있으면 유지 (예: "낚시 부동산" 같은 복합 결과)
+            core_matched = sum(1 for kw in core_kws if kw in text)
+            if core_matched == 0:
+                logger.debug(f"[웹검색] 노이즈 필터 제거: {item.get('title', '')[:50]}")
+                continue
+
+        # 핵심 키워드 중 최소 1개 이상이 제목+설명에 포함되어야 함
+        core_matched = sum(1 for kw in core_kws if kw in text)
+        if core_matched >= 1:
             filtered.append(item)
         else:
             logger.debug(f"[웹검색] 관련성 필터 제거: {item.get('title', '')[:50]}")
 
-    # 필터 후 결과가 너무 적으면 원본 반환 (안전장치)
+    # 필터 후 결과가 너무 적으면 원본에서 노이즈만 제거한 목록 반환
     if len(filtered) < 2 and len(results) >= 2:
-        return results
+        noise_removed = [
+            r for r in results
+            if not any(nk in (r.get("title") or "").lower() for nk in _NOISE_KEYWORDS)
+        ]
+        return noise_removed if noise_removed else results
 
     return filtered
+
+
+# 관련 결과 부족 시 재검색용 쿼리 생성 (지역명·일반명사 제거, 핵심 키워드만)
+_GENERIC_WORDS = frozenset(("주변", "근처", "부근", "인근", "추천", "장소", "곳", "어디", "알려", "농장"))
+
+
+def _build_retry_query(query: str) -> Optional[str]:
+    words = [w for w in query.split() if len(w) >= 2]
+    core = [w for w in words if not _is_location(w) and w not in _GENERIC_WORDS]
+    if not core or core == words:
+        return None
+    # 넓은 지역명 1개만 유지 (시/도 단위)
+    broad_loc = next((w for w in words if w in _PROVINCE_NAMES), None)
+    parts = ([broad_loc] if broad_loc else []) + core + ["추천"]
+    retry = " ".join(parts)
+    return retry if retry != query else None
 
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1567,6 +1728,34 @@ def search_web(
     if isinstance(result, dict) and result.get("results"):
         result["results"] = _filter_relevant_results(query, result["results"])
 
+    # 관련 결과 부족 시 핵심 키워드로 재검색 (지역명·일반명사 제거)
+    result_count = len(result.get("results", [])) if isinstance(result, dict) else 0
+    if result_count < 3:
+        retry_query = _build_retry_query(query)
+        if retry_query and retry_query != query:
+            logger.info(f"[웹검색] 관련 결과 부족({result_count}건), 재검색: \"{retry_query}\"")
+            retry_result = None
+            try:
+                retry_result = _search_via_api(retry_query, count=search_limit)
+            except Exception:
+                pass
+            if not retry_result or not retry_result.get("results"):
+                try:
+                    retry_result = _search_via_searxng(retry_query, count=search_limit)
+                    if retry_result:
+                        retry_result = {"success": True, "results": retry_result, "search_provider": "searxng_retry"}
+                except Exception:
+                    pass
+            if retry_result and retry_result.get("results"):
+                retry_filtered = _filter_relevant_results(retry_query, retry_result["results"])
+                # 기존 결과와 병합 (URL 중복 제거)
+                existing_urls = {r.get("url") for r in (result.get("results", []) if isinstance(result, dict) else [])}
+                for item in retry_filtered:
+                    if item.get("url") not in existing_urls:
+                        result.setdefault("results", []).append(item)
+                        existing_urls.add(item.get("url"))
+                logger.info(f"[웹검색] 재검색 병합 후 총 {len(result.get('results', []))}건")
+
     search_elapsed = time.time() - t_start
     result_count = len(result.get("results", [])) if isinstance(result, dict) else 0
     provider = result.get("search_provider", "unknown") if isinstance(result, dict) else "none"
@@ -1584,13 +1773,17 @@ def search_web(
         total_elapsed = time.time() - t_start
         logger.info(f"[웹검색] 본문읽기완료 ({total_elapsed:.1f}s) 본문확보={fetched}건/{result_count}건")
 
-        # LLM 지시: 본문 데이터 기반으로 답변하라
+        # LLM 지시: 본문 데이터 기반으로 답변하라 (환각 방지 강화)
         result["instruction"] = (
             "page_content 필드에 각 URL의 본문이 포함되어 있습니다. "
             "반드시 이 본문 내용을 꼼꼼히 읽고, 여러 출처의 정보를 종합하여 "
             "구체적이고 자세한 답변을 작성하세요. "
             "핵심 요약 + 세부 항목 정리 + 출처 링크 형식으로 답변하세요. "
-            "단답형이나 URL만 나열하는 것은 금지합니다."
+            "단답형이나 URL만 나열하는 것은 금지합니다. "
+            "절대 규칙: 검색 결과(제목/URL/요약/본문)에 명시적으로 언급된 장소명·시설명·주소만 사용하세요. "
+            "검색 결과에 없는 장소, 시설, 공원, 교육장, 주소, 전화번호를 만들어내는 것은 엄격히 금지합니다. "
+            "검색 결과에 없는 정보를 추측하거나 일반 지식으로 보충하지 마세요. "
+            "요청 개수보다 확인된 정보가 부족하면 확인된 것만 답변하고 '추가 검색이 필요합니다'라고 안내하세요."
         )
 
         # web_knowledge 캐싱: 검색 결과를 VectorDB에 저장 (백그라운드)
@@ -1768,6 +1961,210 @@ def fetch_url_content(url: str) -> Dict[str, Any]:
 
 
 # --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# Opinet 유가정보 API 조회
+# 전국/시도/시군구 평균 유가, 최저가 주유소 등 조회
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+_OPINET_API_KEY = os.getenv("OPNET_API", "")
+_OPINET_BASE = "http://www.opinet.co.kr/api"
+
+# 시도 코드 매핑 (Opinet 코드)
+_SIDO_MAP = {
+    "서울": "01", "경기": "02", "강원": "03", "충북": "04", "충남": "05",
+    "전북": "06", "전남": "07", "경북": "08", "경남": "09", "부산": "10",
+    "제주": "11", "대구": "14", "인천": "15", "광주": "16", "대전": "17",
+    "울산": "18", "세종": "19",
+}
+
+# 유종 코드 매핑
+_PROD_MAP = {
+    "휘발유": "B027", "경유": "D047", "고급휘발유": "B034",
+    "등유": "C004", "LPG": "K015", "부탄": "K015",
+}
+
+def _opinet_api_call(endpoint: str, params: dict = None) -> Optional[List[Dict]]:
+    """Opinet 실시간 API 호출 (실패 시 None)"""
+    import requests as _req
+    url = f"{_OPINET_BASE}/{endpoint}.do"
+    p = {"out": "json", "code": _OPINET_API_KEY}
+    if params:
+        p.update(params)
+    try:
+        r = _req.get(url, params=p, timeout=10)
+        if r.status_code != 200:
+            return None
+        text = r.text.strip()
+        if text.startswith("<") or "not available" in text:
+            return None
+        return r.json().get("RESULT", {}).get("OIL", [])
+    except Exception:
+        return None
+
+
+def _opinet_db_fallback(query_type: str, prodcd: str, sido_cd: str = None,
+                        sigun: str = None) -> Optional[Dict]:
+    """DB 폴백: 가장 최근 저장된 데이터 조회"""
+    try:
+        from agri_ai_core.src.postgresql.reader import db_session
+        with db_session() as db:
+            if query_type == "low_price":
+                area = sido_cd or "00"
+                rows = db.fetch_all(
+                    "SELECT os_nm, price, new_adr, poll_div_cd, trade_dt "
+                    "FROM opinet_low_price WHERE area_cd=%s AND prod_cd=%s "
+                    "AND trade_dt=(SELECT MAX(trade_dt) FROM opinet_low_price WHERE area_cd=%s AND prod_cd=%s) "
+                    "ORDER BY price LIMIT 20",
+                    (area, prodcd, area, prodcd), as_dict=True
+                )
+                if rows:
+                    return {
+                        "success": True, "source": "DB(폴백)", "기준일": str(rows[0]["trade_dt"]),
+                        "query_type": "최저가 주유소", "count": len(rows),
+                        "stations": [{"주유소명": r["os_nm"], "가격": f"{r['price']}원",
+                                      "주소": r["new_adr"] or ""} for r in rows],
+                    }
+            elif query_type == "avg_sido":
+                rows = db.fetch_all(
+                    "SELECT a.area_nm as sido_nm, p.price, p.diff, p.trade_dt "
+                    "FROM opinet_avg_price p JOIN opinet_area_code a ON p.area_cd=a.area_cd "
+                    "WHERE p.prod_cd=%s AND a.parent_cd IS NULL AND p.area_cd!='00' "
+                    "AND p.trade_dt=(SELECT MAX(trade_dt) FROM opinet_avg_price WHERE prod_cd=%s AND area_cd!='00') "
+                    "ORDER BY a.area_cd",
+                    (prodcd, prodcd), as_dict=True
+                )
+                if sido_cd:
+                    rows = [r for r in rows if sido_cd in str(r.get("sido_nm", ""))]
+                if rows:
+                    return {
+                        "success": True, "source": "DB(폴백)", "기준일": str(rows[0]["trade_dt"]),
+                        "query_type": "시도별 평균가격", "count": len(rows),
+                        "prices": [{"시도": r["sido_nm"], "가격": f"{r['price']}원",
+                                    "전일대비": f"{r['diff']}원"} for r in rows],
+                    }
+            elif query_type == "avg_sigun":
+                q = ("SELECT a.area_nm as sigun_nm, p.price, p.diff, p.trade_dt "
+                     "FROM opinet_avg_price p JOIN opinet_area_code a ON p.area_cd=a.area_cd "
+                     "WHERE p.prod_cd=%s AND a.parent_cd=%s "
+                     "AND p.trade_dt=(SELECT MAX(trade_dt) FROM opinet_avg_price WHERE prod_cd=%s) "
+                     "ORDER BY p.price")
+                rows = db.fetch_all(q, (prodcd, sido_cd, prodcd), as_dict=True)
+                if rows:
+                    return {
+                        "success": True, "source": "DB(폴백)", "기준일": str(rows[0]["trade_dt"]),
+                        "query_type": "시군구별 평균가격", "count": len(rows),
+                        "prices": [{"시군구": r["sigun_nm"], "가격": f"{r['price']}원",
+                                    "전일대비": f"{r['diff']}원"} for r in rows],
+                    }
+            else:  # avg_national
+                rows = db.fetch_all(
+                    "SELECT prod_nm, price, diff, trade_dt FROM opinet_avg_price "
+                    "WHERE area_cd='00' AND trade_dt=(SELECT MAX(trade_dt) FROM opinet_avg_price WHERE area_cd='00') "
+                    "ORDER BY prod_cd",
+                    as_dict=True
+                )
+                if rows:
+                    return {
+                        "success": True, "source": "DB(폴백)", "기준일": str(rows[0]["trade_dt"]),
+                        "query_type": "전국 평균 유가", "count": len(rows),
+                        "prices": [{"유종": r["prod_nm"], "가격": f"{r['price']}원",
+                                    "전일대비": f"{r['diff']}원"} for r in rows],
+                    }
+    except Exception as e:
+        logger.warning(f"[유가정보] DB 폴백 실패: {e}")
+    return None
+
+
+def search_gas_price(query_type: str = "avg_national", sido: str = None,
+                     sigun: str = None, prodcd: str = "B027",
+                     fuel_name: str = None) -> Dict[str, Any]:
+    """Opinet 유가정보 조회 — 실시간 API 우선, 실패 시 DB 폴백"""
+    if not _OPINET_API_KEY:
+        return {"success": False, "error": "OPNET_API 키가 설정되지 않았습니다."}
+
+    # 유종명 → 코드 변환
+    if fuel_name:
+        prodcd = _PROD_MAP.get(fuel_name, prodcd)
+
+    # 시도명 → 코드 변환
+    sido_cd = None
+    if sido:
+        for name, code in _SIDO_MAP.items():
+            if name in sido or sido in name:
+                sido_cd = code
+                break
+        if not sido_cd:
+            sido_cd = sido
+
+    fuel_label = fuel_name or prodcd
+    api_result = None
+
+    try:
+        if query_type == "low_price":
+            params = {"prodcd": prodcd, "cnt": "20"}
+            if sido_cd:
+                params["area"] = sido_cd
+            oils = _opinet_api_call("lowTop10", params)
+            if oils:
+                stations = [{"주유소명": o.get("OS_NM", ""), "가격": f"{o.get('PRICE', '')}원",
+                             "주소": o.get("NEW_ADR") or o.get("VAN_ADR", ""),
+                             "상표": o.get("POLL_DIV_CD", "")} for o in oils[:20]]
+                api_result = {"success": True, "source": "실시간", "query_type": "최저가 주유소",
+                              "유종": fuel_label, "지역": sido or "전국",
+                              "count": len(stations), "stations": stations}
+
+        elif query_type == "avg_sido":
+            oils = _opinet_api_call("avgSidoPrice", {"prodcd": prodcd})
+            if oils:
+                prices = []
+                for o in oils:
+                    if sido_cd and o.get("SIDOCD") != sido_cd:
+                        continue
+                    prices.append({"시도": o.get("SIDONM", ""), "가격": f"{o.get('PRICE', '')}원",
+                                   "전일대비": f"{o.get('DIFF', '')}원"})
+                api_result = {"success": True, "source": "실시간", "query_type": "시도별 평균가격",
+                              "유종": fuel_label, "count": len(prices), "prices": prices}
+
+        elif query_type == "avg_sigun":
+            if not sido_cd:
+                return {"success": False, "error": "시도를 지정해주세요 (예: sido='전북')"}
+            params = {"prodcd": prodcd, "sido": sido_cd}
+            if sigun:
+                params["sigun"] = sigun
+            oils = _opinet_api_call("avgSigunPrice", params)
+            if oils:
+                prices = [{"시군구": o.get("SIGUNNM", ""),
+                           "가격": f"{o.get('PRICE', '')}원" if o.get("PRICE") else "정보없음",
+                           "전일대비": f"{o.get('DIFF', '')}원" if o.get("DIFF") else ""}
+                          for o in oils]
+                api_result = {"success": True, "source": "실시간", "query_type": "시군구별 평균가격",
+                              "유종": fuel_label, "count": len(prices), "prices": prices}
+
+        else:  # avg_national
+            oils = _opinet_api_call("avgAllPrice")
+            if oils:
+                prices = [{"유종": o.get("PRODNM", ""), "가격": f"{o.get('PRICE', '')}원",
+                           "전일대비": f"{o.get('DIFF', '')}원",
+                           "기준일": o.get("TRADE_DT", "")} for o in oils]
+                api_result = {"success": True, "source": "실시간", "query_type": "전국 평균 유가",
+                              "count": len(prices), "prices": prices}
+
+    except Exception as e:
+        logger.warning(f"[유가정보] 실시간 API 실패: {e}")
+
+    # 실시간 성공 시 반환
+    if api_result:
+        logger.info(f"[유가정보] 실시간 API 성공: {query_type} {api_result.get('count', 0)}건")
+        return api_result
+
+    # DB 폴백
+    logger.info(f"[유가정보] 실시간 API 실패 → DB 폴백: {query_type}")
+    db_result = _opinet_db_fallback(query_type, prodcd, sido_cd, sigun)
+    if db_result:
+        return db_result
+
+    return {"success": False, "error": "유가 정보를 조회할 수 없습니다 (API 장애 + DB 데이터 없음)"}
+
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 도구 실행기 (메인)
 # LLM이 요청한 도구를 실행하고 결과를 JSON 문자열로 반환
 # Args: tool_name: 도구 이름
@@ -1788,10 +2185,11 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
         elif tool_name == "search_farm_knowledge":
             result = search_farm_knowledge(
                 query=tool_args.get("query"),
-                n_results=tool_args.get("n_results", 3),
+                n_results=tool_args.get("n_results", 5),
                 file_name=tool_args.get("file_name"),
                 farm_id=tool_args.get("farm_id"),
                 house_id=tool_args.get("house_id"),
+                _meta_hint=bool(tool_args.get("_meta_hint")),
             )
 
         elif tool_name == "get_farm_realtime_data":
@@ -1820,6 +2218,15 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
         elif tool_name == "fetch_url_content":
             result = fetch_url_content(
                 url=tool_args.get("url", "")
+            )
+
+        elif tool_name == "search_gas_price":
+            result = search_gas_price(
+                query_type=tool_args.get("query_type", "avg_national"),
+                sido=tool_args.get("sido"),
+                sigun=tool_args.get("sigun"),
+                prodcd=tool_args.get("prodcd", "B027"),
+                fuel_name=tool_args.get("fuel_name"),
             )
 
         else:

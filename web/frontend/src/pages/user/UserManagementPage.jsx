@@ -10,13 +10,14 @@ import {getMyFarm, getFarmList} from "../../utils/farmUtil.js";
 import AlertModal from "../../components/common/AlertModal.jsx";
 
 // 코드 테이블 값 (code_m_info 기반) — API 응답 값과 일치
+// ADMIN(0)=시스템관리자, SYS_MONITOR(1)=시스템모니터링, FARM_ADMIN(2)=농장관리자, FARM_MONITOR(3)=농장모니터링
 const AUTH_LVEL_OPTIONS = [
     {value: "FARM_ADMIN", label: "농장관리자"},
-    {value: "HOUS_MANAGER", label: "농장등록자"},
-    {value: "MONITOR", label: "농장모니터링"},
+    {value: "FARM_MONITOR", label: "농장모니터링"},
 ];
 const AUTH_LVEL_OPTIONS_ADMIN = [
     {value: "ADMIN", label: "시스템관리자"},
+    {value: "SYS_MONITOR", label: "시스템모니터링"},
     ...AUTH_LVEL_OPTIONS,
 ];
 const PSTN_OPTIONS = [
@@ -27,12 +28,13 @@ const PSTN_OPTIONS = [
 
 const pstnToAuthLvel = (pstn) => {
     if (pstn === "1" || pstn === "2") return "FARM_ADMIN";
-    return "MONITOR";
+    return "FARM_MONITOR";
 };
 
 export default function UserManagementPage() {
     const {farmId: urlFarmId} = useParams();
     const userInfo = useSelector((state) => state.auth.userInfo);
+    const globalSelectedFarm = useSelector((state) => state.auth.selectedFarm);
     const isAdmin = userInfo?.authLvel === "ADMIN";
     const canManage = isAdmin || userInfo?.authLvel === "FARM_ADMIN";
 
@@ -65,11 +67,12 @@ export default function UserManagementPage() {
     const [idChecked, setIdChecked] = useState(false);
     const [idAvailable, setIdAvailable] = useState(false);
 
-    // 비admin: 자기 소속 농장 ID 사용, admin: URL의 farmId 사용
+    // 농장 ID 결정: ADMIN은 Redux selectedFarm (헤더 선택 기준) → URL 폴백, 비admin은 자기 농장
     useEffect(() => {
         const resolveFarmId = async () => {
             if (isAdmin) {
-                setActiveFarmId(urlFarmId);
+                const fid = globalSelectedFarm?.farmId ?? urlFarmId;
+                setActiveFarmId(fid != null ? String(fid) : null);
                 try {
                     const res = await getFarmList(0, 100);
                     setFarmList(res.data?.content || []);
@@ -85,7 +88,7 @@ export default function UserManagementPage() {
             }
         };
         resolveFarmId();
-    }, [urlFarmId, isAdmin]);
+    }, [urlFarmId, isAdmin, globalSelectedFarm?.farmId]);
 
     // 사용자 목록 조회 (activeFarmId 기반)
     const fetchUsers = async () => {
@@ -111,7 +114,7 @@ export default function UserManagementPage() {
             userName: user.userName || "",
             pstn: user.pstn || "2",
             hpNo: user.hpNo || "",
-            authLvel: user.authLvel || "MONITOR",
+            authLvel: user.authLvel || "FARM_MONITOR",
             farmId: user.farmId != null ? String(user.farmId) : "0",
         });
     };

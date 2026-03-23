@@ -354,6 +354,22 @@ def setup_default_jobs(learning_func=None, stats_func=None,
             minute=0
         )
 
+        # Opinet 유가정보 수집 (매일 10:00)
+        def _opinet_daily_job():
+            try:
+                from agri_ai_core.src.opinet.opinet_collector import collect_all
+                collect_all()
+            except Exception as oe:
+                logger.error(f"[Opinet] 일일 수집 실패: {oe}")
+
+        add_job(
+            job_id="opinet_daily_job",
+            func=_opinet_daily_job,
+            trigger_type="cron",
+            hour=10,
+            minute=0
+        )
+
         logger.info("기본 스케줄 작업 설정 완료")
         return True
 

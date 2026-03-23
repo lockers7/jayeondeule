@@ -41,7 +41,9 @@ const getOperationModeLabel = (house) => {
 export default function HouseManagementPage() {
     const {farmId: urlFarmId} = useParams();
     const userInfo = useSelector((state) => state.auth.userInfo);
+    const globalSelectedFarm = useSelector((state) => state.auth.selectedFarm);
     const isAdmin = userInfo?.authLvel === "ADMIN";
+    const isSysMonitor = userInfo?.authLvel === "SYS_MONITOR";
     const canManage = isAdmin || userInfo?.authLvel === "FARM_ADMIN";
 
     const [activeFarmId, setActiveFarmId] = useState(null);
@@ -69,11 +71,12 @@ export default function HouseManagementPage() {
     const [farmList, setFarmList] = useState([]);
     const [registerFarmId, setRegisterFarmId] = useState("");
 
-    // 비admin: 자기 소속 농장 ID, admin: URL farmId
+    // 농장 ID 결정: ADMIN/SYS_MONITOR는 Redux selectedFarm (헤더 선택 기준) → URL 폴백, 비admin은 자기 농장
     useEffect(() => {
         const resolveFarmId = async () => {
-            if (isAdmin) {
-                setActiveFarmId(urlFarmId);
+            if (isAdmin || isSysMonitor) {
+                const fid = globalSelectedFarm?.farmId ?? urlFarmId;
+                setActiveFarmId(fid != null ? String(fid) : null);
             } else {
                 try {
                     const res = await getMyFarm();
@@ -85,7 +88,7 @@ export default function HouseManagementPage() {
             }
         };
         resolveFarmId();
-    }, [urlFarmId, isAdmin]);
+    }, [urlFarmId, isAdmin, isSysMonitor, globalSelectedFarm?.farmId]);
 
     // admin: 농장 리스트 조회 (등록 폼에서 농장 선택용)
     useEffect(() => {

@@ -316,6 +316,9 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None, origin
             _m = _re.match(r'^[0-9a-f]{8}_(.+)$', filename)
             _orig_name = _m.group(1) if _m else filename
 
+        # 파일명 공백 → 밑줄 정규화 (검색/삭제 시 공백·밑줄 불일치 방지)
+        _orig_name = _orig_name.replace(" ", "_") if _orig_name else _orig_name
+
         # 메타데이터 구성
         metadata = {
             "document_type": document_type,
@@ -330,7 +333,7 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None, origin
 
         if farm_id is not None:
             metadata["farm_id"] = farm_id
-            metadata["house_id"] = "0"  # 학습 데이터는 항상 house_id='0'(공통)으로 저장
+            # 문서 학습 데이터는 house_id 없음 (농장 단위 관리, 요건: farm_id만 존재)
 
         if crop_name:
             metadata["crop_name"] = crop_name

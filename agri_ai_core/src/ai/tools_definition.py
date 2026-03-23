@@ -20,13 +20,13 @@ def get_available_tools() -> List[Dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "delete_farm_knowledge",
-                "description": "학습(RAG) 데이터를 파일명으로 삭제합니다. 해당 파일의 모든 청크를 ChromaDB에서 영구 삭제합니다. 삭제 전 확인 없이 즉시 실행하세요. 삭제 완료 후 search_farm_knowledge를 재호출하여 확인하지 마세요 — 도구가 반환한 success/deleted_count를 신뢰하세요.",
+                "description": "학습(RAG) 데이터를 파일명으로 삭제합니다. 해당 파일의 모든 청크를 ChromaDB에서 영구 삭제합니다. 삭제 전 확인 없이 즉시 실행하세요. 삭제 완료 후 search_farm_knowledge를 재호출하여 확인하지 마세요 — 도구가 반환한 success/deleted_count를 신뢰하세요. file_name='all'이면 전체 문서 삭제, 복수 파일은 파이프(|)로 구분 (예: 'a.pdf|b.pdf').",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "file_name": {
                             "type": "string",
-                            "description": "삭제할 파일명 (예: fbec0e8a_claude.txt 또는 claude.txt)"
+                            "description": "삭제할 파일명. 전체삭제='all', 복수파일='파일1.pdf|파일2.pdf' (파이프 구분). 파일명에 쉼표가 포함될 수 있으므로 구분자는 반드시 파이프(|) 사용."
                         },
                         "farm_id": {
                             "type": "string",
@@ -51,8 +51,8 @@ def get_available_tools() -> List[Dict[str, Any]]:
                         },
                         "n_results": {
                             "type": "integer",
-                            "description": "가져올 결과 개수 (기본값: 3)",
-                            "default": 3
+                            "description": "가져올 결과 개수 (기본값: 5, 상세 답변 필요 시 10~20으로 증가)",
+                            "default": 5
                         },
                         "file_name": {
                             "type": "string",
@@ -173,6 +173,36 @@ def get_available_tools() -> List[Dict[str, Any]]:
                     "required": ["url"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_gas_price",
+                "description": "주유소·유가 정보 전용 API(Opinet)입니다. 주유소 찾기, 기름값, 유가, 휘발유·경유·LPG 가격, 주변 주유소, 최저가 주유소, 시도/시군구별 평균 유가 등 주유소 관련 질문에 이 도구를 사용하세요. search_web보다 정확한 실시간 유가 데이터를 제공합니다.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query_type": {
+                            "type": "string",
+                            "enum": ["avg_national", "avg_sido", "avg_sigun", "low_price"],
+                            "description": "조회 유형: avg_national=전국 평균, avg_sido=시도별 평균, avg_sigun=시군구별 평균, low_price=최저가 주유소 Top10"
+                        },
+                        "sido": {
+                            "type": "string",
+                            "description": "시도명 (예: '전북', '서울', '경기'). avg_sido/avg_sigun/low_price에서 사용"
+                        },
+                        "sigun": {
+                            "type": "string",
+                            "description": "시군구 코드 (예: '0605'=정읍시). avg_sigun에서 사용"
+                        },
+                        "fuel_name": {
+                            "type": "string",
+                            "description": "유종명 (예: '휘발유', '경유', 'LPG', '등유'). 미지정 시 휘발유"
+                        }
+                    },
+                    "required": ["query_type"]
+                }
+            }
         }
     ]
 
@@ -237,11 +267,11 @@ def get_system_prompt_with_tools(farm_name: str = None, farm_info: str = None, s
    - **AI vs 알고리즘 제어값 비교**: `get_farm_realtime_data` 응답의 `ai_environment_judgment`에 알고리즘이 권장하는 릴레이 상태가 포함됩니다. 현재 릴레이(relay_mapping)와 비교하여 차이점을 분석하세요. 릴레이/제어값 비교 질문에는 `search_farm_knowledge` 대신 반드시 `get_farm_realtime_data`를 사용하세요.
 2. **학습데이터 삭제 요청** ("삭제", "지워", "제거" + 파일명): 반드시 `delete_farm_knowledge` 도구를 즉시 호출합니다. 확인 질문 없이 바로 실행하세요. farm_id는 현재 사용자의 농장 ID를 사용합니다. 삭제 결과(success/deleted_count)를 그대로 안내하세요. **삭제 완료 후 `search_farm_knowledge`를 재호출하여 확인하지 마세요** — 재검색 결과에는 웹 지식(web_knowledge) 항목이 포함될 수 있어 삭제 실패로 오인할 수 있습니다.
 2-1. 파일/문서/학습/RAG/데이터/요약/내용/정리 관련 질문: `search_farm_knowledge` 반드시 사용합니다. 파일명이 포함된 질문은 해당 파일명을 query와 file_name 파라미터에 넣어 반드시 검색합니다. "없다/모른다" 답변 전에 반드시 도구로 검색해야 합니다. 파일 목록 응답의 `file_list[].farm_scope` 값을 반드시 표시하세요 — "시스템 농장"은 전체 공용 데이터, "농장ID:xxx"는 해당 농장 전용 데이터입니다. 현재 대화 농장명으로 farm_scope를 추측하거나 변경하지 마세요.
-3. 사실·조사·검색 요청(주소/가격/찾아줘/알아봐줘/설명해줘/알려줘): `search_farm_knowledge` → 부족하면 `search_web` 사용합니다. 도구 없이 추측 답변은 절대 금지합니다.
-4. 일반 정보(날씨/뉴스/환율/맛집/최신): `search_web` 반드시 사용합니다.
-5. 인사/감정/의견/일상대화: 도구 없이 응답 가능합니다. 단, "파일/학습/자료/문서/리스트/목록"이 포함된 질문은 반드시 `search_farm_knowledge`를 사용하세요. 이전 대화에서 비슷한 답변을 했더라도 반드시 도구로 다시 검색하세요.
+3. 사실·조사·검색 요청(주소/가격/찾아줘/알아봐줘/설명해줘/알려줘): `search_farm_knowledge` → 부족하면 `search_web` 사용합니다. 도구 없이 추측 답변은 절대 금지합니다. 단, 전용 도구가 있는 경우(예: `search_gas_price`) 전용 도구를 우선 사용합니다.
+5. 일반 정보(날씨/뉴스/환율/맛집/최신): `search_web` 반드시 사용합니다.
+6. 인사/감정/의견/일상대화: 도구 없이 응답 가능합니다. 단, "파일/학습/자료/문서/리스트/목록"이 포함된 질문은 반드시 `search_farm_knowledge`를 사용하세요. 이전 대화에서 비슷한 답변을 했더라도 반드시 도구로 다시 검색하세요.
    - 사용자가 이전 대화의 단순 감상/소감을 물으면 [직전 대화 맥락]을 참고하여 도구 없이 답변할 수 있습니다.
-6. 애매하면 도구를 더 사용합니다. 확인 안 된 정보는 "확인이 필요합니다"로 답변합니다.
+7. 애매하면 도구를 더 사용합니다. 확인 안 된 정보는 "확인이 필요합니다"로 답변합니다.
 7. **절대 금지**: 도구를 호출하지 않고 "정보가 없습니다/확인되지 않았습니다"라고 답변하는 것은 금지합니다. 반드시 먼저 도구로 검색한 후 답변하세요.
 8. **장치 제어(켜기/끄기/중지/가동/작동/반대/반전/셋팅/설정/변경/전환) 요청**: 반드시 `control_relay` 도구를 호출하여 실제로 제어해야 합니다. 도구를 호출하지 않고 "중지했습니다/켰습니다/설정했습니다/설정했어요" 등의 답변은 절대 금지합니다.
    - **사용자 명령 즉시 실행 (절대 규칙)**: 사용자가 장치 제어를 명령하면 AI 환경 판단·센서 적정범위·ai_conflict와 관계없이 즉시 `control_relay`를 호출합니다. 제어 실행 전에 확인을 요청하거나, AI 판단을 이유로 제어를 보류·거부하는 것은 절대 금지합니다. 제어 완료 후 결과 보고 시 AI 권장과 차이가 있으면 그때 안내합니다.
@@ -268,7 +298,8 @@ def get_system_prompt_with_tools(farm_name: str = None, farm_info: str = None, s
 - 정보를 종합해 답변. URL만 나열 금지. 출처는 시스템이 자동 표시하므로 답변에 미포함.
 
 **답변 원칙:**
-- 3~5문장 이상 설명. 핵심 요약 후 세부 정리. 숫자/날짜 등 구체적 정보 포함.
+- 기본 3~5문장 이상 설명. 핵심 요약 후 세부 정리. 숫자/날짜 등 구체적 정보 포함.
+- 사용자가 분량을 명시하면(예: "A4 3장", "자세히", "상세하게") 요청 분량에 맞춰 충분히 길고 상세하게 답변. 짧게 끊지 마세요.
 - **데이터 정확성**: 도구 결과의 수치·센서명 변경/날조 절대 금지. 도구 결과에 없는 센서 추가 금지.
 - **답변 범위 제한**: 질문 주제에만 답변. 날씨만 물었으면 센서 데이터 덧붙이지 마세요. 과거 대화 기반 수치 생성 금지.
 - **도구 결과 전체 사용**: 도구가 반환한 모든 데이터를 빠짐없이 답변에 포함. 일부 재배사만 답변하거나 데이터 생략 금지.

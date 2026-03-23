@@ -30,6 +30,8 @@ function AppLayout() {
                     <AdminRoutes/>
                 ) : auth.userInfo.authLvel === "FARM_ADMIN" ? (
                     <FarmAdminRoutes/>
+                ) : auth.userInfo.authLvel === "SYS_MONITOR" ? (
+                    <MonitorRoutes/>
                 ) : (
                     <MonitorRoutes/>
                 )}
