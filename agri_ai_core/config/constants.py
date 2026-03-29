@@ -16,7 +16,7 @@ EMBEDDING_MODEL_NAME = "bge-m3"
 
 # 스케줄링 설정
 STATS_INTERVAL_MINUTES = 10
-AI_CONTROL_LOOP_DELAY_SEC = 30    # AI 순환 제어: 재배사 간 대기 시간(초)
+AI_CONTROL_LOOP_DELAY_SEC = 10    # AI 순환 제어: 재배사 간 대기 시간(초)
 TRAINING_SCHEDULE_TIME = ["09:00", "21:00"]
 NUM_PREDICT = 8192   # LLM 응답 최대 토큰 (A4 ~5장, RAG 요약/삭제/릴레이 제어 충분)
 NUM_PREDICT_REWRITE = 2048

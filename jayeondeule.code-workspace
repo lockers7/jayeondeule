@@ -4,5 +4,9 @@
 			"path": "."
 		}
 	],
-	"settings": {}
+	"settings": {
+		"java.project.referencedLibraries": [],
+		"java.configuration.updateBuildConfiguration": "automatic",
+		"java.import.maven.enabled": true
+	}
 }

@@ -64,7 +64,7 @@ class SQLControl:
         self.cursor.execute(sql_query.SELECT_SENSOR_REFRESH_INTERVAL_SQL, (self.farm_id, 2))
         # return self.cursor.fetchone()[0]
         row = self.cursor.fetchone()
-        return int(row[0]) if row and row[0] is not None else 3    
+        return int(row[0]) if row and row[0] is not None else 2
 
     # 기준 온도/습도/CO2 설정값 가져오기
     def get_base_setting_val(self) -> sql_format.BaseSetFormat:

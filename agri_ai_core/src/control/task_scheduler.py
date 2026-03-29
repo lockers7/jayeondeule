@@ -302,7 +302,7 @@ def setup_default_jobs(learning_func=None, stats_func=None,
                 minutes=STATS_INTERVAL_MINUTES
             )
 
-        # 수동/알고리즘 환경제어 + AI 비상모니터링 (매 10초)
+        # 수동/알고리즘 환경제어 + AI 비상모니터링 (매 5초)
         # 스케줄제어(조명/관수) + 수동/알고리즘 환경제어 + AI 비상제어
         # max_instances=1 설정으로 이전 실행 미완료 시 다음 실행 스킵
         if manual_control_func:
@@ -310,7 +310,7 @@ def setup_default_jobs(learning_func=None, stats_func=None,
                 job_id="relay_control_job",
                 func=manual_control_func,
                 trigger_type="interval",
-                seconds=10
+                seconds=5
             )
 
         # AI 인공지능 환경제어: 별도 순환 루프 스레드로 운영 (startup.py에서 시작)

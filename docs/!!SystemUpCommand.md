@@ -1,3 +1,7 @@
+ssh로 jayeondule@jayeodeule.iptime.org 에 5101, 5102, 5103, 5199 포트로 접속하되 접속 정보는 Wkdusemfdp1@ 이다
+
+추가 패키지 설치 없이 그대로 사용 가능합니다. 카메라 모듈 장착 후 sudo systemctl restart camera_stream 만 실행하면 됩니다.
+
 [systemd 기반 통합 관리]
    ├── postgresql.service        (DB)
    ├── ollama.service            (LLM 엔진)

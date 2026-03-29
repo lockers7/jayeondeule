@@ -18,6 +18,12 @@ export default function Header() {
                 {auth.token != null && (
                     <Nav className="me-auto">
                         <Nav.Link as={Link} to="/ai-chat" style={{fontWeight: "bold"}}>AI 채팅</Nav.Link>
+                        {auth.userInfo?.authLvel === "ADMIN" && (
+                            <Nav.Link href="https://lockers7.iptime.org:5100" target="_blank" rel="noreferrer"
+                               style={{fontSize: "0.85rem", color: "#FF7043", fontWeight: "bold"}}>
+                                🛒 쇼핑몰
+                            </Nav.Link>
+                        )}
                     </Nav>
                 )}
                 {/* 페이지별 액션 버튼 슬롯 (AiChatPage에서 Portal로 RAG 버튼 렌더링) */}
