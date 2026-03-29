@@ -9,7 +9,7 @@
 # setup_web_logger: 웹 검색 전용 로거 생성
 # setup_api_logger: API 전용 로거 생성 (api.log)
 # _write_temp_and_replace: LOG CLEANUP FUNCTIONS
-# delete_old_daily_logs: llm_*.log, web_*.log 중 지정일 이전 파일 삭제
+# delete_old_daily_logs: ai_*.log, web_*.log, shop_*.log 중 지정일 이전 파일 삭제
 # trim_old_log_entries: 타임스탬프 기반으로 단일 로그 파일에서 오래된 항목 제거
 # trim_large_plain_logs: 타임스탬프 없는 로그 파일의 크기를 제한 (최근 줄만 유지)
 # cleanup_all_logs: 전체 로그 정리 (앱 시작 시 1회 호출)
@@ -44,7 +44,7 @@ MAX_PLAIN_LOG_LINES = 50000
 # ============================================================
 # DAILY ROTATING FILE HANDLER
 # 날짜가 바뀌면 새로운 로그 파일을 자동으로 생성하는 핸들러
-# filename_pattern: 로그 파일 이름 패턴 (예: 'llm_%Y_%m_%d.log')
+# filename_pattern: 로그 파일 이름 패턴 (예: 'ai_%Y-%m-%d.log')
 # ============================================================
 class DailyRotatingFileHandler(logging.FileHandler):
     # ------------------------------------------------------------
@@ -148,7 +148,7 @@ def _setup_logger_impl(cache_key, logger_name, file_pattern, error_label, use_pl
 
 
 def setup_logger(name=None):
-    return _setup_logger_impl(name, name, "llm_%Y-%m-%d.log", "로그")
+    return _setup_logger_impl(name, name, "ai_%Y-%m-%d.log", "로그")
 
 
 def setup_web_logger(name=None):
@@ -179,17 +179,17 @@ def _write_temp_and_replace(filepath, lines):
 
 
 # ============================================================
-# llm_*.log, web_*.log 중 지정일 이전 파일 삭제
+# ai_*.log, web_*.log, shop_*.log 중 지정일 이전 파일 삭제
 # ============================================================
 def delete_old_daily_logs(log_dir, days=LOG_RETENTION_DAYS):
     cutoff = datetime.now() - timedelta(days=days)
     deleted_count = 0
 
-    for pattern in ("llm_*.log", "web_*.log"):
+    for pattern in ("ai_*.log", "web_*.log", "shop_*.log"):
         for log_file in glob.glob(os.path.join(log_dir, pattern)):
             try:
                 basename = os.path.basename(log_file)
-                # llm_2026-02-14.log → 2026-02-14 또는 web_2026-02-14.log → 2026-02-14
+                # ai_2026-02-14.log → 2026-02-14 또는 web_2026-02-14.log → 2026-02-14
                 date_part = basename.split("_", 1)[1].replace(".log", "")
                 log_date = datetime.strptime(date_part, "%Y-%m-%d")
                 if log_date < cutoff:
@@ -310,9 +310,13 @@ def cleanup_all_logs():
     entry_trimmed = trim_old_log_entries(log_dir)
     plain_trimmed = trim_large_plain_logs(log_dir)
 
-    total = daily_deleted + (1 if entry_trimmed > 0 else 0) + (1 if plain_trimmed > 0 else 0)
+    # 쇼핑몰 로그 정리 (60일 보관)
+    shop_deleted = delete_old_daily_logs(log_dir, days=60)
+
+    total = daily_deleted + shop_deleted + (1 if entry_trimmed > 0 else 0) + (1 if plain_trimmed > 0 else 0)
     if total > 0:
         print(f"[로그정리] 완료 (일별파일 {daily_deleted}개 삭제, "
+              f"쇼핑몰 {shop_deleted}개 삭제, "
               f"단일파일 {entry_trimmed}줄 트리밍, "
               f"대용량파일 {plain_trimmed}줄 트리밍)")
     else:

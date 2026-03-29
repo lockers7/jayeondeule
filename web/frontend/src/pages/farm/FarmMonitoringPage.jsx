@@ -124,7 +124,7 @@ export default function FarmMonitoringPage() {
             if (!selectedHouse) return [];
             return getLatestSensorData(farmId, selectedHouse.housId).then(res => res.data);
         },
-        refetchInterval: 5000, // 5초마다 polling
+        refetchInterval: 3000, // 3초마다 polling
         enabled: !!selectedHouse,
     });
 

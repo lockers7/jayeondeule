@@ -1,5 +1,5 @@
 import {useQuery, useMutation, useQueryClient} from "@tanstack/react-query";
-import {useEffect, useState} from "react";
+import {useMemo, useState} from "react";
 import {Row, Col, Card, Form, OverlayTrigger, Tooltip} from "react-bootstrap";
 import {InfoCircle} from "react-bootstrap-icons";
 import axios from "axios";
@@ -28,15 +28,14 @@ async function fetchAiJudgment(farmId, houseId) {
 export default function RelayDashboard({farmId, house, setSelectedHouse}) {
     const queryClient = useQueryClient();
 
-    const [relayLabels, setRelayLabels] = useState([]);
     const [showAiModal, setShowAiModal] = useState(false);
     const [aiJudgment, setAiJudgment] = useState(null);
     const [toggledDeviceLabel, setToggledDeviceLabel] = useState("");
 
-    useEffect(() => {
+    const relayLabels = useMemo(() => {
         if (farmId == 1 && house.housId == 2) {
             // 릴레이 라벨(2동 임시)
-            setRelayLabels([
+            return [
                 {label: "흡입팬(7)", num: 7},
                 {label: "배출팬(8)", num: 8},
                 {label: "순환밸브(9)", num: 9},
@@ -49,32 +48,33 @@ export default function RelayDashboard({farmId, house, setSelectedHouse}) {
                 {label: "칠러Ⅰ(1)", num: 1},
                 {label: "칠러Ⅱ(4)", num: 4},
                 {label: "라디에이터(3)", num: 3},
-            ]);
-        } else {
-            // 릴레이 라벨(1, 3동)
-            setRelayLabels([
-                {label: "흡입팬(5)", num: 5},
-                {label: "배출팬(6)", num: 6},
-                {label: "순환밸브(10)", num: 10},
-                {label: "흡입밸브(11)", num: 11},
-                {label: "배출밸브(14)", num: 14},
-                {label: "배수밸브(3)", num: 3},
-                {label: "포그생성(순환모터)(2)", num: 2},
-                {label: "조명(7)", num: 7},
-                {label: "관수(8)", num: 8},
-                {label: "수온히터(1)", num: 1},
-                {label: "실내히터(9)", num: 9},
-                {label: "히터밸브(15)", num: 15},
-            ]);
+            ];
         }
-    }, [farmId, house])
+        // 릴레이 라벨(1, 3동)
+        return [
+            {label: "흡입팬(5)", num: 5},
+            {label: "배출팬(6)", num: 6},
+            {label: "순환밸브(10)", num: 10},
+            {label: "흡입밸브(14)", num: 14},
+            {label: "배출밸브(11)", num: 11},
+            {label: "배수밸브(3)", num: 3},
+            {label: "포그생성(순환모터)(2)", num: 2},
+            {label: "조명(7)", num: 7},
+            {label: "관수(8)", num: 8},
+            {label: "수온히터(1)", num: 1},
+            {label: "실내히터(9)", num: 9},
+            {label: "히터밸브(15)", num: 15},
+        ];
+    }, [farmId, house.housId]);
 
     // relay 상태 조회 (polling)
+    // gcTime: 0 → 재배사 전환 시 이전 캐시 즉시 삭제하여 깜빡임 방지
     const {data: relayStatus = {}, isLoading: isRelayLoading, error: relayError} = useQuery({
         queryKey: ["relayStatus", farmId, house.housId],
         queryFn: () => getRelayStatus(farmId, house.housId).then(res => res.data),
         refetchInterval: 5000,
         enabled: !!farmId && !!house.housId,
+        gcTime: 0,
     });
 
     // relay toggle mutation
