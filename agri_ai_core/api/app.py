@@ -32,6 +32,7 @@ from agri_ai_core.api.models import (
     RagSaveRequest, RagResponse,
 )
 from agri_ai_core.api.voice_router import voice_router
+from agri_ai_core.api.rpi_router import rpi_router
 
 logger = setup_logger(__name__)
 
@@ -204,6 +205,7 @@ app = FastAPI(
 )
 
 app.include_router(voice_router)
+app.include_router(rpi_router)
 app.add_middleware(JsonLoggingMiddleware)
 
 # CORS 미들웨어

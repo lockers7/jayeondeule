@@ -162,14 +162,7 @@ export default function FarmMonitoringPage() {
         <Container className="mt-4">
             <div className="d-flex justify-content-between align-items-center mb-3">
                 {farm && (
-                    (auth.userInfo.authLvel === "ADMIN" || auth.userInfo.authLvel === "FARM_ADMIN") ? (
-                        <>
-                            <h3 className="mb-0">{farm.farmName} 현황</h3>
-                            <FarmKebabMenu farmId={farmId} />
-                        </>
-                    ) : (
-                        <h3 className="mb-0">{farm.farmName} 현황</h3>
-                    )
+                    <h3 className="mb-0">{farm.farmName} 현황</h3>
                 )}
             </div>
 
@@ -187,6 +180,7 @@ export default function FarmMonitoringPage() {
                                 setSelectedHouse={handleSetSelectedHouse}
                                 selectedHouse={selectedHouse}
                                 farmId={farmId}
+                                isAdmin={isAdmin}
                             />
                         }
                     </Accordion.Body>

@@ -664,6 +664,14 @@ select {
   margin: 16px 0;
 }
 
+.efficacy-img {
+  width: 100%;
+  height: 240px;
+  border-radius: 12px;
+  object-fit: cover;
+  margin: 16px 0;
+}
+
 .efficacy-cta {
   background: linear-gradient(135deg, #00695C, #00897B);
   color: #fff;

@@ -1,7 +1,8 @@
-import React from "react";
+import React, {useState} from "react";
 import {Form} from "react-bootstrap";
 import {useQueryClient, useMutation} from "@tanstack/react-query";
 import {patchHouse} from "../../utils/houseUtil.js";
+import axios from "axios";
 import "./LatestSensorItem.css";
 
 function getOperationMode(mnulCtrlFlag, ctrlType) {
@@ -25,8 +26,9 @@ const CROP_LEVEL_OPTIONS = [
 
 const fmt = (v, unit) => (v != null ? Math.round(v * 100) / 100 + unit : "-");
 
-export default function LatestSensorItem({latestSensorData, house, setSelectedHouse, selectedHouse, farmId}) {
+export default function LatestSensorItem({latestSensorData, house, setSelectedHouse, selectedHouse, farmId, isAdmin}) {
     const queryClient = useQueryClient();
+    const [rpiRestarting, setRpiRestarting] = useState(false);
     const trStyle = {};
     const hasSensorData = latestSensorData != null;
 
@@ -77,6 +79,23 @@ export default function LatestSensorItem({latestSensorData, house, setSelectedHo
         return `${hh}:${min}:${ss}`;
     };
 
+    const handleRpiRestart = async (e) => {
+        e.stopPropagation();
+        if (!window.confirm(`${house.housName}의 라즈베리파이를 재시작하시겠습니까?`)) return;
+        setRpiRestarting(true);
+        try {
+            await axios.post("/ai-api/api/v1/rpi/restart", {
+                farm_id: Number(farmId),
+                house_id: house.housId,
+            });
+            alert(`${house.housName} RPi 재시작 완료`);
+        } catch (err) {
+            alert(`재시작 실패: ${err.response?.data?.detail || err.message}`);
+        } finally {
+            setRpiRestarting(false);
+        }
+    };
+
     return (
             <tr className="sensorItem" onClick={() => setSelectedHouse(house)} style={{cursor: "pointer"}}>
                 <td style={{...trStyle, padding: "0"}}>{house.housName}</td>
@@ -119,6 +138,22 @@ export default function LatestSensorItem({latestSensorData, house, setSelectedHo
                 <td style={{...trStyle, fontSize: "12px"}}>
                     {hasSensorData ? (<>{formatDate(latestSensorData.recdDttm)}<br/>{formatTime(latestSensorData.recdDttm)}</>) : "-"}
                 </td>
+                {isAdmin && (
+                    <td style={{...trStyle, textAlign: "center"}} onClick={(e) => e.stopPropagation()}>
+                        <button
+                            onClick={handleRpiRestart}
+                            disabled={rpiRestarting}
+                            title={`${house.housName} RPi 재시작`}
+                            style={{
+                                background: "none", border: "1px solid #ccc", borderRadius: "4px",
+                                cursor: rpiRestarting ? "wait" : "pointer", padding: "2px 8px",
+                                fontSize: "14px", color: rpiRestarting ? "#999" : "#dc3545",
+                            }}
+                        >
+                            {rpiRestarting ? "⏳" : "🔄"}
+                        </button>
+                    </td>
+                )}
             </tr>
     )
 }

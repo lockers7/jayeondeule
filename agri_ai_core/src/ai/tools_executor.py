@@ -1259,7 +1259,8 @@ def _build_ai_conflict(ai_judgment, user_relay_settings):
     return conflicts
 
 
-def _control_relay_all_houses(device_name: str, action: str, farm_id: str, mode: str = None) -> Dict[str, Any]:
+def _control_relay_all_houses(device_name: str = None, action: str = None, farm_id: str = None,
+                               mode: str = None, devices: list = None) -> Dict[str, Any]:
     """house_id='all' 요청 시 모든 재배사(hous_id!=0)에 대해 일괄 제어."""
     from agri_ai_core.src.postgresql.connection import db_session
     from agri_ai_core.src.postgresql.queries import GET_ONE_FARM, GET_ALL_HOUSES
@@ -1292,8 +1293,13 @@ def _control_relay_all_houses(device_name: str, action: str, farm_id: str, mode:
         h_id = str(house.get("hous_id", ""))
         if not h_id or h_id == "0":
             continue
-        r = control_relay(house_id=h_id, device_name=device_name, action=eff_action,
-                          farm_id=target_farm_id, mode=eff_mode)
+        # devices 배열이 있으면 일괄 제어 (다중 장치 1회 DB 쓰기)
+        if devices and isinstance(devices, list) and len(devices) > 0:
+            r = control_relays_batch(house_id=h_id, devices=devices,
+                                     farm_id=target_farm_id, mode=eff_mode)
+        else:
+            r = control_relay(house_id=h_id, device_name=device_name, action=eff_action,
+                              farm_id=target_farm_id, mode=eff_mode)
         results.append({"house_id": h_id, "result": r})
     success_count = sum(1 for r in results if r["result"].get("success"))
     total = len(results)
@@ -2200,13 +2206,28 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
             )
 
         elif tool_name == "control_relay":
-            result = control_relay(
-                house_id=tool_args.get("house_id"),
-                device_name=tool_args.get("device_name"),
-                action=tool_args.get("action"),
-                farm_id=tool_args.get("farm_id"),
-                mode=tool_args.get("mode"),
-            )
+            devices = tool_args.get("devices")
+            h_id = tool_args.get("house_id")
+            f_id = tool_args.get("farm_id")
+            # house_id='all' + devices 배열 → 전 재배사 다중 장치 일괄 제어
+            if devices and isinstance(devices, list) and len(devices) > 0:
+                if str(h_id or "").strip().lower() in ("all", "전체", "모든"):
+                    result = _control_relay_all_houses(
+                        farm_id=f_id, devices=devices, mode=tool_args.get("mode"),
+                    )
+                else:
+                    result = control_relays_batch(
+                        house_id=h_id, devices=devices,
+                        farm_id=f_id, mode=tool_args.get("mode"),
+                    )
+            else:
+                result = control_relay(
+                    house_id=h_id,
+                    device_name=tool_args.get("device_name"),
+                    action=tool_args.get("action"),
+                    farm_id=f_id,
+                    mode=tool_args.get("mode"),
+                )
 
         elif tool_name == "search_web":
             result = search_web(

@@ -20,6 +20,8 @@ from agri_ai_core.src.postgresql.connection import db_session
 from agri_ai_core.src.postgresql import queries as dbQry
 from agri_ai_core.src.postgresql.reader import read_light_irrigation_settings, read_current_sensor_info
 from agri_ai_core.src.control.relay_manager import set_relay_value, log_relay_detail
+from agri_ai_core.src.postgresql.reader import read_latest_relay_info
+from agri_ai_core.src.control.control_common import get_pin_map, RELAY_COUNT
 from agri_ai_core.src.control.control_common import (
     sort_houses as _sort_houses,
     TEMP_LOW, TEMP_HIGH,
@@ -188,17 +190,48 @@ def _handle_schedule_control(farm_id, house_id, setting_type, relay_flag_key, la
                     schedule_info += f"({'/'.join(days)})"
                 active_schedules.append(schedule_info)
 
-        result = set_relay_value(farm_id, house_id, {relay_flag_key: should_turn_on})
+        # 스케줄 시간대 내 → ON / 스케줄 있고 시간대 밖 → OFF (스케줄 종료)
+        # 스케줄 설정 자체가 없으면 → 현재 상태 유지 (웹 수동 제어값 보존)
+        # ※ raw_mode=True로 호출하여 반복쓰기 스레드 생성 방지 (다른 릴레이 덮어쓰기 방지)
+        has_any_schedule = any(
+            s.get('strt_time') and s.get('fnsh_time') for s in settings
+        )
 
-        if result.get("success"):
-            status = "ON" if should_turn_on else "OFF"
-            sched_str = f" (스케줄: {', '.join(active_schedules)})" if active_schedules else ""
-            logger.debug(f"농장 {farm_id}, 재배사 {house_id}: {label} {status}{sched_str}")
-            return {"success": True, "action": action_name, "status": status,
-                    "schedules": active_schedules, "message": f"{label} {status}"}
+        if should_turn_on or has_any_schedule:
+            new_value = should_turn_on  # True=ON, False=OFF
+
+            # 현재 전체 릴레이 상태를 읽어서 해당 릴레이만 변경 (raw_mode용)
+            current = read_latest_relay_info(farm_id, house_id)
+            if current:
+                relay_values = {
+                    f"relay_{i}st_flag": bool(current.get(f"relay_{i}st_flag", False))
+                    for i in range(1, RELAY_COUNT + 1)
+                }
+            else:
+                relay_values = {f"relay_{i}st_flag": False for i in range(1, RELAY_COUNT + 1)}
+
+            # 시멘틱 키 → 실제 릴레이 핀 변환
+            pin_map = get_pin_map(house_id)
+            actual_pin = pin_map.get(relay_flag_key, relay_flag_key)
+            relay_values[actual_pin] = new_value
+
+            # raw_mode=True: 반복쓰기 스레드 없이 1회 DB 쓰기만 (다른 릴레이 보존)
+            result = set_relay_value(farm_id, house_id, relay_values, raw_mode=True)
+
+            if result.get("success"):
+                status = "ON" if new_value else "OFF"
+                sched_str = f" (스케줄: {', '.join(active_schedules)})" if active_schedules else ""
+                suffix = "" if new_value else " (스케줄 종료)"
+                logger.debug(f"농장 {farm_id}, 재배사 {house_id}: {label} {status}{sched_str}{suffix}")
+                return {"success": True, "action": action_name, "status": status,
+                        "schedules": active_schedules, "message": f"{label} {status}"}
+            else:
+                logger.error(f"농장 {farm_id}, 재배사 {house_id}: {label} 제어 실패 - {result.get('message')}")
+                return {"success": False, "message": f"{label} 제어 실패: {result.get('message')}"}
         else:
-            logger.error(f"농장 {farm_id}, 재배사 {house_id}: {label} 제어 실패 - {result.get('message')}")
-            return {"success": False, "message": f"{label} 제어 실패: {result.get('message')}"}
+            # 스케줄 설정 없음 → 현재 상태 유지 (웹 수동 제어값 보존)
+            return {"success": True, "action": "none", "status": "-",
+                    "schedules": [], "message": f"{label} 스케줄 미설정 (현재 상태 유지)"}
 
     except Exception as e:
         logger.error(f"{label} 스케줄 제어 중 오류: {e}")

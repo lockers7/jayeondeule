@@ -1,7 +1,7 @@
 import React, {useEffect, useRef} from "react";
 import LatestSensorItem from "./LatestSensorItem.jsx";
 
-export default function LatestSensorMonitor({latestSensorData, houses, setSelectedHouse, selectedHouse, farmId}) {
+export default function LatestSensorMonitor({latestSensorData, houses, setSelectedHouse, selectedHouse, farmId, isAdmin}) {
     const scrollRef = useRef(null);
 
     useEffect(() => {
@@ -32,6 +32,7 @@ export default function LatestSensorMonitor({latestSensorData, houses, setSelect
                     setSelectedHouse={setSelectedHouse}
                     selectedHouse={selectedHouse}
                     farmId={farmId}
+                    isAdmin={isAdmin}
                 />
             )
         })
@@ -62,6 +63,7 @@ export default function LatestSensorMonitor({latestSensorData, houses, setSelect
                             <th>CO2</th>
                             <th>수온</th>
                             <th>기록일</th>
+                            {isAdmin && <th>RPi 관리</th>}
                         </tr>
                         </thead>
                         <tbody>
