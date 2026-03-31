@@ -1,0 +1,4 @@
+pip install smbus2 
+pip install adafruit-circuitpython-sht4x 
+pip install python-dotenv
+pip install adafruit-blinka
