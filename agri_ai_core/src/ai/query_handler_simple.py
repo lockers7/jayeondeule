@@ -508,6 +508,111 @@ def _unpack_llm_result(result):
     return (str(result), [], [], "general")
 
 
+# ============================================================
+# 3단계 파이프라인 모드 설정
+# USE_3STAGE_PIPELINE=true 환경변수로 활성화
+# 기존 Tool Use 루프는 fallback으로 항상 보존
+# ============================================================
+_USE_3STAGE_PIPELINE = os.getenv("USE_3STAGE_PIPELINE", "false").lower() == "true"
+
+
+def _run_3stage_pipeline_sync(user_query, full_query, farm_id, house_id, farm_name,
+                              default_tool_args, conversation_history, speech_style,
+                              progress_queue=None):
+    """
+    3단계 분리형 파이프라인 실행 (동기 함수 — asyncio.to_thread()로 호출)
+    1단계: 질문유형분석 → 2단계: 데이터수집+검증 → 3단계: 답변작성
+
+    기존 Tool Use 루프를 대체하며, 실패 시 기존 루프로 fallback.
+    """
+    from agri_ai_core.src.ai.pipeline.question_analyzer import analyze_question
+    from agri_ai_core.src.ai.pipeline.data_collector import DataCollector
+    from agri_ai_core.src.ai.pipeline.answer_generator import generate_answer
+    from agri_ai_core.src.ai.llm_client import _build_farm_info_text, _report_progress
+
+    t0 = time.time()
+
+    # 진행 상태 콜백 (스트리밍용)
+    def _progress(message, phase, tool_name=None):
+        _report_progress(progress_queue, message, phase, tool_name=tool_name)
+
+    try:
+        # [1단계] 질문유형분석
+        _progress("질문을 분석하고 있습니다...", "analyzing")
+        logger.info("[3단계파이프라인] === 1단계: 질문유형분석 시작 ===")
+
+        # 대화 컨텍스트를 텍스트로 변환 (1단계 분석기에 전달)
+        ctx_for_analyzer = conversation_history
+
+        analysis = analyze_question(
+            user_query=full_query,
+            conversation_context=ctx_for_analyzer,
+            farm_id=farm_id,
+            house_id=house_id,
+        )
+
+        question_type = analysis.get("question_type", "general")
+        logger.info(f"[3단계파이프라인] 1단계 완료: type={question_type} 도구={len(analysis.get('required_data', []))}개")
+
+        # greeting/conversation_ref는 도구 불필요 → 2단계 스킵
+        if question_type in ("greeting", "conversation_ref"):
+            logger.info(f"[3단계파이프라인] 2단계 스킵 (type={question_type}, 도구 불필요)")
+            collected = {"data": [], "sources": [], "tools_used": [], "sufficient": True}
+        else:
+            # [2단계] 데이터 수집 + 검증
+            logger.info("[3단계파이프라인] === 2단계: 데이터수집 시작 ===")
+            _progress("필요한 데이터를 수집하고 있습니다...", "data_collecting")
+
+            collector = DataCollector(
+                default_tool_args=default_tool_args,
+                progress_callback=_progress,
+            )
+            collected = collector.collect(analysis)
+
+            logger.info(
+                f"[3단계파이프라인] 2단계 완료: "
+                f"데이터={len(collected.get('data', []))}건 "
+                f"도구={collected.get('tools_used', [])} "
+                f"sufficient={collected.get('sufficient', False)}"
+            )
+
+        # [3단계] 답변 작성
+        logger.info("[3단계파이프라인] === 3단계: 답변작성 시작 ===")
+        _progress("수집된 데이터로 답변을 작성하고 있습니다...", "llm_generating")
+
+        farm_info = _build_farm_info_text()
+
+        result = generate_answer(
+            user_query=full_query,
+            analysis_result=analysis,
+            collected_result=collected,
+            conversation_history=conversation_history,
+            farm_name=farm_name,
+            farm_info=farm_info,
+            speech_style=speech_style,
+            progress_callback=_progress,
+        )
+
+        total_s = time.time() - t0
+        logger.info(f"[3단계파이프라인] 전체 완료: {total_s:.1f}s type={result.get('response_type', '?')}")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"[3단계파이프라인] 파이프라인 오류, 기존 Tool Use fallback: {e}")
+        logger.error(traceback.format_exc())
+        # fallback: 기존 Tool Use 루프로 전환
+        logger.info("[3단계파이프라인] fallback → 기존 Tool Use 루프 실행")
+        return get_llm_response_with_tools(
+            user_query=full_query,
+            farm_name=farm_name,
+            default_tool_args=default_tool_args,
+            conversation_history=conversation_history,
+            speech_style=speech_style,
+            progress_queue=progress_queue,
+        )
+
+
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # 질의 처리 (Tool Use 방식)
 # ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -566,11 +671,27 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
         _ctx_ms = (time.time() - _t_ctx) * 1000
         logger.debug(f"[PERF:대화] 하이브리드컨텍스트로드={_ctx_ms:.0f}ms (session={session_id[:12] if session_id else '-'})")
 
-        # [2/3] LLM 답변 생성 (LLM이 도구 자율 선택)
+        # [2/3] LLM 답변 생성
         llm_start = datetime.now()
-        logger.info("[LLM시작] 모드=Tool Use (LLM 자율 도구 선택)")
         try:
-            result = await _call_llm_with_timeout(full_query, farm_name, default_tool_args, conversation_history, speech_style=speech_style)
+            if _USE_3STAGE_PIPELINE:
+                # 3단계 분리형 파이프라인 (to_thread로 이벤트루프 블로킹 방지)
+                logger.info("[LLM시작] 모드=3단계 파이프라인 (질문분석→데이터수집→답변작성)")
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        _run_3stage_pipeline_sync,
+                        user_query=user_query, full_query=full_query,
+                        farm_id=farm_id, house_id=house_id, farm_name=farm_name,
+                        default_tool_args=default_tool_args,
+                        conversation_history=conversation_history,
+                        speech_style=speech_style,
+                    ),
+                    timeout=_LLM_TIMEOUT,
+                )
+            else:
+                # 기존 Tool Use 루프
+                logger.info("[LLM시작] 모드=Tool Use (LLM 자율 도구 선택)")
+                result = await _call_llm_with_timeout(full_query, farm_name, default_tool_args, conversation_history, speech_style=speech_style)
         except asyncio.TimeoutError:
             logger.error(f"[LLM타임아웃] {_LLM_TIMEOUT}초 초과")
             yield {
@@ -707,10 +828,25 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
         yield {"type": "status", "content": "답변을 생성하고 있습니다..."}
 
         llm_start = datetime.now()
-        llm_task = asyncio.create_task(
-            _call_llm_with_timeout(full_query, farm_name, default_tool_args, conversation_history,
-                                   speech_style=speech_style, progress_queue=progress_queue)
-        )
+        if _USE_3STAGE_PIPELINE:
+            logger.info("[스트리밍] 모드=3단계 파이프라인")
+            llm_task = asyncio.create_task(
+                asyncio.to_thread(
+                    _run_3stage_pipeline_sync,
+                    user_query=user_query, full_query=full_query,
+                    farm_id=farm_id, house_id=house_id, farm_name=farm_name,
+                    default_tool_args=default_tool_args,
+                    conversation_history=conversation_history,
+                    speech_style=speech_style,
+                    progress_queue=progress_queue,
+                )
+            )
+        else:
+            logger.info("[스트리밍] 모드=Tool Use")
+            llm_task = asyncio.create_task(
+                _call_llm_with_timeout(full_query, farm_name, default_tool_args, conversation_history,
+                                       speech_style=speech_style, progress_queue=progress_queue)
+            )
         # 진행 상태 이력 (도구 호출 정보 등)을 수집하여 대기 중 순환 표시
         _progress_history = []  # 도구/단계 메시지 이력
         _last_progress_msg = ""

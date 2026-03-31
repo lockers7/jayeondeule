@@ -15,9 +15,7 @@ function IntroSection() {
     <>
       <div className="efficacy-card">
         <h3>상황버섯이란?</h3>
-        <div className="efficacy-img-placeholder" style={{ background: 'linear-gradient(135deg, #00897B, #4DB6AC)' }}>
-          🍄
-        </div>
+        <img src="/images/efficacy/intro-mushroom.png" alt="상황버섯" className="efficacy-img" />
         <p>
           상황버섯은 <strong>뽕나무(桑)에서 자라는 누런색(黃) 버섯</strong>이라는 뜻의 다년생 약용 버섯입니다.
           주로 뽕나무의 오래된 고목 그루터기에서 기생하며, 상수리나무, 참나무 등 다양한 활엽수 고목에서도 발견됩니다.
@@ -79,9 +77,7 @@ function BenefitsSection() {
     <>
       <div className="efficacy-card">
         <h3>항암 효과</h3>
-        <div className="efficacy-img-placeholder" style={{ background: 'linear-gradient(135deg, #00695C, #26A69A)' }}>
-          🛡️
-        </div>
+        <img src="/images/efficacy/anticancer.jpg" alt="항암 효과" className="efficacy-img" />
         <p>
           상황버섯은 <strong>"천연 항암제"</strong>로 불릴 만큼 뛰어난 항암 활성을 보여줍니다.
           위암, 식도암, 직장암, 간암, 유방암, 전립선암, 폐암, 결장암 등 <strong>10종 이상의 암세포</strong>에 대해 활성이 확인되었습니다.
@@ -114,9 +110,7 @@ function BenefitsSection() {
 
       <div className="efficacy-card">
         <h3>면역력 강화</h3>
-        <div className="efficacy-img-placeholder" style={{ background: 'linear-gradient(135deg, #00897B, #80CBC4)' }}>
-          💪
-        </div>
+        <img src="/images/efficacy/immunity.jpg" alt="면역력 강화" className="efficacy-img" />
         <p>상황버섯의 다당류와 베타글루칸은 인체의 면역 체계를 다방면으로 활성화합니다.</p>
         <ul>
           <li><strong>자연살해세포(NK세포) 활성화</strong> — 수지상세포와 대식세포 활성화를 통해 NK세포 세포독성을 강화</li>
@@ -171,9 +165,7 @@ function ResearchSection() {
     <>
       <div className="efficacy-card">
         <h3>주요 전임상 연구</h3>
-        <div className="efficacy-img-placeholder" style={{ background: 'linear-gradient(135deg, #0277BD, #4FC3F7)' }}>
-          🔬
-        </div>
+        <img src="/images/efficacy/research.jpg" alt="과학적 연구" className="efficacy-img" />
 
         <h4>1968년 - 일본국립암연구소</h4>
         <p>
@@ -266,9 +258,7 @@ function UsageSection() {
     <>
       <div className="efficacy-card">
         <h3>기본 끓이는 방법 (달임법)</h3>
-        <div className="efficacy-img-placeholder" style={{ background: 'linear-gradient(135deg, #4E342E, #8D6E63)' }}>
-          🍵
-        </div>
+        <img src="/images/efficacy/tea-brewing.jpg" alt="복용법" className="efficacy-img" />
         <p><strong>재료:</strong> 건조 상황버섯 30~50g, 물 2,000mL</p>
 
         <h4>과정</h4>
@@ -365,9 +355,7 @@ function CompareSection() {
     <>
       <div className="efficacy-card">
         <h3>약용버섯 4종 비교</h3>
-        <div className="efficacy-img-placeholder" style={{ background: 'linear-gradient(135deg, #1565C0, #42A5F5)' }}>
-          📊
-        </div>
+        <img src="/images/efficacy/comparison.jpg" alt="약용버섯 비교" className="efficacy-img" />
         <table className="efficacy-table">
           <thead>
             <tr><th>항목</th><th>상황버섯</th><th>영지버섯</th><th>차가버섯</th><th>동충하초</th></tr>
