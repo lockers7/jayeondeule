@@ -26,19 +26,20 @@ const CROP_LEVEL_OPTIONS = [
 
 const fmt = (v, unit) => (v != null ? Math.round(v * 100) / 100 + unit : "-");
 
-export default function LatestSensorItem({latestSensorData, house, setSelectedHouse, selectedHouse, farmId, isAdmin}) {
+export default function LatestSensorItem({latestSensorData, house, setSelectedHouse, selectedHouse, farmId, isAdmin, isStale = false}) {
     const queryClient = useQueryClient();
     const [rpiRestarting, setRpiRestarting] = useState(false);
     const trStyle = {};
     const hasSensorData = latestSensorData != null;
 
-    if (hasSensorData) {
-        const now = new Date();
-        const recdTime = new Date(latestSensorData.recdDttm);
-        if ((now - recdTime) / 1000 > 60) { // 1분(60초) 이상 차이면
-            trStyle.color = "red";
-        }
-    } else {
+    // house_id=0 (통합정보재배사)는 센서 없는 특수 재배사 → 에러 체크 제외
+    if (house.housId === 0) {
+        trStyle.color = "#999";
+    } else if (isStale) {
+        // 30초간 데이터 변경 없음 → 에러
+        trStyle.color = "red";
+        trStyle.fontWeight = "bold";
+    } else if (!hasSensorData) {
         trStyle.color = "#999";
     }
 

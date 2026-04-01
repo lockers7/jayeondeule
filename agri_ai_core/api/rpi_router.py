@@ -1,12 +1,14 @@
 # ------------------------------------------------------------------------------------------------------------
 # 라즈베리파이 관리 API
 # SSH를 통해 재배사별 라즈베리파이 서비스를 재시작
+# 전체 농장/재배사 센서 상태 모니터링
 # ------------------------------------------------------------------------------------------------------------
 import subprocess
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from agri_ai_core.logs import setup_logger
+from agri_ai_core.src.postgresql.connection import db_session
 
 logger = setup_logger(__name__)
 
@@ -28,6 +30,13 @@ _RPI_SERVICE_NAME = "jayeondeule_ctrl"
 class RpiActionRequest(BaseModel):
     farm_id: int
     house_id: int
+
+
+@rpi_router.get("/server-time")
+async def get_server_time():
+    """서버 현재 시각 반환"""
+    from datetime import datetime
+    return {"time": datetime.now().isoformat()}
 
 
 @rpi_router.post("/restart")
@@ -69,3 +78,43 @@ async def restart_rpi(request: RpiActionRequest):
     except Exception as e:
         logger.error(f"[RPi관리] 재시작 오류: {e}")
         raise HTTPException(500, f"오류: {str(e)}")
+
+
+@rpi_router.get("/sensor-status")
+async def get_all_sensor_status():
+    """
+    전체 농장/재배사의 최신 센서 기록 시각을 한 번에 조회.
+    농장 관리 페이지에서 RPi 에러 여부를 판단하는 데 사용.
+
+    Returns:
+        [{"farm_id": 1, "hous_id": 1, "hous_name": "...", "last_recd_dttm": "..."}, ...]
+    """
+    try:
+        QUERY = """
+            SELECT f.farm_id, f.hous_id, f.hous_name,
+                   (SELECT MAX(s.recd_dttm)
+                    FROM sensor_l_recording s
+                    WHERE s.farm_id = f.farm_id AND s.hous_id = f.hous_id
+                   ) AS last_recd_dttm
+            FROM farmhouse_m_info f
+            WHERE f.dlte_yn = 'N' AND f.hous_id != 0
+            ORDER BY f.farm_id, f.hous_id
+        """
+        with db_session() as database:
+            rows = database.fetch_all(QUERY, as_dict=True)
+
+        result = []
+        for row in (rows or []):
+            last_dt = row.get("last_recd_dttm")
+            result.append({
+                "farm_id": row.get("farm_id"),
+                "hous_id": row.get("hous_id"),
+                "hous_name": row.get("hous_name", ""),
+                "last_recd_dttm": last_dt.isoformat() if last_dt else None,
+            })
+
+        return {"success": True, "data": result}
+
+    except Exception as e:
+        logger.error(f"[RPi관리] 센서 상태 조회 오류: {e}")
+        raise HTTPException(500, f"센서 상태 조회 오류: {str(e)}")
