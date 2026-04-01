@@ -1,8 +1,23 @@
+import { useState } from 'react';
 import { Container, Row, Col } from 'react-bootstrap';
-import { GeoAlt, Thermometer, Moisture, Activity } from 'react-bootstrap-icons';
+import { GeoAlt, Thermometer, Moisture, Activity, ChevronLeft, ChevronRight } from 'react-bootstrap-icons';
 import CameraStream from '../components/camera/CameraStream';
 
+const farmPhotos = [
+  { src: '/images/farm/farm-1.jpg', caption: '자연들에 스마트팜 전경' },
+  { src: '/images/farm/farm-2.jpg', caption: '재배사와 주변 농경지' },
+  { src: '/images/farm/farm-3.jpg', caption: '스마트팜 단지 전경' },
+  { src: '/images/farm/farm-4.jpg', caption: '재배사 근경' },
+  { src: '/images/farm/farm-5.jpg', caption: '농장 뒤편 전경' },
+  { src: '/images/farm/farm-6.jpg', caption: '재배사 건물 상세' },
+];
+
 export default function FarmIntroPage() {
+  const [currentPhoto, setCurrentPhoto] = useState(0);
+
+  const prevPhoto = () => setCurrentPhoto((prev) => (prev === 0 ? farmPhotos.length - 1 : prev - 1));
+  const nextPhoto = () => setCurrentPhoto((prev) => (prev === farmPhotos.length - 1 ? 0 : prev + 1));
+
   return (
     <>
       <div className="page-header">
@@ -12,12 +27,84 @@ export default function FarmIntroPage() {
         </Container>
       </div>
 
-      {/* 실시간 농장 전경 */}
+      {/* 농장 전경 갤러리 */}
       <section className="shop-section">
         <Container>
           <div className="text-center mb-5">
+            <span className="section-label">Farm Gallery</span>
+            <h2 className="section-title">농장 전경</h2>
+            <p className="section-desc">
+              전북 정읍시 영원면에 위치한 자연들에 스마트팜의 모습입니다
+            </p>
+          </div>
+
+          {/* 메인 슬라이더 */}
+          <Row className="justify-content-center mb-4">
+            <Col lg={10}>
+              <div style={{ position: 'relative', borderRadius: '16px', overflow: 'hidden' }}>
+                <img
+                  src={farmPhotos[currentPhoto].src}
+                  alt={farmPhotos[currentPhoto].caption}
+                  style={{ width: '100%', height: '480px', objectFit: 'cover', display: 'block' }}
+                />
+                <div style={{
+                  position: 'absolute', bottom: 0, left: 0, right: 0,
+                  background: 'linear-gradient(transparent, rgba(0,0,0,0.6))',
+                  padding: '40px 24px 16px', color: '#fff', textAlign: 'center',
+                }}>
+                  {farmPhotos[currentPhoto].caption}
+                </div>
+                <button onClick={prevPhoto} style={{
+                  position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)',
+                  background: 'rgba(0,0,0,0.4)', border: 'none', borderRadius: '50%',
+                  width: '44px', height: '44px', color: '#fff', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <ChevronLeft size={20} />
+                </button>
+                <button onClick={nextPhoto} style={{
+                  position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)',
+                  background: 'rgba(0,0,0,0.4)', border: 'none', borderRadius: '50%',
+                  width: '44px', height: '44px', color: '#fff', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <ChevronRight size={20} />
+                </button>
+              </div>
+            </Col>
+          </Row>
+
+          {/* 썸네일 */}
+          <Row className="justify-content-center">
+            <Col lg={10}>
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                {farmPhotos.map((photo, i) => (
+                  <img
+                    key={i}
+                    src={photo.src}
+                    alt={photo.caption}
+                    onClick={() => setCurrentPhoto(i)}
+                    style={{
+                      width: '120px', height: '80px', objectFit: 'cover',
+                      borderRadius: '8px', cursor: 'pointer',
+                      border: currentPhoto === i ? '3px solid #00897B' : '3px solid transparent',
+                      opacity: currentPhoto === i ? 1 : 0.6,
+                      transition: 'all 0.2s',
+                    }}
+                  />
+                ))}
+              </div>
+            </Col>
+          </Row>
+        </Container>
+      </section>
+
+      {/* 실시간 카메라 */}
+      <section className="shop-section shop-section-warm">
+        <Container>
+          <div className="text-center mb-5">
             <span className="section-label">Live Camera</span>
-            <h2 className="section-title">실시간 농장 전경</h2>
+            <h2 className="section-title">실시간 농장 모습</h2>
             <p className="section-desc">
               지금 이 순간, 자연들에 농장의 모습을 실시간으로 확인하세요
             </p>
@@ -31,7 +118,7 @@ export default function FarmIntroPage() {
       </section>
 
       {/* 농장 소개 */}
-      <section className="shop-section shop-section-warm">
+      <section className="shop-section">
         <Container>
           <Row className="align-items-center">
             <Col md={6} className="mb-4 mb-md-0">
@@ -53,27 +140,21 @@ export default function FarmIntroPage() {
               </p>
             </Col>
             <Col md={6}>
-              <div
+              <img
+                src="/images/farm/farm-2.jpg"
+                alt="자연들에 농장"
                 style={{
-                  background: 'linear-gradient(135deg, #D7CCC8, #BCAAA4)',
+                  width: '100%', height: '400px', objectFit: 'cover',
                   borderRadius: '16px',
-                  height: '400px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: '#fff',
-                  fontSize: '1.2rem',
                 }}
-              >
-                농장 이미지 영역
-              </div>
+              />
             </Col>
           </Row>
         </Container>
       </section>
 
       {/* 핵심 수치 */}
-      <section className="shop-section">
+      <section className="shop-section shop-section-warm">
         <Container>
           <Row className="g-4">
             {[
