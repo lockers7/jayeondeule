@@ -4,11 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { PencilSquare, Eye, ChatDots } from 'react-bootstrap-icons';
 import api from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
-
-function formatDate(dt) {
-  if (!dt) return '';
-  return new Date(dt).toLocaleDateString('ko-KR');
-}
+import { formatDate } from '../../utils/format';
 
 export default function StoryListPage() {
   const navigate = useNavigate();
@@ -29,7 +25,6 @@ export default function StoryListPage() {
           <p className="page-header-desc">자연들에 농장의 소식과 이야기를 전합니다</p>
         </Container>
       </div>
-
       <section className="shop-section">
         <Container>
           {isAdmin && (
@@ -40,7 +35,6 @@ export default function StoryListPage() {
               </Button>
             </div>
           )}
-
           {posts.length === 0 ? (
             <p className="text-center text-muted py-5">등록된 글이 없습니다.</p>
           ) : (

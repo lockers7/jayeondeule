@@ -4,11 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { PencilSquare, CheckCircleFill } from 'react-bootstrap-icons';
 import api from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
-
-function formatDate(dt) {
-  if (!dt) return '';
-  return new Date(dt).toLocaleDateString('ko-KR');
-}
+import { formatDate } from '../../utils/format';
 
 export default function InquiryListPage() {
   const navigate = useNavigate();

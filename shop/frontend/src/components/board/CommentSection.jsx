@@ -3,12 +3,7 @@ import { Form, Button } from 'react-bootstrap';
 import { PersonFill, ChatDots, Trash, Reply } from 'react-bootstrap-icons';
 import api from '../../api/client';
 import { useAuth } from '../../context/AuthContext';
-
-function formatDate(dt) {
-  if (!dt) return '';
-  const d = new Date(dt);
-  return d.toLocaleDateString('ko-KR') + ' ' + d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
-}
+import { formatDateTime } from '../../utils/format';
 
 function CommentItem({ comment, postId, onRefresh, depth = 0 }) {
   const { user, isAdmin } = useAuth();
@@ -55,7 +50,7 @@ function CommentItem({ comment, postId, onRefresh, depth = 0 }) {
             <PersonFill size={14} style={{ color: 'var(--shop-primary)' }} />
             <strong style={{ fontSize: '0.9rem' }}>{comment.writerName}</strong>
             <span style={{ fontSize: '0.78rem', color: 'var(--shop-text-light)' }}>
-              {formatDate(comment.rgstDt)}
+              {formatDateTime(comment.rgstDt)}
             </span>
           </div>
           <div className="d-flex gap-2">

@@ -3,6 +3,7 @@ import { Container, Row, Col, Table, Badge, Button, Form, Modal } from 'react-bo
 import { CheckCircleFill, Eye, ChatDots, ArrowLeft, PersonFill, CalendarEvent, Trash, Reply } from 'react-bootstrap-icons';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../api/client';
+import { formatDate, formatDateTime, formatCurrency, isVideo } from '../../utils/format';
 
 const statusMap = {
   ORDERED: { label: '주문접수', color: 'secondary', next: 'PAID', nextLabel: '입금확인' },
@@ -28,8 +29,7 @@ function AdminCommentItem({ comment, depth, onReply, onDelete }) {
             <PersonFill size={13} style={{ color: 'var(--shop-primary)' }} />
             <strong style={{ fontSize: '0.88rem' }}>{comment.writerName}</strong>
             <span style={{ fontSize: '0.76rem', color: 'var(--shop-text-light)' }}>
-              {comment.rgstDt ? new Date(comment.rgstDt).toLocaleDateString('ko-KR') + ' ' +
-                new Date(comment.rgstDt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : ''}
+              {formatDateTime(comment.rgstDt)}
             </span>
           </div>
           <div className="d-flex gap-2">
@@ -45,7 +45,7 @@ function AdminCommentItem({ comment, depth, onReply, onDelete }) {
         {comment.images?.length > 0 && (
           <div className="d-flex gap-2 mt-2 flex-wrap">
             {comment.images.map((img, i) => (
-              /\.(mp4|webm|ogg|mov)$/i.test(img.imageUrl) ? (
+              isVideo(img.imageUrl) ? (
                 <video key={i} controls style={{ maxWidth: '200px', borderRadius: '6px' }}><source src={img.imageUrl} /></video>
               ) : (
                 <img key={i} src={img.imageUrl} alt="" style={{ maxWidth: '200px', maxHeight: '120px', borderRadius: '6px', objectFit: 'cover' }} />
@@ -127,8 +127,8 @@ export default function AdminPage() {
     loadProducts();
   };
 
-  const fmt = (n) => (n || 0).toLocaleString() + '원';
-  const fmtDate = (d) => d ? new Date(d).toLocaleDateString('ko-KR') : '-';
+  const fmt = formatCurrency;
+  const fmtDate = formatDate;
 
   return (
     <>
@@ -415,7 +415,7 @@ export default function AdminPage() {
                     {inquiryImages.length > 0 && (
                       <div className="mb-3">
                         {inquiryImages.map((img, i) => (
-                          /\.(mp4|webm|ogg|mov)$/i.test(img.imageUrl) ? (
+                          isVideo(img.imageUrl) ? (
                             <video key={i} controls style={{width:'100%', aspectRatio:'16/9', borderRadius:'10px', marginBottom:'8px', background:'#000', objectFit:'contain'}}>
                               <source src={img.imageUrl}/></video>
                           ) : (

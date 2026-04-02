@@ -3,6 +3,7 @@ import { Container, Row, Col, Table, Badge, Button, Form, Alert } from 'react-bo
 import { PencilSquare, CheckLg, XLg, KeyFill, BoxSeam } from 'react-bootstrap-icons';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../api/client';
+import { formatDate, formatCurrency, displayOrDash } from '../../utils/format';
 import AddressSearch from '../../components/common/AddressSearch';
 import PhoneInput from '../../components/common/PhoneInput';
 
@@ -16,8 +17,7 @@ const statusMap = {
   CANCELLED: { label: '취소', color: 'danger' },
 };
 
-// 빈 문자열을 '-'로 표시
-const display = (v) => (v && v.trim()) ? v : '-';
+const display = displayOrDash;
 
 export default function MyPage() {
   const { user, logout } = useAuth();
@@ -131,8 +131,8 @@ export default function MyPage() {
     loadOrders();
   };
 
-  const fmt = (n) => n?.toLocaleString() + '원';
-  const fmtDate = (d) => d ? new Date(d).toLocaleDateString('ko-KR') : '-';
+  const fmt = formatCurrency;
+  const fmtDate = formatDate;
 
   const gradeLabel = (g) =>
     g === 'MEMBER' ? '일반회원' : g === 'SHOP_ADMIN' ? '쇼핑몰관리자' : g === 'SYSTEM_ADMIN' ? '시스템관리자' : g;
