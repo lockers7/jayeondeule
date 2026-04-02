@@ -202,6 +202,7 @@ postgresql_stop() {
 
 postgresql_restart() {
     log_msg "${BLUE}[PostgreSQL]${NC} 재시작 중..."
+    sudo systemctl daemon-reload
     sudo systemctl restart postgresql.service
     if wait_port 5432 15; then
         log_msg "${GREEN}[PostgreSQL]${NC} 재시작 완료"
@@ -231,6 +232,7 @@ chromadb_stop() {
 
 chromadb_restart() {
     log_msg "${BLUE}[ChromaDB]${NC} 재시작 중..."
+    sudo systemctl daemon-reload
     sudo systemctl restart chromadb.service
     if wait_port 8000 20; then
         log_msg "${GREEN}[ChromaDB]${NC} 재시작 완료"
@@ -385,11 +387,100 @@ springboot_restart() {
     cd "$BASE_DIR"
 
     log_msg "${BLUE}[Spring Boot]${NC} 재시작 중..."
+    sudo systemctl daemon-reload
     sudo systemctl restart jayeondeule_web.service
     if wait_port 9090 30; then
         log_msg "${GREEN}[Spring Boot]${NC} 재시작 완료"
     else
         log_msg "${RED}[Spring Boot]${NC} 재시작 실패"
+        return 1
+    fi
+}
+
+# --- Shop Spring Boot (port 9091) ---
+SHOP_PID="$PID_DIR/shop.pid"
+
+shop_start() {
+    if [ -f "$SHOP_PID" ] && [ -d "/proc/$(cat "$SHOP_PID" 2>/dev/null)" ]; then
+        log_msg "${YELLOW}[Shop Backend]${NC} 이미 실행 중 (PID $(cat "$SHOP_PID"))"
+        return 0
+    fi
+    log_msg "${BLUE}[Shop Backend]${NC} 시작 중 (port 9091)..."
+    cd "$BASE_DIR/shop/backend" || return 1
+    nohup java -jar target/shop-0.0.1-SNAPSHOT.jar > "$LOG_DIR/shop_backend.log" 2>&1 &
+    echo $! > "$SHOP_PID"
+    cd "$BASE_DIR"
+    if wait_port 9091 30; then
+        log_msg "${GREEN}[Shop Backend]${NC} 시작 완료 (port 9091, PID $(cat "$SHOP_PID"))"
+    else
+        log_msg "${RED}[Shop Backend]${NC} 시작 실패"
+        return 1
+    fi
+}
+
+shop_stop() {
+    log_msg "${BLUE}[Shop Backend]${NC} 종료 중..."
+    if [ -f "$SHOP_PID" ]; then
+        local pid
+        pid=$(cat "$SHOP_PID" 2>/dev/null)
+        if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
+            kill "$pid" 2>/dev/null
+            sleep 2
+            # 강제 종료
+            [ -d "/proc/$pid" ] && kill -9 "$pid" 2>/dev/null
+        fi
+        rm -f "$SHOP_PID"
+    fi
+    log_msg "${GREEN}[Shop Backend]${NC} 종료 완료"
+}
+
+shop_restart() {
+    log_msg "${BLUE}[Shop Backend]${NC} 빌드 중..."
+    cd "$BASE_DIR/shop/backend" || return 1
+    mvn package -DskipTests -q > "$LOG_DIR/shop_build.log" 2>&1
+    if [ $? -ne 0 ]; then
+        log_msg "${RED}[Shop Backend]${NC} 빌드 실패 — $LOG_DIR/shop_build.log 확인"
+        cd "$BASE_DIR"
+        return 1
+    fi
+    log_msg "${GREEN}[Shop Backend]${NC} 빌드 완료"
+    cd "$BASE_DIR"
+
+    shop_stop
+    shop_start
+}
+
+shop_build() {
+    local failed=0
+    log_msg "${BOLD}========== Shop 빌드 시작 ==========${NC}"
+
+    # 1) Shop React 프론트엔드 빌드
+    log_msg "${BLUE}[Shop React]${NC} 프론트엔드 빌드 시작..."
+    cd "$BASE_DIR/shop/frontend"
+    npm run build >> "$LOG_DIR/shop_react_build.log" 2>&1
+    if [ $? -eq 0 ]; then
+        log_msg "${GREEN}[Shop React]${NC} 프론트엔드 빌드 완료"
+    else
+        log_msg "${RED}[Shop React]${NC} 프론트엔드 빌드 실패 (로그: $LOG_DIR/shop_react_build.log)"
+        failed=1
+    fi
+
+    # 2) Shop Spring Boot 백엔드 빌드
+    log_msg "${BLUE}[Shop Backend]${NC} 백엔드 빌드 시작..."
+    cd "$BASE_DIR/shop/backend"
+    mvn package -DskipTests -q >> "$LOG_DIR/shop_build.log" 2>&1
+    if [ $? -eq 0 ]; then
+        log_msg "${GREEN}[Shop Backend]${NC} 백엔드 빌드 완료"
+    else
+        log_msg "${RED}[Shop Backend]${NC} 백엔드 빌드 실패 (로그: $LOG_DIR/shop_build.log)"
+        failed=1
+    fi
+
+    cd "$BASE_DIR"
+    if [ $failed -eq 0 ]; then
+        log_msg "${BOLD}========== Shop 빌드 전체 완료 ==========${NC}"
+    else
+        log_msg "${RED}========== Shop 빌드 일부 실패 ==========${NC}"
         return 1
     fi
 }
@@ -414,6 +505,7 @@ nginx_stop() {
 
 nginx_restart() {
     log_msg "${BLUE}[Nginx]${NC} 재시작 중..."
+    sudo systemctl daemon-reload
     sudo systemctl restart nginx.service
     if wait_port 80 10; then
         log_msg "${GREEN}[Nginx]${NC} 재시작 완료"
@@ -528,6 +620,7 @@ all_start() {
     fastapi_start
     searxng_start
     springboot_start
+    shop_start
     nginx_start
     log_msg "${BOLD}========== 전체 서비스 시작 완료 ==========${NC}"
     show_status
@@ -537,6 +630,7 @@ all_stop() {
     _stop_legacy_service
     log_msg "${BOLD}========== 전체 서비스 종료 ==========${NC}"
     nginx_stop
+    shop_stop
     springboot_stop
     searxng_stop
     fastapi_stop
@@ -586,6 +680,23 @@ show_service_logs() {
         echo ""
     done
 
+    # Shop Backend (PID 기반)
+    if [ -f "$SHOP_PID" ]; then
+        pid=$(cat "$SHOP_PID" 2>/dev/null)
+        if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
+            etime=$(ps -p "$pid" -o etime= 2>/dev/null | xargs)
+            echo -e "${GREEN}●${NC} Shop Backend (PID $pid)"
+            echo "     Active: running (경과 ${etime:-알 수 없음})"
+        else
+            echo -e "${RED}○${NC} Shop Backend"
+            echo "     Active: inactive (stale PID)"
+        fi
+    else
+        echo -e "${RED}○${NC} Shop Backend"
+        echo "     Active: inactive"
+    fi
+    echo ""
+
     # SearXNG (Docker)
     local searx_status
     searx_status=$(docker ps --filter "name=searxng" --format "{{.Status}}" 2>/dev/null)
@@ -628,11 +739,15 @@ show_status() {
     check_status "FastAPI" port "${API_PORT:-8002}"
     printf "  %-4s %-16s %-8s " "6" "SearXNG" "8888"
     check_status "SearXNG" port 8888
-    printf "  %-4s %-16s %-8s " "7" "Spring Boot" "9090"
-    check_status "Spring Boot" port 9090
-    printf "  %-4s %-16s %-8s " "8" "Nginx" "80"
+    printf "  %-4s %-16s %-8s " "7" "Web Backend" "9090"
+    check_status "Web Backend" port 9090
+    printf "  %-4s %-16s %-8s " "8" "Shop Backend" "9091"
+    check_status "Shop Backend" port 9091
+    printf "  %-4s %-16s %-8s " "9" "Nginx" "80"
     check_status "Nginx" port 80
-    printf "  %-4s %-16s %-8s " "9" "Web Build" "(빌드)"
+    printf "  %-4s %-16s %-8s " "10" "Web Build" "(빌드)"
+    echo -e "${YELLOW}● 빌드 전용${NC}"
+    printf "  %-4s %-16s %-8s " "11" "Shop Build" "(빌드)"
     echo -e "${YELLOW}● 빌드 전용${NC}"
     echo -e "  ─────────────────────────────────────────────"
     echo ""
@@ -649,9 +764,11 @@ show_menu() {
     echo -e "   ${CYAN}4${NC}. Scheduler        (스케줄/환경제어)"
     echo -e "   ${CYAN}5${NC}. FastAPI          (REST API,      port ${API_PORT:-8002})"
     echo -e "   ${CYAN}6${NC}. SearXNG          (메타검색엔진,   port 8888)"
-    echo -e "   ${CYAN}7${NC}. Spring Boot      (웹 백엔드,      port 9090)"
-    echo -e "   ${CYAN}8${NC}. Nginx            (웹서버,         port 80)"
-    echo -e "   ${CYAN}9${NC}. Web Build        (React + Spring Boot 빌드)"
+    echo -e "   ${CYAN}7${NC}. Web Backend      (농장관리 백엔드, port 9090)"
+    echo -e "   ${CYAN}8${NC}. Shop Backend     (쇼핑몰 백엔드,  port 9091)"
+    echo -e "   ${CYAN}9${NC}. Nginx            (웹서버,         port 80)"
+    echo -e "  ${CYAN}10${NC}. Web Build        (농장관리 React + Spring Boot 빌드)"
+    echo -e "  ${CYAN}11${NC}. Shop Build       (쇼핑몰 React + Spring Boot 빌드)"
     echo ""
     echo -n -e "  번호 입력 (q=종료): "
 }
@@ -723,16 +840,25 @@ execute_service() {
                 logs)    searxng_logs ;;
             esac
             ;;
-        7) # Spring Boot
+        7) # Web Backend (Spring Boot - 농장관리)
             case "$action" in
                 start)   springboot_start ;;
                 stop)    springboot_stop ;;
                 restart) springboot_restart ;;
-                status)  printf "  Spring Boot: "; check_status "Spring Boot" port 9090 ;;
+                status)  printf "  Web Backend: "; check_status "Web Backend" port 9090 ;;
                 logs)    journalctl -u jayeondeule_web.service -n 100 --no-pager -f ;;
             esac
             ;;
-        8) # Nginx
+        8) # Shop Backend (Spring Boot - 쇼핑몰)
+            case "$action" in
+                start)   shop_start ;;
+                stop)    shop_stop ;;
+                restart) shop_restart ;;
+                status)  printf "  Shop Backend: "; check_status "Shop Backend" port 9091 ;;
+                logs)    tail -n 100 -f "$LOG_DIR/shop_backend.log" 2>/dev/null ;;
+            esac
+            ;;
+        9) # Nginx
             case "$action" in
                 start)   nginx_start ;;
                 stop)    nginx_stop ;;
@@ -741,12 +867,20 @@ execute_service() {
                 logs)    journalctl -u nginx.service -n 100 --no-pager -f ;;
             esac
             ;;
-        9) # Web Build (React + Spring Boot)
+        10) # Web Build (농장관리 React + Spring Boot)
             case "$action" in
                 start|restart) web_build ;;
                 stop)   log_msg "${YELLOW}[Web Build]${NC} 빌드 전용 서비스입니다 (stop 불필요)" ;;
                 status) echo -e "  Web Build: ${YELLOW}● 빌드 전용${NC}" ;;
                 logs)   tail -n 100 "$LOG_DIR/react_build.log" 2>/dev/null; tail -n 100 "$LOG_DIR/springboot_build.log" 2>/dev/null ;;
+            esac
+            ;;
+        11) # Shop Build (쇼핑몰 React + Spring Boot)
+            case "$action" in
+                start|restart) shop_build ;;
+                stop)   log_msg "${YELLOW}[Shop Build]${NC} 빌드 전용 서비스입니다 (stop 불필요)" ;;
+                status) echo -e "  Shop Build: ${YELLOW}● 빌드 전용${NC}" ;;
+                logs)   tail -n 100 "$LOG_DIR/shop_react_build.log" 2>/dev/null; tail -n 100 "$LOG_DIR/shop_build.log" 2>/dev/null ;;
             esac
             ;;
         *)
@@ -779,9 +913,11 @@ usage() {
     echo -e "    4. Scheduler       (스케줄/환경제어)"
     echo -e "    5. FastAPI         (REST API,       port ${API_PORT:-8002})"
     echo -e "    6. SearXNG         (메타검색엔진,    port 8888)"
-    echo -e "    7. Spring Boot     (웹 백엔드,       port 9090)"
-    echo -e "    8. Nginx           (웹서버,          port 80)"
-    echo -e "    9. Web Build       (React + Spring Boot 빌드)"
+    echo -e "    7. Web Backend     (농장관리 백엔드,  port 9090)"
+    echo -e "    8. Shop Backend    (쇼핑몰 백엔드,   port 9091)"
+    echo -e "    9. Nginx           (웹서버,          port 80)"
+    echo -e "   10. Web Build       (농장관리 빌드)"
+    echo -e "   11. Shop Build      (쇼핑몰 빌드)"
     echo ""
     echo -e "  ${BOLD}예시:${NC}"
     echo -e "    agriAiCore restart        # 메뉴에서 서비스 선택"

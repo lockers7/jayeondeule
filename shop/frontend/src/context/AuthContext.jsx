@@ -1,17 +1,14 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState } from 'react';
 import api from '../api/client';
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
+  const [user, setUser] = useState(() => {
     const saved = localStorage.getItem('shop_user');
-    if (saved) setUser(JSON.parse(saved));
-    setLoading(false);
-  }, []);
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [loading] = useState(false);
 
   const login = async (shopUsrId, passwd) => {
     const { data } = await api.post('/auth/login', { shopUsrId, passwd });
@@ -49,4 +46,5 @@ export function AuthProvider({ children }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useAuth = () => useContext(AuthContext);

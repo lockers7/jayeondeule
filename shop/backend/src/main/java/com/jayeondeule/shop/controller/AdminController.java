@@ -14,6 +14,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/shop/admin")
 @RequiredArgsConstructor
+@SuppressWarnings("null")
 public class AdminController {
     private final OrderService orderService;
     private final ProductService productService;

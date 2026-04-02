@@ -9,6 +9,7 @@ import java.util.List;
 
 @Service
 @RequiredArgsConstructor
+@SuppressWarnings("null")
 public class ProductService {
     private final ShopProductRepository productRepo;
 
@@ -17,7 +18,8 @@ public class ProductService {
     }
 
     public List<ShopProduct> getOnSaleProducts(Long farmId) {
-        return productRepo.findByFarmIdAndSaleStatusOrderBySortOrder(farmId, "ON_SALE");
+        // 모든 상품 표시 (판매중지 포함 — 고객 화면에서 상태 표시)
+        return productRepo.findByFarmIdOrderBySortOrder(farmId);
     }
 
     public ShopProduct getProduct(Integer id) {

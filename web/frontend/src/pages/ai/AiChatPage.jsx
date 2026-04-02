@@ -4,7 +4,8 @@ import {useSelector} from "react-redux";
 import ChatSidebar from "../../components/ai/ChatSidebar.jsx";
 import ChatMessageList from "../../components/ai/ChatMessageList.jsx";
 import ChatInput from "../../components/ai/ChatInput.jsx";
-import {streamQuery, ragPerform, ragSave, getConversationHistory} from "../../utils/aiChatUtil.js";
+import {ragPerform, ragSave, getConversationHistory} from "../../utils/aiChatUtil.js";
+import * as streamManager from "../../utils/aiChatStreamManager.js";
 
 const SESSION_STORAGE_KEY = "ai_chat_session_id";
 const MESSAGES_STORAGE_KEY = "ai_chat_messages";
@@ -123,11 +124,131 @@ export default function AiChatPage() {
         localStorage.setItem("ai_chat_speech_style", speechStyle);
     }, [speechStyle]);
 
+    // 스트림 매니저 리스너 등록/해제 + 재마운트 시 상태 복원
     useEffect(() => {
-        return () => {
-            if (abortControllerRef.current) {
-                abortControllerRef.current.abort();
+        // 리스너: 매니저에서 스트림 이벤트를 받아 React 상태에 반영
+        const listener = (type, payload) => {
+            if (type === "status") {
+                setMessages((prev) => {
+                    const updated = [...prev];
+                    const last = updated[updated.length - 1];
+                    if (last?.role === "assistant" && !last._tokenStarted) {
+                        updated[updated.length - 1] = { ...last, content: payload };
+                    }
+                    return updated;
+                });
+            } else if (type === "token") {
+                setMessages((prev) => {
+                    const updated = [...prev];
+                    const last = updated[updated.length - 1];
+                    if (last?.role === "assistant") {
+                        updated[updated.length - 1] = { ...last, content: payload.content, _tokenStarted: true };
+                    }
+                    return updated;
+                });
+            } else if (type === "done") {
+                const data = payload;
+                const nextSessionId = data.session_id || sessionId;
+                setSessionId(nextSessionId);
+                setMessages((prev) => {
+                    const updated = [...prev];
+                    const last = updated[updated.length - 1];
+                    if (last?.role === "assistant") {
+                        updated[updated.length - 1] = {
+                            ...last,
+                            content: last._tokenStarted ? last.content : "",
+                            sources: Array.isArray(data.sources) ? data.sources : [],
+                            toolsUsed: Array.isArray(data.tools_used) ? data.tools_used : [],
+                            responseType: data.response_type || "general",
+                            elapsedSec: data.elapsed_sec ?? null,
+                            sessionId: nextSessionId,
+                            timestamp: new Date(),
+                        };
+                    }
+                    return updated;
+                });
+                setIsLoading(false);
+                abortControllerRef.current = null;
+                setModelAlert(null);
+            } else if (type === "error") {
+                setMessages((prev) => {
+                    const updated = [...prev];
+                    const last = updated[updated.length - 1];
+                    if (last?.role === "assistant") {
+                        updated[updated.length - 1] = {
+                            ...last,
+                            content: `응답 생성 중 오류가 발생했습니다: ${payload}`,
+                            timestamp: new Date(),
+                        };
+                    }
+                    return updated;
+                });
+                setIsLoading(false);
+                abortControllerRef.current = null;
             }
+        };
+
+        streamManager.subscribe(listener);
+
+        // 재마운트 시: 매니저에 진행 중이거나 완료된 스트림이 있으면 복원
+        const snapshot = streamManager.getSnapshot();
+        if (snapshot) {
+            if (snapshot.active) {
+                // 스트림 진행 중 — 로딩 상태 복원, 현재까지 누적된 내용 반영
+                setIsLoading(true);
+                setMessages((prev) => {
+                    const updated = [...prev];
+                    const last = updated[updated.length - 1];
+                    if (last?.role === "assistant") {
+                        updated[updated.length - 1] = { ...last, content: snapshot.content, _tokenStarted: snapshot.tokenStarted };
+                    }
+                    return updated;
+                });
+            } else if (snapshot.doneData) {
+                // 스트림 완료됨 (부재 중 완료) — 최종 결과 반영
+                const data = snapshot.doneData;
+                const nextSessionId = data.session_id || sessionId;
+                setSessionId(nextSessionId);
+                setMessages((prev) => {
+                    const updated = [...prev];
+                    const last = updated[updated.length - 1];
+                    if (last?.role === "assistant") {
+                        updated[updated.length - 1] = {
+                            ...last,
+                            content: snapshot.content || "",
+                            sources: Array.isArray(data.sources) ? data.sources : [],
+                            toolsUsed: Array.isArray(data.tools_used) ? data.tools_used : [],
+                            responseType: data.response_type || "general",
+                            elapsedSec: data.elapsed_sec ?? null,
+                            sessionId: nextSessionId,
+                            timestamp: new Date(),
+                        };
+                    }
+                    return updated;
+                });
+                setIsLoading(false);
+                streamManager.consumeCompleted();
+            } else if (snapshot.errorMsg) {
+                // 에러로 종료됨 — 에러 메시지 반영
+                setMessages((prev) => {
+                    const updated = [...prev];
+                    const last = updated[updated.length - 1];
+                    if (last?.role === "assistant") {
+                        updated[updated.length - 1] = {
+                            ...last,
+                            content: `응답 생성 중 오류가 발생했습니다: ${snapshot.errorMsg}`,
+                            timestamp: new Date(),
+                        };
+                    }
+                    return updated;
+                });
+                setIsLoading(false);
+                streamManager.consumeCompleted();
+            }
+        }
+
+        return () => {
+            streamManager.unsubscribe();
         };
     }, []);
 
@@ -155,15 +276,13 @@ export default function AiChatPage() {
         // 어시스턴트 메시지 플레이스홀더 추가
         setMessages((prev) => [...prev, {role: "assistant", content: ""}]);
 
-        let tokenStarted = false;
-
         // auth_farm_id: RAG 파일 목록/삭제 권한 결정용
-        // 시스템관리자 → null(전체 접근), SYS_MONITOR → null(전체 접근), 농장사용자 → 자기 farmId
         const authFarmId = (!userInfo || userInfo.authLvel === "ADMIN" || userInfo.authLvel === "SYS_MONITOR")
             ? null
             : userInfo.farmId ? String(userInfo.farmId) : null;
 
-        const controller = streamQuery(
+        // 스트림 매니저를 통해 시작 — 페이지 이동해도 스트림 유지
+        const controller = streamManager.startStream(
             query,
             selectedFarm ? String(selectedFarm.farmId) : null,
             selectedHouse ? String(selectedHouse.housId) : null,
@@ -171,79 +290,6 @@ export default function AiChatPage() {
             selectedHouse?.housName || null,
             sessionId,
             speechStyle,
-            {
-                onStatus: (text) => {
-                    if (!tokenStarted) {
-                        setMessages((prev) => {
-                            const updated = [...prev];
-                            updated[updated.length - 1] = {
-                                ...updated[updated.length - 1],
-                                content: text,
-                            };
-                            return updated;
-                        });
-                    }
-                },
-                onToken: (text) => {
-                    if (!tokenStarted) {
-                        tokenStarted = true;
-                        setMessages((prev) => {
-                            const updated = [...prev];
-                            updated[updated.length - 1] = {
-                                ...updated[updated.length - 1],
-                                content: text,
-                            };
-                            return updated;
-                        });
-                    } else {
-                        setMessages((prev) => {
-                            const updated = [...prev];
-                            const last = updated[updated.length - 1];
-                            updated[updated.length - 1] = {
-                                ...last,
-                                content: last.content + text,
-                            };
-                            return updated;
-                        });
-                    }
-                },
-                onDone: (data) => {
-                    const nextSessionId = data.session_id || sessionId;
-                    setSessionId(nextSessionId);
-                    setMessages((prev) => {
-                        const updated = [...prev];
-                        const last = updated[updated.length - 1];
-                        updated[updated.length - 1] = {
-                            ...last,
-                            content: tokenStarted ? last.content : "",
-                            sources: Array.isArray(data.sources) ? data.sources : [],
-                            toolsUsed: Array.isArray(data.tools_used) ? data.tools_used : [],
-                            responseType: data.response_type || "general",
-                            elapsedSec: data.elapsed_sec ?? null,
-                            sessionId: nextSessionId,
-                            timestamp: new Date(),
-                        };
-                        return updated;
-                    });
-                    setIsLoading(false);
-                    abortControllerRef.current = null;
-                    // 모델 변경 알림이 있으면 응답 완료 시 자동 제거
-                    setModelAlert(null);
-                },
-                onError: (errMsg) => {
-                    setMessages((prev) => {
-                        const updated = [...prev];
-                        updated[updated.length - 1] = {
-                            ...updated[updated.length - 1],
-                            content: `응답 생성 중 오류가 발생했습니다: ${errMsg}`,
-                            timestamp: new Date(),
-                        };
-                        return updated;
-                    });
-                    setIsLoading(false);
-                    abortControllerRef.current = null;
-                },
-            },
             authFarmId,
         );
 
@@ -251,9 +297,9 @@ export default function AiChatPage() {
     };
 
     const handleStop = () => {
-        // 대화 스트리밍 중지
-        if (abortControllerRef.current) {
-            abortControllerRef.current.abort();
+        // 대화 스트리밍 중지 (매니저를 통해)
+        if (streamManager.isActive() || abortControllerRef.current) {
+            streamManager.abortStream();
             abortControllerRef.current = null;
             setMessages((prev) => {
                 const updated = [...prev];
@@ -354,10 +400,8 @@ export default function AiChatPage() {
     };
 
     const handleClearMessages = () => {
-        if (abortControllerRef.current) {
-            abortControllerRef.current.abort();
-            abortControllerRef.current = null;
-        }
+        streamManager.abortStream();
+        abortControllerRef.current = null;
         setIsLoading(false);
         setMessages([]);
         sessionStorage.removeItem(MESSAGES_STORAGE_KEY);

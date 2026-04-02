@@ -42,6 +42,10 @@ public class JwtUtil {
         return parseToken(token).get("usrGrade", String.class);
     }
 
+    public String getUserName(String token) {
+        return parseToken(token).get("usrName", String.class);
+    }
+
     public boolean isValid(String token) {
         try {
             parseToken(token);

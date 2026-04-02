@@ -1,7 +1,6 @@
 package com.jayeondeule.shop.controller;
 
 import com.jayeondeule.shop.dto.ApiResponse;
-import com.jayeondeule.shop.entity.ShopProduct;
 import com.jayeondeule.shop.repository.ShopCategoryRepository;
 import com.jayeondeule.shop.service.ProductService;
 import lombok.RequiredArgsConstructor;

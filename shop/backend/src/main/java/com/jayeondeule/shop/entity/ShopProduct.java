@@ -39,6 +39,12 @@ public class ShopProduct {
     @Column(name = "sale_status", nullable = false)
     private String saleStatus;
 
+    @Column(name = "selling_qty", nullable = false)
+    private Integer sellingQty;
+
+    @Column(name = "sold_qty", nullable = false)
+    private Integer soldQty;
+
     private String origin;
 
     @Column(columnDefinition = "TEXT")
@@ -64,6 +70,8 @@ public class ShopProduct {
         if (rgstDt == null) rgstDt = LocalDateTime.now();
         if (saleStatus == null) saleStatus = "ON_SALE";
         if (viewCount == null) viewCount = 0L;
+        if (sellingQty == null) sellingQty = 0;
+        if (soldQty == null) soldQty = 0;
         if (sortOrder == null) sortOrder = 0;
     }
 

@@ -1,16 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Container, Row, Col } from 'react-bootstrap';
 import { CheckCircleFill } from 'react-bootstrap-icons';
 import { bankInfo } from '../data/products';
 
 export default function OrderCompletePage() {
-  const [order, setOrder] = useState(null);
-
-  useEffect(() => {
+  const [order] = useState(() => {
     const saved = localStorage.getItem('lastOrder');
-    if (saved) setOrder(JSON.parse(saved));
-  }, []);
+    return saved ? JSON.parse(saved) : null;
+  });
 
   return (
     <>

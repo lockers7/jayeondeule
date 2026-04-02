@@ -18,9 +18,11 @@ export default function ShopFooter() {
             <h5>바로가기</h5>
             <div className="d-flex flex-column gap-2">
               <Link to="/farm">농장 소개</Link>
+              <Link to="/story">농장 이야기</Link>
               <Link to="/house">재배사 소개</Link>
               <Link to="/efficacy">효능효과</Link>
               <Link to="/products">상품 보기</Link>
+              <Link to="/inquiry">문의 게시판</Link>
             </div>
           </Col>
           <Col md={4}>

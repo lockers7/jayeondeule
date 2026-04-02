@@ -1,8 +1,19 @@
+import { useState, useEffect } from 'react';
 import { Container, Row, Col } from 'react-bootstrap';
 import ProductCard from '../components/product/ProductCard';
-import { products } from '../data/products';
+import api from '../api/client';
 
 export default function ProductListPage() {
+  const [products, setProducts] = useState([]);
+
+  useEffect(() => {
+    api.get('/products', { params: { farmId: 1 } })
+      .then(({ data }) => {
+        if (data.success) setProducts(data.data || []);
+      })
+      .catch(() => {});
+  }, []);
+
   return (
     <>
       <div className="page-header">
@@ -16,7 +27,7 @@ export default function ProductListPage() {
         <Container>
           <Row className="g-4">
             {products.map((product) => (
-              <Col lg={3} md={6} key={product.id}>
+              <Col lg={3} md={6} key={product.productId}>
                 <ProductCard product={product} />
               </Col>
             ))}

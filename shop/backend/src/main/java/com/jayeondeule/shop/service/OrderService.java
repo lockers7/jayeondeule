@@ -15,8 +15,10 @@ import java.util.*;
 @Slf4j
 @Service
 @RequiredArgsConstructor
+@SuppressWarnings("null")
 public class OrderService {
     private final ShopOrderRepository orderRepo;
+    private final BoardPostRepository boardPostRepo;
     private final ShopOrderItemRepository orderItemRepo;
     private final ShopProductRepository productRepo;
     private final ShopUserRepository userRepo;
@@ -37,6 +39,9 @@ public class OrderService {
             int decreased = productRepo.decreaseStock(product.getProductId(), itemReq.getQuantity());
             if (decreased == 0)
                 throw new RuntimeException("재고가 부족합니다: " + product.getProductName());
+            productRepo.increaseSellingQty(product.getProductId(), itemReq.getQuantity());
+            // 재고 0이면 품절 처리 (JPQL 직접 — JPA 캐시 무관)
+            productRepo.markSoldOutIfEmpty(product.getProductId());
 
             long subtotal = product.getPrice() * itemReq.getQuantity();
             totalAmount += subtotal;
@@ -94,10 +99,19 @@ public class OrderService {
             case "PREPARING" -> order.setPreparingDt(LocalDateTime.now());
             case "SHIPPED" -> order.setShippedDt(LocalDateTime.now());
             case "DELIVERED" -> order.setDeliveredDt(LocalDateTime.now());
+            case "RECEIVED" -> {
+                order.setReceivedDt(LocalDateTime.now());
+                // 거래완료: 판매중 감소, 판매완료 증가
+                List<ShopOrderItem> receivedItems = orderItemRepo.findByOrderId(orderId);
+                for (ShopOrderItem item : receivedItems) {
+                    productRepo.decreaseSellingQty(item.getProductId(), item.getQuantity());
+                    productRepo.increaseSoldQty(item.getProductId(), item.getQuantity());
+                }
+            }
             case "CANCELLED" -> {
                 order.setCancelledDt(LocalDateTime.now());
                 order.setCancelReason(reason);
-                // 재고 복원
+                // 재고 복원 + 판매중 감소 + 품절→판매중 복원
                 List<ShopOrderItem> items = orderItemRepo.findByOrderId(orderId);
                 for (ShopOrderItem item : items) {
                     ShopProduct product = productRepo.findById(item.getProductId()).orElse(null);
@@ -105,6 +119,8 @@ public class OrderService {
                         product.setStockQty(product.getStockQty() + item.getQuantity());
                         productRepo.save(product);
                     }
+                    productRepo.decreaseSellingQty(item.getProductId(), item.getQuantity());
+                    productRepo.markOnSaleIfRestored(item.getProductId());
                 }
             }
         }
@@ -124,9 +140,17 @@ public class OrderService {
         stats.put("paidOrders", orderRepo.countByFarmIdAndOrderStatus(farmId, "PAID"));
         stats.put("preparingOrders", orderRepo.countByFarmIdAndOrderStatus(farmId, "PREPARING"));
         stats.put("shippedOrders", orderRepo.countByFarmIdAndOrderStatus(farmId, "SHIPPED"));
+        stats.put("deliveredOrders", orderRepo.countByFarmIdAndOrderStatus(farmId, "DELIVERED"));
+        stats.put("receivedOrders", orderRepo.countByFarmIdAndOrderStatus(farmId, "RECEIVED"));
+        stats.put("cancelledOrders", orderRepo.countByFarmIdAndOrderStatus(farmId, "CANCELLED"));
         stats.put("totalRevenue", orderRepo.sumPaidAmountByFarmId(farmId));
         stats.put("totalMembers", userRepo.countByFarmIdAndUsrGradeAndUsrStatus(farmId, "MEMBER", "ACTIVE"));
         stats.put("productRanking", orderItemRepo.productSalesRanking(farmId));
+        // 문의 게시판 현황
+        int totalInquiries = boardPostRepo.countByBoardTypeAndDelYn("INQUIRY", "N");
+        int pendingInquiries = boardPostRepo.countByBoardTypeAndDelYnAndResolveYn("INQUIRY", "N", "N");
+        stats.put("totalInquiries", totalInquiries);
+        stats.put("pendingInquiries", pendingInquiries);
         return stats;
     }
 

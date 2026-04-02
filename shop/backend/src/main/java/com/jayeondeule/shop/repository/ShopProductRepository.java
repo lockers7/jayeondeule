@@ -18,4 +18,29 @@ public interface ShopProductRepository extends JpaRepository<ShopProduct, Intege
     @Modifying
     @Query("UPDATE ShopProduct p SET p.stockQty = p.stockQty - :qty WHERE p.productId = :productId AND p.stockQty >= :qty")
     int decreaseStock(Integer productId, int qty);
+
+    @Modifying
+    @Query("UPDATE ShopProduct p SET p.sellingQty = p.sellingQty + :qty WHERE p.productId = :productId")
+    void increaseSellingQty(Integer productId, int qty);
+
+    @Modifying
+    @Query("UPDATE ShopProduct p SET p.sellingQty = GREATEST(p.sellingQty - :qty, 0) WHERE p.productId = :productId")
+    void decreaseSellingQty(Integer productId, int qty);
+
+    // 재고 0이면 자동 품절, 재고 복원되면 자동 판매중
+    @Modifying
+    @Query("UPDATE ShopProduct p SET p.saleStatus = 'SOLD_OUT' WHERE p.productId = :productId AND p.stockQty <= 0 AND p.saleStatus = 'ON_SALE'")
+    void markSoldOutIfEmpty(Integer productId);
+
+    @Modifying
+    @Query("UPDATE ShopProduct p SET p.saleStatus = 'ON_SALE' WHERE p.productId = :productId AND p.stockQty > 0 AND p.saleStatus = 'SOLD_OUT'")
+    void markOnSaleIfRestored(Integer productId);
+
+    @Modifying
+    @Query("UPDATE ShopProduct p SET p.soldQty = p.soldQty + :qty WHERE p.productId = :productId")
+    void increaseSoldQty(Integer productId, int qty);
+
+    @Modifying
+    @Query("UPDATE ShopProduct p SET p.soldQty = p.soldQty - :qty WHERE p.productId = :productId AND p.soldQty >= :qty")
+    void decreaseSoldQty(Integer productId, int qty);
 }
