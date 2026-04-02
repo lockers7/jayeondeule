@@ -1,13 +1,25 @@
+import { useState, useEffect } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { Container, Row, Col } from 'react-bootstrap';
+import { Container, Row, Col, Alert, Badge } from 'react-bootstrap';
 import OrderForm from '../components/order/OrderForm';
-import { products } from '../data/products';
+import api from '../api/client';
 
 export default function OrderPage() {
   const { productId } = useParams();
   const [searchParams] = useSearchParams();
   const quantity = parseInt(searchParams.get('qty') || '1', 10);
-  const product = products.find((p) => p.id === productId);
+  const [product, setProduct] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const numId = productId?.replace(/\D/g, '') || productId;
+    api.get(`/products/${numId}`)
+      .then(({ data }) => { if (data.success) setProduct(data.data); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [productId]);
+
+  if (loading) return null;
 
   if (!product) {
     return (
@@ -18,6 +30,10 @@ export default function OrderPage() {
       </section>
     );
   }
+
+  const isSoldOut = product.saleStatus === 'SOLD_OUT' || product.stockQty <= 0;
+  const isStopped = product.saleStatus === 'STOPPED';
+  const canOrder = !isSoldOut && !isStopped;
 
   return (
     <>
@@ -32,7 +48,14 @@ export default function OrderPage() {
         <Container>
           <Row className="justify-content-center">
             <Col lg={8}>
-              <OrderForm product={product} quantity={quantity} />
+              {!canOrder && (
+                <Alert variant={isStopped ? 'secondary' : 'warning'} className="text-center mb-4">
+                  <Badge bg={isStopped ? 'secondary' : 'warning'} text={isSoldOut && !isStopped ? 'dark' : undefined}
+                    className="me-2">{isStopped ? '판매중지' : '품절'}</Badge>
+                  현재 주문이 불가능한 상품입니다.
+                </Alert>
+              )}
+              <OrderForm product={product} quantity={quantity} canOrder={canOrder} />
             </Col>
           </Row>
         </Container>

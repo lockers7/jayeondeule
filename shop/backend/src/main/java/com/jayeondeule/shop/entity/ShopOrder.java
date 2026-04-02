@@ -70,6 +70,9 @@ public class ShopOrder {
     @Column(name = "cancelled_dt")
     private LocalDateTime cancelledDt;
 
+    @Column(name = "received_dt")
+    private LocalDateTime receivedDt;
+
     @OneToMany(mappedBy = "orderId", cascade = CascadeType.ALL, fetch = FetchType.EAGER)
     private List<ShopOrderItem> items;
 

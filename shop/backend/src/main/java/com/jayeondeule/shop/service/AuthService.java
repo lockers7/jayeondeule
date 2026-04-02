@@ -19,6 +19,7 @@ import java.util.Optional;
 @Slf4j
 @Service
 @RequiredArgsConstructor
+@SuppressWarnings("null")
 public class AuthService {
     private final ShopUserRepository userRepo;
     private final FarmUserRepository farmUserRepo;
@@ -59,7 +60,8 @@ public class AuthService {
         log.info("[로그인 성공] userId={}, grade={}, farmId={}, source=shop_user", user.getShopUsrId(), user.getUsrGrade(), user.getFarmId());
 
         return buildLoginResult(user.getShopUsrId(), user.getUsrName(), user.getUsrGrade(),
-                user.getFarmId(), user.getPhone(), user.getEmail());
+                user.getFarmId(), user.getPhone(), user.getEmail(),
+                user.getZipcode(), user.getAddress(), user.getAddressDetail());
     }
 
     private Map<String, Object> loginAsFarmUser(FarmUser farmUser, String rawPassword) {
@@ -81,21 +83,31 @@ public class AuthService {
     }
 
     private Map<String, Object> buildLoginResult(String userId, String name, String grade, Long farmId, String phone, String email) {
+        return buildLoginResult(userId, name, grade, farmId, phone, email, null, null, null);
+    }
+
+    private Map<String, Object> buildLoginResult(String userId, String name, String grade, Long farmId,
+                                                  String phone, String email, String zipcode, String address, String addressDetail) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("userId", userId);
+        claims.put("usrName", name);
         claims.put("usrGrade", grade);
         claims.put("farmId", farmId);
 
+        Map<String, Object> userInfo = new HashMap<>();
+        userInfo.put("shopUsrId", userId);
+        userInfo.put("usrName", name);
+        userInfo.put("usrGrade", grade);
+        userInfo.put("farmId", farmId);
+        userInfo.put("phone", phone != null ? phone : "");
+        userInfo.put("email", email != null ? email : "");
+        userInfo.put("zipcode", zipcode != null ? zipcode : "");
+        userInfo.put("address", address != null ? address : "");
+        userInfo.put("addressDetail", addressDetail != null ? addressDetail : "");
+
         Map<String, Object> result = new HashMap<>();
         result.put("token", jwtUtil.generateToken(claims));
-        result.put("userInfo", Map.of(
-                "shopUsrId", userId,
-                "usrName", name,
-                "usrGrade", grade,
-                "farmId", farmId,
-                "phone", phone != null ? phone : "",
-                "email", email != null ? email : ""
-        ));
+        result.put("userInfo", userInfo);
         return result;
     }
 
@@ -133,5 +145,34 @@ public class AuthService {
         if (userRepo.existsByShopUsrId(id)) return false;
         if (farmUserRepo.findByUserIdAndDlteYn(id, "N").isPresent()) return false;
         return true;
+    }
+
+    @Transactional
+    public void changePassword(String userId, String currentPassword, String newPassword) {
+        // ShopUser 먼저 확인
+        Optional<ShopUser> shopUserOpt = userRepo.findById(userId);
+        if (shopUserOpt.isPresent()) {
+            ShopUser user = shopUserOpt.get();
+            if (!passwordEncoder.matches(currentPassword, user.getPasswd())) {
+                throw new RuntimeException("현재 비밀번호가 일치하지 않습니다.");
+            }
+            user.setPasswd(passwordEncoder.encode(newPassword));
+            userRepo.save(user);
+            log.info("[비밀번호 변경] userId={} (shop_user)", userId);
+            return;
+        }
+        // FarmUser 확인
+        Optional<FarmUser> farmUserOpt = farmUserRepo.findByUserIdAndDlteYn(userId, "N");
+        if (farmUserOpt.isPresent()) {
+            FarmUser farmUser = farmUserOpt.get();
+            if (!passwordEncoder.matches(currentPassword, farmUser.getPasswd())) {
+                throw new RuntimeException("현재 비밀번호가 일치하지 않습니다.");
+            }
+            farmUser.setPasswd(passwordEncoder.encode(newPassword));
+            farmUserRepo.save(farmUser);
+            log.info("[비밀번호 변경] userId={} (user_m_info)", userId);
+            return;
+        }
+        throw new RuntimeException("회원 정보를 찾을 수 없습니다.");
     }
 }

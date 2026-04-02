@@ -1,17 +1,19 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Form, Button, Row, Col, Alert } from 'react-bootstrap';
+import { Form, Button, Row, Col, Alert, Dropdown } from 'react-bootstrap';
+import { ClockHistory } from 'react-bootstrap-icons';
 import { bankInfo } from '../../data/products';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../api/client';
 import AddressSearch from '../common/AddressSearch';
 import PhoneInput from '../common/PhoneInput';
 
-export default function OrderForm({ product, quantity }) {
+export default function OrderForm({ product, quantity, canOrder = true }) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [addressHistory, setAddressHistory] = useState([]);
   const [form, setForm] = useState({
     name: user?.usrName || '',
     phone: user?.phone || '',
@@ -22,8 +24,46 @@ export default function OrderForm({ product, quantity }) {
     payMethod: 'bank',
   });
 
+  // 배송지 정보 로딩: 최종 배송지 → 없으면 회원 기본 주소
+  useEffect(() => {
+    if (!user) return;
+    api.get('/orders/shipping-info')
+      .then(({ data }) => {
+        if (!data.success) return;
+        const { defaultAddress, history } = data.data;
+        setAddressHistory(history || []);
+
+        // 최종 배송지 (이력이 있으면 첫 번째) → 없으면 회원 기본 주소
+        const addr = (history && history.length > 0) ? history[0] : defaultAddress;
+        if (addr) {
+          setForm(prev => ({
+            ...prev,
+            name: addr.receiverName || prev.name,
+            phone: addr.receiverPhone || prev.phone,
+            zipCode: addr.zipcode || '',
+            address: addr.address || '',
+            addressDetail: addr.addressDetail || '',
+            memo: addr.memo || '',
+          }));
+        }
+      })
+      .catch(() => {});
+  }, [user]);
+
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
+  };
+
+  const applyAddress = (addr) => {
+    setForm(prev => ({
+      ...prev,
+      name: addr.receiverName || prev.name,
+      phone: addr.receiverPhone || prev.phone,
+      zipCode: addr.zipcode || '',
+      address: addr.address || '',
+      addressDetail: addr.addressDetail || '',
+      memo: addr.memo || '',
+    }));
   };
 
   const handleSubmit = async (e) => {
@@ -86,7 +126,28 @@ export default function OrderForm({ product, quantity }) {
         </Col>
       </Row>
 
-      <h5 className="mb-3 fw-bold">배송지 정보</h5>
+      <div className="d-flex align-items-center gap-2 mb-3">
+        <h5 className="mb-0 fw-bold">배송지 정보</h5>
+        {addressHistory.length > 0 && (
+          <Dropdown>
+            <Dropdown.Toggle variant="outline-secondary" size="sm"
+              style={{ borderRadius: '50px', padding: '4px 14px', fontSize: '0.82rem' }}>
+              <ClockHistory size={12} className="me-1" /> 최근 배송지
+            </Dropdown.Toggle>
+            <Dropdown.Menu style={{ minWidth: '340px', padding: '8px' }}>
+              {addressHistory.map((addr, i) => (
+                <Dropdown.Item key={i} onClick={() => applyAddress(addr)}
+                  style={{ whiteSpace: 'normal', padding: '8px 12px', borderBottom: i < addressHistory.length - 1 ? '1px solid #eee' : 'none' }}>
+                  <div style={{ fontSize: '0.88rem', fontWeight: 500 }}>{addr.receiverName} / {addr.receiverPhone}</div>
+                  <div style={{ fontSize: '0.82rem', color: 'var(--shop-text-light)' }}>
+                    [{addr.zipcode}] {addr.address} {addr.addressDetail}
+                  </div>
+                </Dropdown.Item>
+              ))}
+            </Dropdown.Menu>
+          </Dropdown>
+        )}
+      </div>
       <AddressSearch
         zipcode={form.zipCode}
         address={form.address}
@@ -128,9 +189,14 @@ export default function OrderForm({ product, quantity }) {
 
       {error && <Alert variant="danger" className="mb-3">{error}</Alert>}
       {!user && <Alert variant="warning" className="mb-3">주문하려면 <a href="/login">로그인</a>이 필요합니다.</Alert>}
-      <Button type="submit" className="btn-shop-primary w-100 py-3 fs-5" disabled={loading}>
-        {loading ? '주문 처리 중...' : '주문하기'}
-      </Button>
+      <div className="text-center">
+        <Button type="submit" className={canOrder ? 'btn-shop-primary py-3 px-5 fs-5' : 'py-3 px-5 fs-5'}
+          variant={canOrder ? undefined : 'secondary'}
+          style={canOrder ? {} : { borderRadius: '50px' }}
+          disabled={loading || !canOrder}>
+          {loading ? '주문 처리 중...' : !canOrder ? '주문 불가' : '주문하기'}
+        </Button>
+      </div>
     </Form>
   );
 }

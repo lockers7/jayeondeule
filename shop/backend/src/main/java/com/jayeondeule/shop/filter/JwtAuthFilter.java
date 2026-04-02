@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
@@ -25,15 +26,16 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             "/api/shop/auth/register",
             "/api/shop/auth/check-id",
             "/api/shop/products",
-            "/api/shop/categories"
+            "/api/shop/categories",
+            "/api/shop/board/posts"
     );
 
     @Override
-    protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain)
+    protected void doFilterInternal(@NonNull HttpServletRequest req, @NonNull HttpServletResponse res, @NonNull FilterChain chain)
             throws ServletException, IOException {
         String path = req.getRequestURI();
 
-        if (PUBLIC_PATHS.stream().anyMatch(path::startsWith) && !"PUT".equals(req.getMethod()) && !"DELETE".equals(req.getMethod())) {
+        if (PUBLIC_PATHS.stream().anyMatch(path::startsWith) && "GET".equals(req.getMethod())) {
             chain.doFilter(req, res);
             return;
         }

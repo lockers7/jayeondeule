@@ -1,14 +1,25 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { Container, Row, Col, Button } from 'react-bootstrap';
+import { Container, Row, Col, Button, Badge } from 'react-bootstrap';
 import { CartPlus, Truck, ShieldCheck, Award } from 'react-bootstrap-icons';
-import { products } from '../data/products';
+import api from '../api/client';
 
 export default function ProductDetailPage() {
   const { productId } = useParams();
   const navigate = useNavigate();
-  const product = products.find((p) => p.id === productId);
+  const [product, setProduct] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [quantity, setQuantity] = useState(1);
+
+  useEffect(() => {
+    const numId = productId?.replace(/\D/g, '') || productId;
+    api.get(`/products/${numId}`)
+      .then(({ data }) => { if (data.success) setProduct(data.data); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [productId]);
+
+  if (loading) return null;
 
   if (!product) {
     return (
@@ -26,6 +37,13 @@ export default function ProductDetailPage() {
   const formatPrice = (price) => price.toLocaleString('ko-KR');
   const totalPrice = formatPrice(product.price * quantity);
 
+  const isSoldOut = product.saleStatus === 'SOLD_OUT' || product.stockQty <= 0;
+  const isStopped = product.saleStatus === 'STOPPED';
+  const canBuy = !isSoldOut && !isStopped;
+
+  const image = product.imageUrl || null;
+  const features = product.features ? (typeof product.features === 'string' ? JSON.parse(product.features) : product.features) : [];
+
   return (
     <>
       <div style={{ paddingTop: '80px' }} />
@@ -34,31 +52,53 @@ export default function ProductDetailPage() {
           <Row className="g-5">
             {/* 이미지 */}
             <Col md={6}>
-              <div
-                style={{
-                  background: product.images?.[0]
-                    ? `url(${product.images[0]}) center/cover`
-                    : 'linear-gradient(135deg, #D7CCC8, #BCAAA4)',
-                  borderRadius: '16px',
-                  height: '500px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: '#fff',
-                  fontSize: '1.1rem',
-                }}
-              >
-                {!product.images?.[0] && '상품 이미지 영역'}
+              <div style={{ position: 'relative' }}>
+                <div
+                  style={{
+                    background: image
+                      ? `url(${image}) center/cover`
+                      : 'linear-gradient(135deg, #D7CCC8, #BCAAA4)',
+                    borderRadius: '16px',
+                    height: '500px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#fff',
+                    fontSize: '1.1rem',
+                  }}
+                >
+                  {!image && '상품 이미지 영역'}
+                </div>
+                {isSoldOut && (
+                  <Badge bg="warning" text="dark" style={{
+                    position: 'absolute', top: 16, right: 16, fontSize: '1rem', padding: '8px 16px',
+                  }}>품절</Badge>
+                )}
+                {isStopped && (
+                  <Badge bg="secondary" style={{
+                    position: 'absolute', top: 16, right: 16, fontSize: '1rem', padding: '8px 16px',
+                  }}>판매중지</Badge>
+                )}
               </div>
             </Col>
 
             {/* 상품 정보 */}
             <Col md={6}>
-              <span className="product-badge mb-3">{product.category}</span>
+              {product.category && <span className="product-badge mb-3">{product.category}</span>}
               <h2 className="fw-bold mb-2" style={{ color: 'var(--shop-primary-dark)' }}>
-                {product.name}
+                {product.productName}
               </h2>
               <p className="text-muted mb-4">{product.subtitle}</p>
+
+              {/* 판매상태 표시 */}
+              {(isSoldOut || isStopped) && (
+                <div className="mb-3">
+                  <Badge bg={isStopped ? 'secondary' : 'warning'} text={isSoldOut && !isStopped ? 'dark' : undefined}
+                    style={{ fontSize: '0.9rem', padding: '8px 16px' }}>
+                    {isStopped ? '판매중지' : '품절'}
+                  </Badge>
+                </div>
+              )}
 
               <div className="mb-4">
                 <span className="product-price" style={{ fontSize: '2rem' }}>
@@ -70,23 +110,25 @@ export default function ProductDetailPage() {
               <p className="mb-4" style={{ lineHeight: 1.8 }}>{product.description}</p>
 
               {/* 특징 뱃지 */}
-              <div className="d-flex flex-wrap gap-2 mb-4">
-                {product.features.map((f, i) => (
-                  <span
-                    key={i}
-                    style={{
-                      background: 'var(--shop-bg-warm)',
-                      padding: '6px 16px',
-                      borderRadius: '20px',
-                      fontSize: '0.85rem',
-                      color: 'var(--shop-primary)',
-                      fontWeight: 500,
-                    }}
-                  >
-                    {f}
-                  </span>
-                ))}
-              </div>
+              {features.length > 0 && (
+                <div className="d-flex flex-wrap gap-2 mb-4">
+                  {features.map((f, i) => (
+                    <span
+                      key={i}
+                      style={{
+                        background: 'var(--shop-bg-warm)',
+                        padding: '6px 16px',
+                        borderRadius: '20px',
+                        fontSize: '0.85rem',
+                        color: 'var(--shop-primary)',
+                        fontWeight: 500,
+                      }}
+                    >
+                      {f}
+                    </span>
+                  ))}
+                </div>
+              )}
 
               {/* 수량 선택 */}
               <div className="d-flex align-items-center gap-3 mb-4">
@@ -103,7 +145,7 @@ export default function ProductDetailPage() {
                   <Button
                     variant="outline-secondary"
                     size="sm"
-                    onClick={() => setQuantity(quantity + 1)}
+                    onClick={() => setQuantity(canBuy ? Math.min(product.stockQty, quantity + 1) : quantity + 1)}
                   >
                     +
                   </Button>
@@ -114,18 +156,17 @@ export default function ProductDetailPage() {
               </div>
 
               {/* 주문 버튼 */}
-              {product.inStock ? (
+              <div className="text-center">
                 <Button
-                  className="btn-shop-primary w-100 py-3 fs-5"
-                  onClick={() => navigate(`/order/${product.id}?qty=${quantity}`)}
+                  className={canBuy ? 'btn-shop-primary py-3 px-5 fs-5' : 'py-3 px-5 fs-5'}
+                  variant={canBuy ? undefined : 'secondary'}
+                  style={canBuy ? {} : { borderRadius: '50px' }}
+                  disabled={!canBuy}
+                  onClick={canBuy ? () => navigate(`/order/${product.productId}?qty=${quantity}`) : undefined}
                 >
                   <CartPlus className="me-2" /> 주문하기
                 </Button>
-              ) : (
-                <Button className="w-100 py-3 fs-5" variant="secondary" disabled>
-                  준비중입니다
-                </Button>
-              )}
+              </div>
 
               {/* 안내 */}
               <div className="mt-4 d-flex flex-column gap-2">

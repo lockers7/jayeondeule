@@ -8,6 +8,33 @@ const compactInput = { maxWidth: "100px" };
 const labelStyle  = { minWidth: "110px", fontWeight: "bold", marginBottom: 0, whiteSpace: "nowrap" };
 const greenCard   = { backgroundColor: "#fff", border: "2px solid #28a745" };
 
+// 24시간 시:분 입력 (숫자 직접 입력)
+const timeInputStyle = { width: "44px", padding: "4px 6px", fontSize: "0.95rem", textAlign: "center" };
+
+function TimeInput({value, onChange}) {
+    const [hh, mm] = (value || "00:00").split(":");
+    const clamp = (v, min, max) => String(Math.max(min, Math.min(max, parseInt(v) || 0))).padStart(2, "0");
+    const handleBlur = (part, v) => {
+        const clamped = part === "hh" ? clamp(v, 0, 23) : clamp(v, 0, 59);
+        const newVal = part === "hh" ? `${clamped}:${mm || "00"}` : `${hh || "00"}:${clamped}`;
+        onChange(newVal);
+    };
+    return (
+        <div className="d-flex align-items-center gap-1">
+            <Form.Control size="sm" style={timeInputStyle} maxLength={2}
+                defaultValue={hh || "00"} key={`${value}-hh`}
+                onBlur={(e) => handleBlur("hh", e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && e.target.blur()}/>
+            <span style={{fontWeight: "bold"}}>시</span>
+            <Form.Control size="sm" style={timeInputStyle} maxLength={2}
+                defaultValue={mm || "00"} key={`${value}-mm`}
+                onBlur={(e) => handleBlur("mm", e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && e.target.blur()}/>
+            <span style={{fontWeight: "bold"}}>분</span>
+        </div>
+    );
+}
+
 const WEEKDAYS = [
     {value: "1", label: "월"},
     {value: "2", label: "화"},
@@ -143,29 +170,25 @@ export default function SensorSettingDashboard({farmId, selectedHouse}) {
         return (
             <Card key={idx} className="mb-2 p-2" style={{border: "1px solid #dee2e6", backgroundColor: "#fafffe"}}>
                 {/* 시간 + 토글 + 삭제 */}
-                <div className="d-flex align-items-center justify-content-center mb-1">
-                    <InputGroup style={{ maxWidth: "360px" }}>
-                        <Form.Control type="time" value={schedule.strtTime}
-                                      onChange={(e) => handleScheduleChange(idx, type, "strtTime", e.target.value)}/>
-                        <InputGroup.Text>~</InputGroup.Text>
-                        <Form.Control type="time" value={schedule.fnshTime}
-                                      onChange={(e) => handleScheduleChange(idx, type, "fnshTime", e.target.value)}/>
-                        <InputGroup.Text>
-                            <Form.Check
-                                type="switch"
-                                checked={!schedule.dlteYn}
-                                onClick={() => handleScheduleChange(idx, type, 'dlteYn', !schedule.dlteYn)}
-                                disabled={!(schedule.strtTime && schedule.fnshTime)}
-                            />
-                        </InputGroup.Text>
-                        <Button
-                            style={{ maxWidth: "20px", display: "flex", alignItems: "center", justifyContent: "center", padding: "0" }}
-                            variant="danger"
-                            onClick={() => { setShow(true); setDeleteTarget({id: idx, type}); }}
-                        >
-                            <Dash/>
-                        </Button>
-                    </InputGroup>
+                <div className="d-flex align-items-center justify-content-center gap-2 mb-1 flex-wrap">
+                    <TimeInput value={schedule.strtTime}
+                        onChange={(v) => handleScheduleChange(idx, type, "strtTime", v)}/>
+                    <span style={{fontWeight: "bold", fontSize: "1.1rem"}}>~</span>
+                    <TimeInput value={schedule.fnshTime}
+                        onChange={(v) => handleScheduleChange(idx, type, "fnshTime", v)}/>
+                    <Form.Check
+                        type="switch"
+                        checked={!schedule.dlteYn}
+                        onClick={() => handleScheduleChange(idx, type, 'dlteYn', !schedule.dlteYn)}
+                        disabled={!(schedule.strtTime && schedule.fnshTime)}
+                    />
+                    <Button
+                        style={{ width: "28px", height: "28px", display: "flex", alignItems: "center", justifyContent: "center", padding: "0" }}
+                        variant="danger" size="sm"
+                        onClick={() => { setShow(true); setDeleteTarget({id: idx, type}); }}
+                    >
+                        <Dash/>
+                    </Button>
                 </div>
 
                 {/* 실행 유형 선택 */}

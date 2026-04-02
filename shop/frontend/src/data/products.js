@@ -50,9 +50,9 @@ export const products = [
 ];
 
 export const bankInfo = {
-  bankName: '농협은행',
-  accountNumber: '000-0000-0000-00',
-  accountHolder: '자연들에',
+  bankName: '국민은행',
+  accountNumber: '073-24-0581-494',
+  accountHolder: '임 채 균',
 };
 
 export const companyInfo = {
