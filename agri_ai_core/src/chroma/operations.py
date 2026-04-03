@@ -4,7 +4,6 @@ import time
 import traceback
 
 from agri_ai_core.logs import setup_logger
-from agri_ai_core.src.ai.mcp_client import mcp_http_request
 from agri_ai_core.src.utils.validators import is_true
 from agri_ai_core.src.chroma.config import CHROMA_API_BASE
 from agri_ai_core.src.chroma.client import (
@@ -23,6 +22,7 @@ logger = setup_logger(__name__)
 
 
 def _http_post(url: str, payload: dict, timeout: int = 30):
+    from agri_ai_core.src.ai.mcp_client import mcp_http_request  # 지연 import (계층 역전 방지)
     logger.debug(f"[ChromaDB-POST] url={url}, payload_keys={list(payload.keys()) if isinstance(payload, dict) else type(payload)}, timeout={timeout}")
     status_code, data, text = mcp_http_request(
         method="POST",

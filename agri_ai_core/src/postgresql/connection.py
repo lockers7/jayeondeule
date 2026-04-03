@@ -17,7 +17,7 @@ except Exception:
 
 from agri_ai_core.config import settings
 from agri_ai_core.logs import setup_logger
-from agri_ai_core.src.ai.mcp_client import postgres_query
+# postgres_query는 함수 내부에서 지연 import (계층 역전 방지)
 from agri_ai_core.src.utils.validators import is_true
 
 logger = setup_logger(__name__)
@@ -100,6 +100,7 @@ class DatabaseHandler:
         return self._PLACEHOLDER_PATTERN.sub(_replace, query)
 
     def _execute_mcp_query(self, query: str, vals: Optional[Tuple[Any, ...]] = None) -> list:
+        from agri_ai_core.src.ai.mcp_client import postgres_query  # 지연 import (계층 역전 방지)
         sql = self._bind_sql(query, vals)
         result = postgres_query(sql, timeout=self.mcp_timeout_seconds)
         if not result.get("success"):
