@@ -1,27 +1,19 @@
-# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-# 설정 모듈
-# 환경변수 기반 애플리케이션 설정 로드
-# --->
-# DatabaseSettings: PostgreSQL 접속 설정
-# VectorStoreSettings: ChromaDB 벡터스토어 설정
-# ModelSettings: LLM 모델 설정
-# CollectionSettings: 컬렉션명 설정
-# LoggingSettings: 로깅 설정
-# AppSettings: 전체 앱 설정 (DB, 벡터스토어, 모델, 로깅 통합)
-# _get_int: 환경변수 정수 변환 헬퍼
-# _get_first_env: 여러 환경변수 중 첫 번째 유효값 반환
-# get_settings: 앱 설정 싱글톤 반환
-# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+"""설정 모듈 - 환경변수 기반 애플리케이션 설정 로드 (dataclass + lru_cache 싱글톤)."""
 
 import os
-import logging
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Optional
 
 from dotenv import load_dotenv
 
-logger = logging.getLogger(__name__)
+
+def _get_logger():
+    from agri_ai_core.logs import setup_logger
+    return setup_logger(__name__)
+
+
+logger = _get_logger()
 
 
 @dataclass(frozen=True)
