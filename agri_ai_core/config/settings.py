@@ -1,5 +1,6 @@
 """설정 모듈 - 환경변수 기반 애플리케이션 설정 로드 (dataclass + lru_cache 싱글톤)."""
 
+import logging
 import os
 from dataclasses import dataclass
 from functools import lru_cache
@@ -7,13 +8,8 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-
-def _get_logger():
-    from agri_ai_core.logs import setup_logger
-    return setup_logger(__name__)
-
-
-logger = _get_logger()
+# 순환 참조 방지: logs.py가 settings를 참조하므로 여기서는 표준 logging 사용
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
