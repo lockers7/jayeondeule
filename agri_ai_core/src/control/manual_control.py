@@ -29,17 +29,11 @@ from agri_ai_core.src.control.control_common import (
     CO2_LOW, CO2_HIGH, CO2_CRITICAL_HIGH,
     WATER_TEMP_CRITICAL_LOW, WATER_TEMP_CRITICAL_HIGH,
     BUDDING_TEMP_LOW, BUDDING_TEMP_HIGH,
-    HEATER_MAX_CONTINUOUS_MIN, HEATER_COOLDOWN_MIN,
     DAMPER_FAN_DELAY_SEC,
+    check_heater_cooldown, update_heater_tracking, reset_heater_state,
 )
 
 logger = setup_logger(__name__)
-
-
-# ════════════════════════════════════════════════════════════
-# 열풍기 상태 추적 (인메모리)
-# ════════════════════════════════════════════════════════════
-_heater_state = {}
 
 
 # ════════════════════════════════════════════════════════════
@@ -86,48 +80,13 @@ def _is_internal_abnormal(indoor_temp, indoor_humidity, co2):
     return temp_bad or hum_bad or co2_bad
 
 
-def _check_heater_cooldown(farm_id, house_id):
-    key = (farm_id, int(house_id))
-    state = _heater_state.get(key)
-    now = datetime.now()
-
-    if not state:
-        return True, False
-
-    cooling_until = state.get('cooling_until')
-    if cooling_until:
-        if now < cooling_until:
-            return False, True
-        _heater_state[key] = {}
-        return True, False
-
-    on_since = state.get('on_since')
-    if on_since:
-        elapsed_min = (now - on_since).total_seconds() / 60
-        if elapsed_min >= HEATER_MAX_CONTINUOUS_MIN:
-            _heater_state[key] = {'cooling_until': now + timedelta(minutes=HEATER_COOLDOWN_MIN)}
-            return False, True
-
-    return True, False
-
-
-def _update_heater_tracking(farm_id, house_id, heater_on):
-    key = (farm_id, int(house_id))
-    state = _heater_state.get(key, {})
-
-    if state.get('cooling_until'):
-        return
-
-    if heater_on:
-        if 'on_since' not in state:
-            _heater_state[key] = {'on_since': datetime.now()}
-    else:
-        _heater_state[key] = {}
+# 히터 쿨다운 함수는 control_common에서 import (순환참조 방지)
+_check_heater_cooldown = check_heater_cooldown
+_update_heater_tracking = update_heater_tracking
 
 
 def _reset_heater_cooldown(farm_id, house_id, order_label=""):
-    key = (farm_id, int(house_id))
-    _heater_state[key] = {}
+    reset_heater_state(farm_id, house_id)
     scope = _house_prefix(order_label, farm_id, house_id)
     logger.info(f"{scope}: 비상제어 → 열풍기 쿨다운 초기화")
 
@@ -844,7 +803,10 @@ def control_all_manual():
                 # LLM 정기 호출은 별도 5분 주기 작업(control_all_ai)에서 수행
                 if mode_label == "AI 제어 모드":
                     try:
-                        from agri_ai_core.src.control.ai_control import monitor_ai_emergency, control_ai_environment
+                        import importlib
+                        _ai_mod = importlib.import_module('agri_ai_core.src.control.ai_control')
+                        monitor_ai_emergency = _ai_mod.monitor_ai_emergency
+                        control_ai_environment = _ai_mod.control_ai_environment
 
                         # 1. 비상제어 (하드 리밋 — AI보다 우선)
                         result, handled = _handle_ai_emergency(farm_id, house_id, growth_stage, order_label)
@@ -980,7 +942,9 @@ def _ai_control_loop():
                 growth_stage = read_current_growth_stage(farm_id, house_id) or '생육기'
 
                 try:
-                    from agri_ai_core.src.control.ai_control import control_ai_environment
+                    import importlib
+                    _ai_mod = importlib.import_module('agri_ai_core.src.control.ai_control')
+                    control_ai_environment = _ai_mod.control_ai_environment
 
                     # 비상제어 체크 (AI보다 우선)
                     result, handled = _handle_ai_emergency(farm_id, house_id, growth_stage, order_label)

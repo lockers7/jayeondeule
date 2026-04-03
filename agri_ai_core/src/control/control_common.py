@@ -44,6 +44,60 @@ DAMPER_FAN_DELAY_SEC = 15
 
 
 # ════════════════════════════════════════════════════════════
+# 히터 쿨다운 상태 관리 (ai_control ↔ manual_control 공유)
+# ════════════════════════════════════════════════════════════
+from datetime import datetime, timedelta
+
+_heater_state = {}
+
+
+def check_heater_cooldown(farm_id, house_id):
+    """히터 연속 가동 체크. Returns (사용가능, 쿨다운중)."""
+    key = (farm_id, int(house_id))
+    state = _heater_state.get(key)
+    now = datetime.now()
+
+    if not state:
+        return True, False
+
+    cooling_until = state.get('cooling_until')
+    if cooling_until:
+        if now < cooling_until:
+            return False, True
+        _heater_state[key] = {}
+        return True, False
+
+    on_since = state.get('on_since')
+    if on_since:
+        elapsed_min = (now - on_since).total_seconds() / 60
+        if elapsed_min >= HEATER_MAX_CONTINUOUS_MIN:
+            _heater_state[key] = {'cooling_until': now + timedelta(minutes=HEATER_COOLDOWN_MIN)}
+            return False, True
+
+    return True, False
+
+
+def update_heater_tracking(farm_id, house_id, heater_on):
+    """히터 ON/OFF 상태 추적 업데이트."""
+    key = (farm_id, int(house_id))
+    state = _heater_state.get(key, {})
+
+    if state.get('cooling_until'):
+        return
+
+    if heater_on:
+        if 'on_since' not in state:
+            _heater_state[key] = {'on_since': datetime.now()}
+    else:
+        _heater_state[key] = {}
+
+
+def reset_heater_state(farm_id, house_id):
+    """히터 상태 초기화."""
+    _heater_state[(farm_id, int(house_id))] = {}
+
+
+# ════════════════════════════════════════════════════════════
 # Semantic name → relay_*st_flag 핀 매핑
 # ════════════════════════════════════════════════════════════
 RELAY_PIN_MAP_STANDARD = {

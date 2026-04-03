@@ -17,7 +17,7 @@ ENRICHMENT_TIMEOUT_QA = int(os.getenv("ENRICHMENT_TIMEOUT_QA", "180"))
 ENRICHMENT_MAX_INPUT_CHARS = int(os.getenv("ENRICHMENT_MAX_INPUT_CHARS", "5000"))
 ENRICHMENT_MAX_QA_PAIRS = int(os.getenv("ENRICHMENT_MAX_QA_PAIRS", "5"))
 
-from agri_ai_core.src.ai.rag.document_processor import DOC_TYPE_LABELS as _DOC_TYPE_LABELS
+from agri_ai_core.src.ai.rag.constants import DOC_TYPE_LABELS as _DOC_TYPE_LABELS
 
 
 # ════════════════════════════════════════════════════════════

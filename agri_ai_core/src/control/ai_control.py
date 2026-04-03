@@ -34,10 +34,8 @@ from agri_ai_core.src.control.control_common import (
     WATER_TEMP_LOW, WATER_TEMP_HIGH, WATER_TEMP_CRITICAL_LOW, WATER_TEMP_CRITICAL_HIGH,
     HEATER_MAX_CONTINUOUS_MIN, HEATER_COOLDOWN_MIN,
 )
-from agri_ai_core.src.control.manual_control import (
-    _execute_control,
-    _check_heater_cooldown,
-)
+from agri_ai_core.src.control.control_common import check_heater_cooldown
+from agri_ai_core.src.control.manual_control import _execute_control
 
 logger = setup_logger(__name__)
 
@@ -552,7 +550,7 @@ def _validate_safety(parsed, sensor_data, farm_id, house_id):
 
     # (5) 열풍기 쿨다운 검증
     if devices.get('indoor_heater_flag', False):
-        heater_available, in_cooldown = _check_heater_cooldown(farm_id, house_id)
+        heater_available, in_cooldown = check_heater_cooldown(farm_id, house_id)
         if not heater_available:
             logger.warning(f"[AI제어] 안전 보정: 열풍기 쿨다운 중 → 열풍기 OFF")
             devices['indoor_heater_flag'] = False
