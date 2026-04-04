@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Container, Row, Col, Table, Badge, Button, Form, Modal } from 'react-bootstrap';
-import { CheckCircleFill, Eye, ChatDots, ArrowLeft, PersonFill, CalendarEvent, Trash, Reply } from 'react-bootstrap-icons';
+import { CheckCircleFill, Eye, ChatDots, ArrowLeft, PersonFill, CalendarEvent, Trash, Reply, ImageFill } from 'react-bootstrap-icons';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../api/client';
 import { formatDate, formatDateTime, formatCurrency, isVideo } from '../../utils/format';
@@ -117,13 +117,24 @@ export default function AdminPage() {
     loadDashboard();
   };
 
+  const [productImageFile, setProductImageFile] = useState(null);
+
   const saveProduct = async () => {
-    if (editProduct.productId) {
-      await api.put(`/admin/products/${editProduct.productId}`, editProduct);
+    let pid = editProduct.productId;
+    if (pid) {
+      await api.put(`/admin/products/${pid}`, editProduct);
     } else {
-      await api.post('/admin/products', { ...editProduct, farmId: 1 });
+      const { data } = await api.post('/admin/products', { ...editProduct, farmId: 1 });
+      pid = data.data?.productId;
+    }
+    // 이미지 업로드
+    if (productImageFile && pid) {
+      const formData = new FormData();
+      formData.append('file', productImageFile);
+      await api.post(`/admin/products/${pid}/image`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
     }
     setShowProduct(false);
+    setProductImageFile(null);
     loadProducts();
   };
 
@@ -514,6 +525,19 @@ export default function AdminPage() {
               </Row>
               <Form.Group className="mb-3"><Form.Label>상품설명</Form.Label>
                 <Form.Control as="textarea" rows={3} value={editProduct.description || ''} onChange={e => setEditProduct({ ...editProduct, description: e.target.value })} /></Form.Group>
+              <Form.Group className="mb-3">
+                <Form.Label>상품 이미지</Form.Label>
+                <div className="d-flex align-items-start gap-3">
+                  {(productImageFile || editProduct.imageUrl) && (
+                    <img src={productImageFile ? URL.createObjectURL(productImageFile) : editProduct.imageUrl}
+                      alt="상품 미리보기" style={{ width: '120px', height: '120px', objectFit: 'cover', borderRadius: '10px', border: '2px solid #90A4AE' }} />
+                  )}
+                  <div>
+                    <Form.Control type="file" accept="image/*" onChange={e => setProductImageFile(e.target.files?.[0] || null)} />
+                    <small className="text-muted">이미지 변경 시 새 파일을 선택하세요</small>
+                  </div>
+                </div>
+              </Form.Group>
             </Form>
           )}
         </Modal.Body>

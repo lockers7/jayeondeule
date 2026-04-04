@@ -9,6 +9,7 @@ import com.jayeondeule.shop.service.ProductService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 import java.util.Map;
 
 @RestController
@@ -62,6 +63,17 @@ public class AdminController {
     public ResponseEntity<?> updateProduct(@PathVariable Integer id, @RequestBody ShopProduct product) {
         product.setProductId(id);
         return ResponseEntity.ok(ApiResponse.ok(productService.saveProduct(product)));
+    }
+
+    // 상품 이미지 업로드
+    @PostMapping("/products/{id}/image")
+    public ResponseEntity<?> uploadProductImage(@PathVariable Integer id, @RequestParam("file") MultipartFile file) {
+        try {
+            String url = productService.uploadProductImage(id, file);
+            return ResponseEntity.ok(ApiResponse.ok("이미지가 업로드되었습니다.", Map.of("imageUrl", url)));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(ApiResponse.error(e.getMessage()));
+        }
     }
 
     @DeleteMapping("/products/{id}")
