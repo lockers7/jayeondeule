@@ -19,7 +19,7 @@ export default function Header() {
                     <Nav className="me-auto">
                         <Nav.Link as={Link} to="/ai-chat" style={{fontWeight: "bold"}}>AI 채팅</Nav.Link>
                         {auth.userInfo?.authLvel === "ADMIN" && (
-                            <Nav.Link href="https://lockers7.iptime.org:5100" target="shop_window" rel="noreferrer"
+                            <Nav.Link href="#" onClick={(e) => { e.preventDefault(); window.open('http://lockers7.iptime.org:5100', 'shop_window'); }}
                                style={{fontSize: "0.85rem", color: "#FF7043", fontWeight: "bold"}}>
                                 🛒 쇼핑몰
                             </Nav.Link>

@@ -35,8 +35,8 @@ export default function ShopHeader() {
           자연들<span>에</span>
         </Navbar.Brand>
         {isSystemAdmin && (
-          <a href="https://lockers7.iptime.org" target="_blank" rel="noreferrer"
-            style={{ fontSize: '0.8rem', marginRight: '16px', color: 'var(--shop-accent)', textDecoration: 'none', fontWeight: 600 }}
+          <a href="#" onClick={(e) => { e.preventDefault(); window.open('https://lockers7.iptime.org', 'farm_window'); }}
+            style={{ fontSize: '0.8rem', marginRight: '16px', color: 'var(--shop-accent)', textDecoration: 'none', fontWeight: 600, cursor: 'pointer' }}
             title="농장관리 시스템">
             🌾 농장관리
           </a>

@@ -17,9 +17,15 @@ export default function RegisterPage() {
   const [idChecked, setIdChecked] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  const ID_RE = /^[a-zA-Z0-9가-힣]+$/;
+  const PW_SPECIAL_RE = /^[a-zA-Z0-9!@#$%]+$/;
+
   const set = (key, val) => {
+    if (key === 'shopUsrId') {
+      val = val.replace(/\s/g, ''); // 공백 자동 제거
+      setIdChecked(false);
+    }
     setForm({ ...form, [key]: val });
-    if (key === 'shopUsrId') setIdChecked(false);
   };
 
   const checkId = async () => {
@@ -33,6 +39,8 @@ export default function RegisterPage() {
     e.preventDefault();
     setError('');
     if (!idChecked) { setError('아이디 중복확인을 해주세요.'); return; }
+    if (!ID_RE.test(form.shopUsrId)) { setError('아이디는 공백, 특수문자를 사용할 수 없습니다.'); return; }
+    if (!PW_SPECIAL_RE.test(form.passwd)) { setError('비밀번호에 허용되지 않는 특수문자가 포함되어 있습니다.'); return; }
     if (form.passwd !== form.passwdConfirm) { setError('비밀번호가 일치하지 않습니다.'); return; }
     if (form.passwd.length < 6) { setError('비밀번호는 6자 이상이어야 합니다.'); return; }
     setLoading(true);
@@ -61,17 +69,19 @@ export default function RegisterPage() {
                 {error && <Alert variant="danger">{error}</Alert>}
                 <Form onSubmit={handleSubmit}>
                   <Form.Group className="mb-3">
-                    <Form.Label>아이디 *</Form.Label>
+                    <Form.Label>아이디 * <span style={{color:'#e53935', fontSize:'0.8rem'}}>(공백·특수문자 불가)</span></Form.Label>
                     <div className="d-flex gap-2">
                       <Form.Control type="text" value={form.shopUsrId} required
-                        onChange={(e) => set('shopUsrId', e.target.value)} />
+                        onChange={(e) => set('shopUsrId', e.target.value)}
+                        isInvalid={form.shopUsrId && !ID_RE.test(form.shopUsrId)} />
                       <Button variant="outline-secondary" onClick={checkId} style={{ whiteSpace: 'nowrap' }}>중복확인</Button>
                     </div>
                   </Form.Group>
                   <Form.Group className="mb-3">
-                    <Form.Label>비밀번호 *</Form.Label>
+                    <Form.Label>비밀번호 * <span style={{color:'#e53935', fontSize:'0.8rem'}}>(특수문자 !,@,#,$,% 만 허용)</span></Form.Label>
                     <Form.Control type="password" value={form.passwd} required
-                      onChange={(e) => set('passwd', e.target.value)} />
+                      onChange={(e) => set('passwd', e.target.value)}
+                      isInvalid={form.passwd && !PW_SPECIAL_RE.test(form.passwd)} />
                   </Form.Group>
                   <Form.Group className="mb-3">
                     <Form.Label>비밀번호 확인 *</Form.Label>
