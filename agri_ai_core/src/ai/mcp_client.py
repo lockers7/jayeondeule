@@ -186,6 +186,28 @@ def _extract_text_blocks(result: Dict[str, Any]) -> List[str]:
     return texts
 
 
+def _format_search_result(title: str, snippet: str, url: str, source: str = "web_search") -> Dict[str, Any]:
+    """검색 결과 항목을 표준 dict 형태로 생성."""
+    return {"title": title, "snippet": snippet, "url": url, "source": source}
+
+
+def _check_error_with_dns_diag(error_text: str, context: str = "") -> None:
+    """에러 텍스트에 DNS 관련 키워드가 있으면 DNS 진단을 1회 실행."""
+    if _is_dns_resolution_error(error_text):
+        _log_dns_diagnostics_once()
+
+
+def _try_parse_json(text: str) -> Optional[Any]:
+    """텍스트를 JSON으로 파싱 시도. 실패 시 None 반환."""
+    stripped = text.strip()
+    if not stripped:
+        return None
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
+
+
 def call_mcp_server_tool(
     server_name: str,
     tool_name: str,
@@ -378,13 +400,7 @@ def _parse_mcp_fetch_result(result: Dict[str, Any]) -> Dict[str, Any]:
     joined_text = "\n".join(text_blocks).strip()
 
     for block in text_blocks:
-        stripped = block.strip()
-        if not stripped:
-            continue
-        try:
-            parsed = json.loads(stripped)
-        except json.JSONDecodeError:
-            parsed = None
+        parsed = _try_parse_json(block)
 
         if isinstance(parsed, list):
             return {
@@ -724,13 +740,7 @@ def postgres_query(sql: str, timeout: int = 30) -> Dict[str, Any]:
 
     # 1) JSON 파싱 시도
     for text in text_blocks:
-        stripped = text.strip()
-        if not stripped:
-            continue
-        try:
-            parsed = json.loads(stripped)
-        except json.JSONDecodeError:
-            parsed = None
+        parsed = _try_parse_json(text)
 
         if isinstance(parsed, list):
             if all(isinstance(item, dict) for item in parsed):
@@ -775,15 +785,13 @@ def search_web(query: str, max_results: int = 5) -> Dict[str, Any]:
 
         if "error" in result:
             logger.warning(f"웹 검색 실패(call_mcp_server_tool): {result['error']}")
-            if _is_dns_resolution_error(str(result.get("error", ""))):
-                _log_dns_diagnostics_once()
+            _check_error_with_dns_diag(str(result.get("error", "")))
             return {"success": False, "error": result["error"], "results": []}
 
         if result.get("isError"):
             error_text = "\n".join(_extract_text_blocks(result)) or "web-search failed"
             logger.warning(f"웹 검색 실패(web-search isError): {error_text}")
-            if _is_dns_resolution_error(error_text):
-                _log_dns_diagnostics_once()
+            _check_error_with_dns_diag(error_text)
             return {"success": False, "error": error_text, "results": []}
 
         text_blocks = _extract_text_blocks(result)
@@ -794,46 +802,25 @@ def search_web(query: str, max_results: int = 5) -> Dict[str, Any]:
             if not text:
                 continue
 
-            parsed = None
-            try:
-                parsed = json.loads(text)
-            except json.JSONDecodeError:
-                parsed = None
+            parsed = _try_parse_json(text)
 
             if isinstance(parsed, list):
-                for item in parsed:
-                    if not isinstance(item, dict):
-                        continue
-                    formatted.append(
-                        {
-                            "title": item.get("title", query),
-                            "snippet": item.get("description", "")[:1000],
-                            "url": item.get("url", "#"),
-                            "source": "web_search",
-                        }
-                    )
+                items = parsed
             elif isinstance(parsed, dict):
-                for item in parsed.get("results", []):
-                    if not isinstance(item, dict):
-                        continue
-                    formatted.append(
-                        {
-                            "title": item.get("title", query),
-                            "snippet": item.get("description", "")[:1000],
-                            "url": item.get("url", "#"),
-                            "source": "web_search",
-                        }
-                    )
+                items = parsed.get("results", [])
             else:
                 # 비구조 텍스트면 fallback 1건으로 저장
-                formatted.append(
-                    {
-                        "title": query,
-                        "snippet": text[:700],
-                        "url": "#",
-                        "source": "web_search",
-                    }
-                )
+                formatted.append(_format_search_result(query, text[:700], "#"))
+                continue
+
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                formatted.append(_format_search_result(
+                    item.get("title", query),
+                    item.get("description", "")[:1000],
+                    item.get("url", "#"),
+                ))
 
         elapsed = time.time() - t_start
         logger.info(f"[MCP웹검색] 완료 ({elapsed:.1f}s) {len(formatted)}건")

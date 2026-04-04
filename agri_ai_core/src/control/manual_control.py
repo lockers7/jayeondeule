@@ -100,6 +100,16 @@ def _get_current_heater_state(current_relay, pin_map):
     return False
 
 
+def _build_device_settings(water_heater=False, fog=False, heater=False, heater_valve=False):
+    """4대 장치 설정 딕셔너리를 생성한다."""
+    return {
+        'water_heater_flag': water_heater,
+        'fog_occurs_flag': fog,
+        'indoor_heater_flag': heater,
+        'indoor_heater_valve_flag': heater_valve,
+    }
+
+
 # ════════════════════════════════════════════════════════════
 # 64케이스 장치 결정: 온도/습도 → (water_heater, fog_pump, heater, heater_damper)
 # ════════════════════════════════════════════════════════════
@@ -185,46 +195,21 @@ def _check_emergency(sensor_data):
 
     # 온도 우선
     if indoor_temp is not None and indoor_temp < TEMP_CRITICAL_LOW:
-        return True, {
-            'water_heater_flag': True,
-            'fog_occurs_flag': False,
-            'indoor_heater_flag': True,
-            'indoor_heater_valve_flag': True,
-        }, '내부순환', False
+        return True, _build_device_settings(water_heater=True, heater=True, heater_valve=True), '내부순환', False
 
     if indoor_temp is not None and indoor_temp > TEMP_CRITICAL_HIGH:
-        return True, {
-            'water_heater_flag': False,
-            'fog_occurs_flag': False,
-            'indoor_heater_flag': False,
-            'indoor_heater_valve_flag': False,
-        }, '배기순환', False
+        return True, _build_device_settings(), '배기순환', False
 
     # 습도
     if indoor_humidity is not None and indoor_humidity < HUMIDITY_CRITICAL_LOW:
-        return True, {
-            'water_heater_flag': True,
-            'fog_occurs_flag': True,
-            'indoor_heater_flag': False,
-            'indoor_heater_valve_flag': False,
-        }, '내부순환', False
+        return True, _build_device_settings(water_heater=True, fog=True), '내부순환', False
 
     if indoor_humidity is not None and indoor_humidity > HUMIDITY_CRITICAL_HIGH:
-        return True, {
-            'water_heater_flag': False,
-            'fog_occurs_flag': False,
-            'indoor_heater_flag': False,
-            'indoor_heater_valve_flag': False,
-        }, '배기순환', False
+        return True, _build_device_settings(), '배기순환', False
 
     # CO2
     if co2 is not None and co2 > CO2_CRITICAL_HIGH:
-        return True, {
-            'water_heater_flag': False,
-            'fog_occurs_flag': False,
-            'indoor_heater_flag': False,
-            'indoor_heater_valve_flag': False,
-        }, '배기순환', False
+        return True, _build_device_settings(), '배기순환', False
 
     # 수온 (물가열기만 제어, 다른 장치 유지)
     if water_temp is not None and water_temp < WATER_TEMP_CRITICAL_LOW:
@@ -454,54 +439,6 @@ def _handle_ai_emergency(farm_id, house_id, growth_stage, order_label=""):
 
 
 # ════════════════════════════════════════════════════════════
-# 발이기 제어
-# ════════════════════════════════════════════════════════════
-def _control_budding(farm_id, house_id, indoor_temp, current_relay, order_label=""):
-    if indoor_temp is None:
-        scope = _house_prefix(order_label, farm_id, house_id)
-        logger.info(f"{scope}: 발이기 - 온도 데이터 없음")
-        return {"success": False, "message": "발이기: 온도 데이터 없음"}
-
-    if indoor_temp < BUDDING_TEMP_LOW:
-        # 온도 < 29: 가열
-        device_settings = {
-            'water_heater_flag': True,
-            'fog_occurs_flag': False,
-            'indoor_heater_flag': True,
-            'indoor_heater_valve_flag': True,
-        }
-        return _execute_control(
-            farm_id, house_id, device_settings, '내부순환',
-            current_relay, harvest_mode=False, reason="발이기_가열", order_label=order_label
-        )
-
-    if indoor_temp > BUDDING_TEMP_HIGH:
-        # 온도 > 33: 냉각
-        device_settings = {
-            'water_heater_flag': False,
-            'fog_occurs_flag': False,
-            'indoor_heater_flag': False,
-            'indoor_heater_valve_flag': False,
-        }
-        return _execute_control(
-            farm_id, house_id, device_settings, '배기순환',
-            current_relay, harvest_mode=False, reason="발이기_냉각", order_label=order_label
-        )
-
-    # 온도 정상 (29~33): 제어 없음 → 순환 정지
-    device_settings = {
-        'water_heater_flag': False,
-        'fog_occurs_flag': False,
-        'indoor_heater_flag': False,
-        'indoor_heater_valve_flag': False,
-    }
-    return _execute_control(
-        farm_id, house_id, device_settings, '순환정지',
-        current_relay, harvest_mode=False, reason="발이기_정상", order_label=order_label
-    )
-
-
-# ════════════════════════════════════════════════════════════
 # 공통 환경판단 로직
 # get_ai_environment_judgment()와 control_manual_environment()가 공유
 # ════════════════════════════════════════════════════════════
@@ -550,18 +487,30 @@ def _determine_environment_action(sensor_data, growth_stage, farm_id, house_id):
         if indoor_temp is None:
             return None
         if indoor_temp < BUDDING_TEMP_LOW:
-            devices = {'water_heater_flag': True, 'fog_occurs_flag': False, 'indoor_heater_flag': True, 'indoor_heater_valve_flag': True}
-            return {"sensor": sensor_str, "growth_stage": growth_stage, "reason": "발이기_가열", "devices": devices, "circulation": "내부순환", "device_summary": format_device_decision(devices), "is_emergency": False, "water_temp_only": False, "in_cooldown": False}
-        if indoor_temp > BUDDING_TEMP_HIGH:
-            devices = {'water_heater_flag': False, 'fog_occurs_flag': False, 'indoor_heater_flag': False, 'indoor_heater_valve_flag': False}
-            return {"sensor": sensor_str, "growth_stage": growth_stage, "reason": "발이기_냉각", "devices": devices, "circulation": "배기순환", "device_summary": format_device_decision(devices), "is_emergency": False, "water_temp_only": False, "in_cooldown": False}
-        devices = {'water_heater_flag': False, 'fog_occurs_flag': False, 'indoor_heater_flag': False, 'indoor_heater_valve_flag': False}
-        return {"sensor": sensor_str, "growth_stage": growth_stage, "reason": "발이기_정상", "devices": devices, "circulation": "순환정지", "device_summary": format_device_decision(devices), "is_emergency": False, "water_temp_only": False, "in_cooldown": False}
+            devices = _build_device_settings(water_heater=True, heater=True, heater_valve=True)
+            reason, circ = "발이기_가열", "내부순환"
+        elif indoor_temp > BUDDING_TEMP_HIGH:
+            devices = _build_device_settings()
+            reason, circ = "발이기_냉각", "배기순환"
+        else:
+            devices = _build_device_settings()
+            reason, circ = "발이기_정상", "순환정지"
+        return {
+            "sensor": sensor_str, "growth_stage": growth_stage, "reason": reason,
+            "devices": devices, "circulation": circ,
+            "device_summary": format_device_decision(devices),
+            "is_emergency": False, "water_temp_only": False, "in_cooldown": False,
+        }
 
     # (3) 외부정상 + 내부비정상 → 외부순환
     if _is_external_normal(outdoor_temp, outdoor_humidity) and _is_internal_abnormal(indoor_temp, indoor_humidity, co2):
-        devices = {'water_heater_flag': False, 'fog_occurs_flag': False, 'indoor_heater_flag': False, 'indoor_heater_valve_flag': False}
-        return {"sensor": sensor_str, "growth_stage": growth_stage, "reason": "외부정상+내부비정상", "devices": devices, "circulation": "외부순환", "device_summary": format_device_decision(devices), "is_emergency": False, "water_temp_only": False, "in_cooldown": False}
+        devices = _build_device_settings()
+        return {
+            "sensor": sensor_str, "growth_stage": growth_stage, "reason": "외부정상+내부비정상",
+            "devices": devices, "circulation": "외부순환",
+            "device_summary": format_device_decision(devices),
+            "is_emergency": False, "water_temp_only": False, "in_cooldown": False,
+        }
 
     # (4) 64케이스
     temp_state = _classify(indoor_temp, TEMP_LOW, TEMP_HIGH)
@@ -584,12 +533,7 @@ def _determine_environment_action(sensor_data, growth_stage, farm_id, house_id):
     if harvest_mode and circulation_mode == '내부순환':
         circulation_mode = '배기순환'
 
-    devices = {
-        'water_heater_flag': water_heater,
-        'fog_occurs_flag': fog_pump,
-        'indoor_heater_flag': heater,
-        'indoor_heater_valve_flag': heater_damper,
-    }
+    devices = _build_device_settings(water_heater, fog_pump, heater, heater_damper)
 
     reason = f"64케이스(온도:{temp_state},습도:{humidity_state},CO2:{co2_state})"
     if in_cooldown:
@@ -669,11 +613,6 @@ def control_manual_environment(farm_id, house_id, growth_stage='생육기', orde
                 farm_id, house_id, action["devices"], action["circulation"],
                 current_relay, harvest_mode, reason="비상제어", order_label=order_label
             )
-
-        # 발이기 제어 (별도 실행 로직)
-        if growth_stage == '발이기':
-            indoor_temp = sensor_data.get('indoor_temperature')
-            return _control_budding(farm_id, house_id, indoor_temp, current_relay, order_label=order_label)
 
         # 열풍기 쿨다운 로깅
         if action["in_cooldown"]:
