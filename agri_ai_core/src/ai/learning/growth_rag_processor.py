@@ -149,6 +149,51 @@ def _get_season(month: int) -> str:
     return _SEASON_MAP.get(month, "겨울")
 
 
+def _sv(value, unit: str = "") -> str:
+    """safe_float 값을 문자열로 포맷한다. (센서 값 포맷 헬퍼)"""
+    return f"{safe_float(value)}{unit}"
+
+
+def _format_sensor_stat_block(
+    label: str, unit: str, sensor_stats: Dict, day_night: Dict,
+    avg_key: str, std_key: str = "", min_key: str = "", max_key: str = "",
+    day_night_key: str = "",
+) -> str:
+    """센서 통계 한 줄을 포맷한다 (평균, 주야간, 표준편차, 범위)."""
+    has_more = std_key or (min_key and max_key)
+    parts = [f"- {label}: 평균 {_sv(sensor_stats.get(avg_key))}{unit}"]
+    if day_night_key:
+        day_val = _sv(day_night.get("day", {}).get(day_night_key))
+        night_val = _sv(day_night.get("night", {}).get(day_night_key))
+        suffix = "," if has_more else ""
+        parts.append(f" (주간 {day_val}{unit} / 야간 {night_val}{unit}){suffix}")
+    elif has_more:
+        parts.append(",")
+    if std_key:
+        suffix = "," if (min_key and max_key) else ""
+        parts.append(f" 표준편차 {_sv(sensor_stats.get(std_key))}{suffix}")
+    if min_key and max_key:
+        parts.append(f" 범위 {_sv(sensor_stats.get(min_key))}~{_sv(sensor_stats.get(max_key))}")
+    return "".join(parts)
+
+
+def _format_relay_pct(relay_stats: Dict, key: str) -> str:
+    """릴레이 가동 비율을 퍼센트 문자열로 포맷한다."""
+    return f"{safe_float(relay_stats.get(key)) * 100:.1f}%"
+
+
+def _format_trend_line(label: str, first: Dict, last: Dict, key: str, unit: str, threshold: float) -> str:
+    """이동평균 트렌드 한 줄을 포맷한다."""
+    v1 = safe_float(first.get(key))
+    v2 = safe_float(last.get(key))
+    if abs(v2 - v1) > threshold:
+        trend = "상승" if v2 > v1 else "하강"
+    else:
+        trend = "안정"
+    return f"- {label}: {trend} {'추세 ' if label == '온도' else ''}({v1}→{v2}{unit})" if label == "온도" \
+        else f"- {label}: {trend} ({v1}~{v2}{unit})"
+
+
 # ════════════════════════════════════════════════════════════
 # 생육 컨텍스트를 구성한다 (계절, 시간대, 재배일수 등).
 # ════════════════════════════════════════════════════════════
@@ -230,44 +275,23 @@ def _build_rag_document(
         lines.append("")
         lines.append(f"[환경 통계 ({start_dt[:10]} ~ {record_dt}, 센서 {sample_count}건)]")
 
-        day_stats = day_night.get("day", {})
-        night_stats = day_night.get("night", {})
-        day_temp = safe_float(day_stats.get("avg_indoor_temp"))
-        night_temp = safe_float(night_stats.get("avg_indoor_temp"))
-
-        lines.append(
-            f"- 실내온도: 평균 {safe_float(sensor_stats.get('avg_indoor_temp'))}°C"
-            f" (주간 {day_temp}°C / 야간 {night_temp}°C),"
-            f" 표준편차 {safe_float(sensor_stats.get('std_indoor_temp'))},"
-            f" 범위 {safe_float(sensor_stats.get('min_indoor_temp'))}~{safe_float(sensor_stats.get('max_indoor_temp'))}"
-        )
-
-        day_hum = safe_float(day_stats.get("avg_indoor_humidity"))
-        night_hum = safe_float(night_stats.get("avg_indoor_humidity"))
-        lines.append(
-            f"- 실내습도: 평균 {safe_float(sensor_stats.get('avg_indoor_humidity'))}%"
-            f" (주간 {day_hum}% / 야간 {night_hum}%),"
-            f" 표준편차 {safe_float(sensor_stats.get('std_indoor_humidity'))},"
-            f" 범위 {safe_float(sensor_stats.get('min_indoor_humidity'))}~{safe_float(sensor_stats.get('max_indoor_humidity'))}"
-        )
-
-        lines.append(
-            f"- CO2: 평균 {safe_float(sensor_stats.get('avg_co2'))}ppm,"
-            f" 표준편차 {safe_float(sensor_stats.get('std_co2'))},"
-            f" 범위 {safe_float(sensor_stats.get('min_co2'))}~{safe_float(sensor_stats.get('max_co2'))}"
-        )
-
-        lines.append(
-            f"- 수온: 평균 {safe_float(sensor_stats.get('avg_water_temp'))}°C,"
-            f" 범위 {safe_float(sensor_stats.get('min_water_temp'))}~{safe_float(sensor_stats.get('max_water_temp'))}"
-        )
-
-        day_light = safe_float(day_stats.get("avg_light_level"))
-        night_light = safe_float(night_stats.get("avg_light_level"))
-        lines.append(
-            f"- 광량: 평균 {safe_float(sensor_stats.get('avg_light_level'))}"
-            f" (주간 {day_light} / 야간 {night_light})"
-        )
+        lines.append(_format_sensor_stat_block(
+            "실내온도", "°C", sensor_stats, day_night,
+            "avg_indoor_temp", "std_indoor_temp", "min_indoor_temp", "max_indoor_temp",
+            day_night_key="avg_indoor_temp"))
+        lines.append(_format_sensor_stat_block(
+            "실내습도", "%", sensor_stats, day_night,
+            "avg_indoor_humidity", "std_indoor_humidity", "min_indoor_humidity", "max_indoor_humidity",
+            day_night_key="avg_indoor_humidity"))
+        lines.append(_format_sensor_stat_block(
+            "CO2", "ppm", sensor_stats, day_night,
+            "avg_co2", "std_co2", "min_co2", "max_co2"))
+        lines.append(_format_sensor_stat_block(
+            "수온", "°C", sensor_stats, day_night,
+            "avg_water_temp", min_key="min_water_temp", max_key="max_water_temp"))
+        lines.append(_format_sensor_stat_block(
+            "광량", "", sensor_stats, day_night,
+            "avg_light_level", day_night_key="avg_light_level"))
 
     # 릴레이 가동 비율
     relay_sample = safe_int(relay_stats.get("sample_count"))
@@ -275,45 +299,28 @@ def _build_rag_document(
         lines.append("")
         lines.append("[릴레이 가동 비율]")
 
-        def _pct(val):
-            return f"{safe_float(val) * 100:.1f}%"
-
+        _rp = lambda k: _format_relay_pct(relay_stats, k)
         lines.append(
-            f"- 물가열기: {_pct(relay_stats.get('heater_ratio'))} | "
-            f"분사펌프: {_pct(relay_stats.get('misting_ratio'))} | "
-            f"배기팬: {_pct(relay_stats.get('exhaust_fan_ratio'))} | "
-            f"조명: {_pct(relay_stats.get('lighting_ratio'))} | "
-            f"관수: {_pct(relay_stats.get('irrigation_ratio'))}"
+            f"- 물가열기: {_rp('heater_ratio')} | "
+            f"분사펌프: {_rp('misting_ratio')} | "
+            f"배기팬: {_rp('exhaust_fan_ratio')} | "
+            f"조명: {_rp('lighting_ratio')} | "
+            f"관수: {_rp('irrigation_ratio')}"
         )
         lines.append(
-            f"- 열풍기: {_pct(relay_stats.get('indoor_heater_ratio'))} | "
-            f"순환댐퍼: {_pct(relay_stats.get('circulation_ratio'))} | "
-            f"흡기댐퍼: {_pct(relay_stats.get('intake_valve_ratio'))} | "
-            f"배기댐퍼: {_pct(relay_stats.get('exhaust_valve_ratio'))}"
+            f"- 열풍기: {_rp('indoor_heater_ratio')} | "
+            f"순환댐퍼: {_rp('circulation_ratio')} | "
+            f"흡기댐퍼: {_rp('intake_valve_ratio')} | "
+            f"배기댐퍼: {_rp('exhaust_valve_ratio')}"
         )
 
     # 이동평균 트렌드
     if len(moving_avg) >= 2:
         lines.append("")
         lines.append("[이동평균 트렌드 (6시간 윈도우)]")
-        first = moving_avg[0]
-        last = moving_avg[-1]
-        t1 = safe_float(first.get("ma_indoor_temp"))
-        t2 = safe_float(last.get("ma_indoor_temp"))
-        h1 = safe_float(first.get("ma_indoor_humidity"))
-        h2 = safe_float(last.get("ma_indoor_humidity"))
-
-        if abs(t2 - t1) > 1.0:
-            trend = "상승" if t2 > t1 else "하강"
-        else:
-            trend = "안정"
-        lines.append(f"- 온도: {trend} 추세 ({t1}→{t2}°C)")
-
-        if abs(h2 - h1) > 3.0:
-            h_trend = "상승" if h2 > h1 else "하강"
-        else:
-            h_trend = "안정"
-        lines.append(f"- 습도: {h_trend} ({h1}~{h2}%)")
+        first, last = moving_avg[0], moving_avg[-1]
+        lines.append(_format_trend_line("온도", first, last, "ma_indoor_temp", "°C", 1.0))
+        lines.append(_format_trend_line("습도", first, last, "ma_indoor_humidity", "%", 3.0))
 
     # 생육 결과
     if not is_daily_guarantee:
