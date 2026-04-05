@@ -1,4 +1,6 @@
-"""MCP (Model Context Protocol) 클라이언트 — MCP 서버(web-search, postgres 등) 공통 호출."""
+# ════════════════════════════════════════════════════════════
+# MCP (Model Context Protocol) 클라이언트 — MCP 서버(web-search, postgres 등) 공통 호출.
+# ════════════════════════════════════════════════════════════
 import json
 import os
 import subprocess

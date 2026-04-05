@@ -1,4 +1,6 @@
-"""데이터 검증 모듈 - is_true, clean_sensor_value, parse_boolean 등 유효성 검사."""
+# ════════════════════════════════════════════════════════════
+# 데이터 검증 모듈 - is_true, clean_sensor_value, parse_boolean 등 유효성 검사.
+# ════════════════════════════════════════════════════════════
 
 import re
 from decimal import Decimal

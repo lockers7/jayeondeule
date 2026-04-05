@@ -1,4 +1,6 @@
-"""ChromaDB 클라이언트: REST API 통신, 컬렉션 관리, heartbeat."""
+# ════════════════════════════════════════════════════════════
+# ChromaDB 클라이언트: REST API 통신, 컬렉션 관리, heartbeat.
+# ════════════════════════════════════════════════════════════
 import time
 from datetime import datetime
 

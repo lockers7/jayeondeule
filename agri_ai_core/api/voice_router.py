@@ -1,4 +1,6 @@
-"""음성 API 라우터: STT/TTS REST API 엔드포인트."""
+# ════════════════════════════════════════════════════════════
+# 음성 API 라우터: STT/TTS REST API 엔드포인트.
+# ════════════════════════════════════════════════════════════
 import time
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import Response

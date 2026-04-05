@@ -1,4 +1,6 @@
-"""Relay and scheduler control module"""
+# ════════════════════════════════════════════════════════════
+# Relay and scheduler control module
+# ════════════════════════════════════════════════════════════
 from agri_ai_core.src.control.task_scheduler import (
     setup_scheduler,
     start_scheduler,
