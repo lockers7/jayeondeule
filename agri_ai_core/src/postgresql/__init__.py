@@ -1,6 +1,6 @@
-# ══════════════════════════════════════════════════════════
+# ══════════════════════════
 # PostgreSQL database module
-# ══════════════════════════════════════════════════════════
+# ══════════════════════════
 from agri_ai_core.src.postgresql.connection import db_session, DatabaseHandler
 from agri_ai_core.src.postgresql.reader import (
     read_farm_house_list,

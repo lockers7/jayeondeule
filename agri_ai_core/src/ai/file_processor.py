@@ -1,6 +1,6 @@
-# ══════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════
 # 파일 처리 모듈 — 업로드 파일(CSV/Excel/PDF/텍스트)을 LLM 입력 형식으로 변환.
-# ══════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════
 import os
 import pandas as pd
 from typing import List, Dict
@@ -11,7 +11,7 @@ logger = setup_logger(__name__)
 
 
 # DataFrame → 요약 텍스트 변환 (CSV/Excel 공용)
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════
 def _format_dataframe(df, max_rows, prefix=""):
     total_rows = len(df)
     if total_rows > max_rows:
@@ -32,7 +32,7 @@ def read_csv_file(file_path: str, max_rows: int = 100) -> str:
 
 
 # Excel 파일 읽기
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def read_excel_file(file_path: str, max_rows: int = 100) -> str:
     try:
         excel_file = pd.ExcelFile(file_path)
@@ -51,7 +51,7 @@ def read_excel_file(file_path: str, max_rows: int = 100) -> str:
 
 
 # 텍스트 파일 읽기
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 _TEXT_ENCODINGS = ("utf-8", "cp949", "euc-kr", "utf-8-sig", "latin-1")
 
 
@@ -73,7 +73,7 @@ def read_text_file(file_path: str, max_chars: int = 10000) -> str:
 
 
 # PDF 파일 읽기
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def read_pdf_file(file_path: str) -> str:
     # 1차 시도: PyMuPDF (fitz) — 일반 텍스트 PDF 추출
     # 2차 시도: PyMuPDF OCR — 이미지 스캔 PDF (tesseract 필요)
@@ -152,7 +152,7 @@ def read_pdf_file(file_path: str) -> str:
 
 
 # 업로드된 파일 목록 처리
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def process_uploaded_files(file_paths: List[Dict[str, str]]) -> str:
     if not file_paths:
         return ""

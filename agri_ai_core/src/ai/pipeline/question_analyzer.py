@@ -1,6 +1,6 @@
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════
 # 1단계 질문유형분석: LLM 기반 질문 분석 및 데이터 수집 계획 생성.
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════
 import json
 import re
 import time
@@ -13,7 +13,7 @@ from agri_ai_core.src.ai.pipeline.prompts import ANALYZER_SYSTEM_PROMPT
 logger = setup_logger(__name__)
 
 # 극히 명확한 패턴만 규칙 분류 (인사/잡담만)
-# ══════════════════════════════════════════════════════════
+# ═════════════════════════
 _GREETING_RE = re.compile(
     r'^[\s]*(안녕|감사합니다|고마워|ㅎㅎ+|ㅋㅋ+|반갑|수고|잘\s*자|좋은\s*아침|좋은\s*하루|네|예|아니요|아뇨)[\s!~.ㅎㅋ]*$',
     re.IGNORECASE
@@ -37,7 +37,7 @@ def fast_classify(query):
 
 
 # LLM 응답에서 JSON 추출
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def _parse_analysis_json(response_text):
     """
     LLM 응답에서 JSON을 안전하게 추출.
@@ -75,7 +75,7 @@ def _parse_analysis_json(response_text):
 
 
 # 분석 결과 유효성 검증
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 _VALID_TYPES = {
     "farm_sensor", "farm_control", "farm_knowledge", "farm_knowledge_delete",
     "weather", "web_search", "gas_price", "greeting", "conversation_ref", "complex",
@@ -112,7 +112,7 @@ def _validate_analysis(analysis):
 
 
 # LLM 분석 실패 시 최소한의 fallback
-# ══════════════════════════════════════════════════════════
+# ═════════════════════════
 def _build_safe_fallback(query, farm_id, house_id):
     """
     LLM 분석이 완전히 실패한 경우의 안전한 기본 계획.
@@ -133,7 +133,7 @@ def _build_safe_fallback(query, farm_id, house_id):
 
 
 # 메인: 질문유형분석
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def analyze_question(user_query, conversation_context=None, farm_id=None, house_id=None):
     """
     1단계: 질문유형분석

@@ -1,6 +1,6 @@
-# ══════════════════════════════════════════════════════════
+# ═════════════════════════════════
 # LLM Tool — 웹 검색 및 URL 본문 가져오기 모듈.
-# ══════════════════════════════════════════════════════════
+# ═════════════════════════════════
 import json
 import os
 import re
@@ -25,12 +25,12 @@ _WEB_SEARCH_CONTENT_MAX_CHARS = max(500, int(os.getenv("WEB_SEARCH_CONTENT_MAX_C
 # 웹 검색 API 모듈 (Naver / Brave)
 # API 키가 설정되면 JSON API 우선 사용, 실패 시 MCP fallback
 # 쿼리에 한국어가 포함되어 있는지 판별
-# ══════════════════════════════════════════════════════════
+# ════════════════════
 
 
 # Naver 검색 API를 통한 검색 (블로그 + 웹)
 # Returns: 검색 결과 리스트 또는 None (API 키 없음/실패)
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════
 def _search_via_naver_api(query: str, display: int = 10) -> Optional[List[Dict[str, Any]]]:
     client_id = os.getenv("NAVER_CLIENT_ID", "").strip()
     client_secret = os.getenv("NAVER_CLIENT_SECRET", "").strip()
@@ -94,7 +94,7 @@ def _search_via_naver_api(query: str, display: int = 10) -> Optional[List[Dict[s
 
 # Brave Search API를 통한 검색
 # Returns: 검색 결과 리스트 또는 None (API 키 없음/실패)
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════
 def _search_via_brave_api(query: str, count: int = 10) -> Optional[List[Dict[str, Any]]]:
     api_key = os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
     if not api_key:
@@ -152,7 +152,7 @@ def _search_via_brave_api(query: str, count: int = 10) -> Optional[List[Dict[str
 # SearXNG 자체 호스팅 메타 검색 엔진을 통한 검색
 # 무료, API 키 불필요, 다중 검색엔진 (Google/Naver/Bing/DuckDuckGo) 통합
 # Returns: 검색 결과 리스트 또는 None (SearXNG 미실행/실패)
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════
 def _search_via_searxng(query: str, count: Optional[int] = None) -> Optional[List[Dict[str, Any]]]:
     searxng_url = os.getenv("SEARXNG_URL", "").strip()
     if not searxng_url:
@@ -243,7 +243,7 @@ def _search_via_searxng(query: str, count: Optional[int] = None) -> Optional[Lis
 
 
 # 두 검색 결과 병합 (URL 중복 제거, primary 우선 인터리브)
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════
 def _merge_search_results(
     primary: List[Dict[str, Any]],
     secondary: List[Dict[str, Any]],
@@ -278,7 +278,7 @@ def _merge_search_results(
 # API 검색 통합 라우터
 # 한국어: SearXNG + NaverAPI 병렬 실행 → 결과 인터리브 병합
 # 영어:   SearXNG → Brave → Naver 순차 폴백
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════════
 def _search_via_api(query: str, count: Optional[int] = None) -> Optional[Dict[str, Any]]:
     t_start = time.time()
     is_korean = _is_korean_query(query)
@@ -389,7 +389,7 @@ def _search_via_api(query: str, count: Optional[int] = None) -> Optional[Dict[st
 
 
 # 웹 검색 결과 관련성 필터
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 _NOISE_KEYWORDS = ("경매", "이사", "이삿짐", "이사짐", "부동산", "매매", "분양", "임대", "중개", "공인")
 _PROVINCE_NAMES = frozenset(("전북", "전남", "경북", "경남", "충북", "충남", "강원", "제주", "서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종"))
 # 지역명 판별: "XX시", "XX군" 등 3글자 이상이고 행정구역 접미사로 끝나는 단어
@@ -480,7 +480,7 @@ def _build_retry_query(query: str) -> Optional[str]:
 # MCP를 통한 웹 검색 + 상위 URL 본문 자동 읽기
 # Args: query: 검색 키워드
 # Returns: dict: 검색 결과 (page_content 포함)
-# ══════════════════════════════════════════════════════════
+# ══════════════════════════════════════
 def search_web(
     query: str,
     n_results: Optional[int] = None,
@@ -614,7 +614,7 @@ def search_web(
 
 
 # 웹 검색 결과를 web_knowledge 컬렉션에 임베딩 저장 (URL 해시 기반 중복 방지)
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════
 def _cache_web_results_to_vectordb(query: str, results: list) -> None:
     import hashlib
     from agri_ai_core.src.ai.rag.embedder import embed_text
@@ -682,7 +682,7 @@ def _cache_web_results_to_vectordb(query: str, results: list) -> None:
 
 # URL 본문 가져오기
 # HTML 태그를 제거하고 텍스트만 추출한다.
-# ══════════════════════════════════════════════════════════
+# ════════════════════════
 def _strip_html(raw_text: str) -> str:
     import re
     text = re.sub(r'<script[^>]*>[\s\S]*?</script>', '', raw_text, flags=re.IGNORECASE)
@@ -693,7 +693,7 @@ def _strip_html(raw_text: str) -> str:
 
 
 # urllib로 직접 URL을 가져온다 (MCP fallback용).
-# ══════════════════════════════════════════════════════════
+# ═════════════════════════════════════
 def _direct_fetch_url(url: str, timeout: int = 15) -> Dict[str, Any]:
     from urllib import request as urlrequest, error as urlerror
 
@@ -715,7 +715,7 @@ def _direct_fetch_url(url: str, timeout: int = 15) -> Dict[str, Any]:
 
 # 웹 검색
 # 검색 결과 상위 URL의 본문을 자동으로 읽어 결과에 추가한다.
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════════
 def _auto_fetch_urls(results: list, max_fetch: int = 3) -> None:
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -753,7 +753,7 @@ def _auto_fetch_urls(results: list, max_fetch: int = 3) -> None:
 
 # URL의 웹페이지 본문 텍스트를 가져온다.
 # MCP fetch → 실패시 urllib 직접 요청으로 fallback.
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════
 def fetch_url_content(url: str) -> Dict[str, Any]:
     t_start = time.time()
     logger.info(f"[URL본문] 시작 url={url[:120]}")

@@ -1,6 +1,6 @@
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════
 # 텍스트 임베딩 생성: Ollama 기반 벡터 변환 및 캐시 관리.
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════
 import os
 import time
 import hashlib
@@ -17,7 +17,7 @@ from agri_ai_core.config import settings, EMBEDDING_MODEL_NAME, get_ollama_url
 logger = setup_logger(__name__)
 
 # 임베딩 캐시 설정
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 _embedding_cache = OrderedDict()
 _EMBEDDING_CACHE_MAX = 256
 _cache_lock = threading.Lock()
@@ -25,7 +25,7 @@ _embed_state = {"disabled": False, "reason": None}
 
 
 # 임베딩 서비스 비활성화 (global 없이 상태 변경)
-# ══════════════════════════════════════════════════════════
+# ══════════════════════════════
 def _disable_embedding(reason):
     _embed_state["disabled"] = True
     _embed_state["reason"] = reason
@@ -65,13 +65,13 @@ def _extract_embedding_from_payload(data: Any):
 
 
 # 설정된 임베딩 차원 반환
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def _get_expected_dim() -> int:
     return getattr(settings, "embedding_dim", None) or 1024
 
 
 # Ollama 서버 상태 확인
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def check_ollama_health():
     now = time.time()
     if now - _health_cache["ts"] < _HEALTH_TTL:
@@ -91,13 +91,13 @@ def check_ollama_health():
 
 
 # 텍스트 길이에 따른 동적 타임아웃 계산
-# ══════════════════════════════════════════════════════════
+# ═════════════════════
 def get_dynamic_timeout(text_length, base_timeout=60):
     return min(180, max(base_timeout, 30 + (text_length // 100)))
 
 
 # 일관성 있는 더미 임베딩 생성
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def generate_dummy_embedding(text):
     try:
         text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
@@ -117,7 +117,7 @@ def generate_dummy_embedding(text):
 
 
 # 텍스트를 임베딩 벡터로 변환
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def embed_text(text, timeout=60, max_retries=5):
     _t_embed_start = time.time()
 

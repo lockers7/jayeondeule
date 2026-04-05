@@ -1,9 +1,9 @@
-# ══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════
 # 환경제어 모듈.
 #
 # 센서값 기반 릴레이 자동 제어 알고리즘 (온도/습도/CO2).
 # 생육단계별 제어, 비상제어, 열풍기 쿨다운, 외부순환, 64케이스 분기를 포함한다.
-# ══════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════
 import time
 import traceback
 from datetime import datetime, timedelta
@@ -39,7 +39,7 @@ logger = setup_logger(__name__)
 
 # 헬퍼 함수
 # 센서 현황(INFO) + 릴레이 상세(DEBUG) 로그
-# ══════════════════════════════════════════════════════════
+# ══════════════════════════════
 def _log_house_status(farm_id, house_id, order_label=""):
     scope = _house_prefix(order_label, farm_id, house_id)
 
@@ -135,7 +135,7 @@ def _determine_devices(temp_state, humidity_state):
 
 
 # 64케이스 순환모드 결정: 센서 조건 → 순환모드 문자열
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════
 def _determine_circulation(temp_state, ext_temp_state, humidity_state, ext_humidity_state, co2_state, ext_co2_state):
     # 내부온도 < 27
     if temp_state == 'low':
@@ -183,7 +183,7 @@ def _determine_circulation(temp_state, ext_temp_state, humidity_state, ext_humid
 
 
 # 비상제어 체크: 임계값 이탈 시 비상 릴레이 설정 반환
-# ══════════════════════════════════════════════════════════
+# ══════════════════════════════
 def _check_emergency(sensor_data):
     indoor_temp = sensor_data.get('indoor_temperature')
     indoor_humidity = sensor_data.get('indoor_humidity')
@@ -219,7 +219,7 @@ def _check_emergency(sensor_data):
 
 
 # semantic 설정을 relay_*st_flag 16개 딕셔너리로 변환
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════
 def _build_relay_values(house_id, semantic_settings, current_relay, harvest_mode):
     pin_map = _get_pin_map(house_id)
 
@@ -259,7 +259,7 @@ def _write_relay(farm_id, house_id, relay_values):
 
 
 # 2단계 릴레이 제어 (댐퍼→15초→팬, 열풍댐퍼→열풍기)
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════
 def _execute_control(
     farm_id,
     house_id,
@@ -356,7 +356,7 @@ def _execute_control(
 
 
 # 수온 비상 전용 (물가열기만 변경, 나머지 유지)
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════
 def _execute_water_temp_emergency(
     farm_id,
     house_id,
@@ -542,7 +542,7 @@ def _determine_environment_action(sensor_data, growth_stage, farm_id, house_id):
 
 # AI 환경 판단 (제어 없이 판단만 수행)
 # 수동 릴레이 제어 시 전/후 AI 판단을 제공하기 위한 함수
-# ══════════════════════════════════════════════════════════
+# ═════════════════════════════════
 def get_ai_environment_judgment(farm_id, house_id):
     """현재 센서값 기반으로 알고리즘이 판단하는 최적 릴레이 상태를 반환 (실제 제어 없음)."""
     try:
@@ -570,7 +570,7 @@ def get_ai_environment_judgment(farm_id, house_id):
 
 
 # 환경제어 메인 함수
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def control_manual_environment(farm_id, house_id, growth_stage='생육기', order_label=""):
     try:
         scope = _house_prefix(order_label, farm_id, house_id)
@@ -628,7 +628,7 @@ def control_manual_environment(farm_id, house_id, growth_stage='생육기', orde
 
 
 # 전체 재배사 환경제어
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def control_all_manual():
     try:
         with db_session() as database:
@@ -818,7 +818,7 @@ def control_all_manual():
 # AI 환경제어 순환 루프 (재배사 순환 + 30초 delay)
 # 재배사를 ascending 순으로 순환하며 LLM 정기 호출
 # 1재배사 제어 → 30초 대기 → 2재배사 → 30초 대기 → ... → 마지막 → 1재배사
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 from agri_ai_core.config import AI_CONTROL_LOOP_DELAY_SEC as _AI_LOOP_DELAY_SEC
 _ai_loop_running = False
 _ai_loop_thread = None

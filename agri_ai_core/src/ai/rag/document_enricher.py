@@ -1,6 +1,6 @@
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════
 # LLM 문서 요약 및 QA 쌍 생성: enriched 데이터를 VectorDB에 저장.
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════
 import os
 import re
 import json
@@ -23,7 +23,7 @@ from agri_ai_core.src.ai.rag.constants import DOC_TYPE_LABELS as _DOC_TYPE_LABEL
 
 
 # Ollama /api/generate 호출 공통 함수. 응답 텍스트 반환, 실패 시 빈 문자열.
-# ══════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════
 def _call_llm(prompt: str, num_predict: int, timeout: int) -> str:
     from agri_ai_core.src.ai.mcp_client import mcp_http_request
 
@@ -64,7 +64,7 @@ def _call_llm(prompt: str, num_predict: int, timeout: int) -> str:
 
 
 # 문서 요약 생성 (LLM 호출 1회). 실패 시 빈 문자열 반환.
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════
 def _generate_summary(
     text_for_llm: str,
     document_type: Optional[str] = None,
@@ -100,7 +100,7 @@ def _generate_summary(
 
 
 # LLM 응답에서 QA JSON 배열을 파싱한다.
-# ══════════════════════════════════════════════════════════
+# ══════════════════════════
 def _parse_qa_response(response_text: str) -> List[Dict[str, str]]:
     if not response_text:
         return []
@@ -133,7 +133,7 @@ def _parse_qa_response(response_text: str) -> List[Dict[str, str]]:
 
 
 # 핵심 QA 쌍 생성 (LLM 호출 1회). 실패 시 빈 리스트 반환.
-# ══════════════════════════════════════════════════════════
+# ══════════════════════════════════════
 def _generate_qa_pairs(
     text_for_llm: str,
     document_type: Optional[str] = None,
@@ -174,7 +174,7 @@ def _generate_qa_pairs(
 
 
 # 요약 및 QA 데이터를 임베딩하여 farm_knowledge에 저장한다.
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════
 def _store_enriched_data(
     summary: str,
     qa_pairs: List[Dict[str, str]],
@@ -257,7 +257,7 @@ def _store_enriched_data(
 
 # 문서를 LLM이 이해/요약하여 enriched 데이터를 생성 및 저장한다.
 # - 전체 요약 1건 생성 (LLM 호출 1회)
-# ══════════════════════════════════════════════════════════
+# ═════════════════════════
 def enrich_document(
     document_content: str,
     metadata: Dict[str, Any],
