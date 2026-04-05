@@ -1,6 +1,56 @@
-# ═════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════════════════
 # LLM 클라이언트 핵심 모듈 — Ollama API 통신 및 Tool Use 응답 생성.
-# ═════════════════════════════════════════════════════════════════
+# --->
+# _build_tool_detail_message: 도구 호출 시 사용자에게 보여줄 상세 정보 메시지 생성
+# _report_progress: Tool Use 루프 내부에서 진행 상태를 외부(스트리밍 핸들러)로 보고합니다
+# _get_model_gpu_ratio: Ollama /api/ps 에서 모델의 실제 GPU 탑재 비율을 조회 후 1
+# _get_free_vram_mib: nvidia-smi로 현재 여유 VRAM(MiB) 반환
+# _get_model_ctx_options: num_ctx 고정(16384) — GPU 100% 유지, CPU 오프로딩/모델 언로드 방지
+# _use_mcp_fetch: use mcp fetch
+# _use_ollama_package: use ollama package
+# _use_direct_ollama_http: use direct ollama http
+# _is_direct_ollama_enabled: is direct ollama enabled
+# _disable_direct_ollama_http: disable direct ollama http
+# _is_connection_related_error: is connection related error
+# _extract_model_names: extract model names
+# _pkg_ollama_list_models: pkg ollama list models
+# _build_chat_payload: Ollama chat API용 공통 payload 빌드
+# _pkg_ollama_chat: pkg ollama chat
+# _build_ollama_url: build ollama url
+# _direct_ollama_json: direct ollama json
+# _direct_ollama_list_models: direct ollama list models
+# _direct_ollama_chat: direct ollama chat
+# _mcp_ollama_list_models: mcp ollama list models
+# _mcp_ollama_chat: mcp ollama chat
+# _serialize_for_log: serialize for log
+# _log_llm_request_json: log llm request json
+# _log_llm_response_json: log llm response json
+# _ollama_chat: ollama chat
+# _extract_message_content: extract message content
+# _normalize_assistant_message: normalize assistant message
+# _extract_tool_calls: extract tool calls
+# _extract_tool_name: extract tool name
+# _extract_tool_arguments: extract tool arguments
+# _coerce_numeric_id: LLM이 비정수 값을 ID로 넣는 경우 기본값(정수)으로 교정한다
+# _normalize_tool_arguments: normalize tool arguments
+# _get_available_models: get available models
+# _get_model_name: get model name
+# _perform_llm_warmup: perform llm warmup
+# initialize_background_warmup: initialize background warmup
+# _emit_question_log_once: emit question log once
+# _determine_response_type: determine response type
+# _build_structured_result: build structured result
+# _filter_greeting_turns: filter greeting turns
+# _is_conversational_query: 요구/지시가 아닌 순수 일반 대화인지 판단한다
+# _build_farm_info_text: build farm info text
+# _execute_and_merge_tools: 도구 호출 실행, 결과 정제, 메시지 병합을 처리
+# _check_answer_retry: LLM 답변을 검증하고, 재시도가 필요하면 재시도 메시지를 반환
+# _build_conversation_context: 하이브리드 대화 컨텍스트를 messages 리스트에 주입
+# get_llm_response_with_tools: get llm response with tools
+# _pick: pick
+# _resolve_admin_farm_id: 시스템관리자(세션=0)일 때 LLM 판단값으로 farm_id 결정
+# _warmup_runner: warmup runner
+# ══════════════════════════════════════════════════════════════════════════════════════════
 import os
 import re
 import time

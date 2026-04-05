@@ -1,6 +1,22 @@
-# ═════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 # LLM 쿼리 핸들러 — Tool Use 방식으로 사용자 질문 처리 및 SSE 스트리밍.
-# ═════════════════════════════════════════════════════════════════════
+# --->
+# _classify_topic: 사용자 질문을 주제별로 분류한다 (규칙 기반)
+# _dedupe_list: dedupe list
+# _build_default_tool_args: build default tool args
+# _load_hybrid_context: load hybrid context
+# _search_related_conversations: search related conversations
+# _save_conversation_turn_hybrid: save conversation turn hybrid
+# _async_vectordb_save: async vectordb save
+# _prune_old_conversations: prune old conversations
+# _call_llm_with_timeout: call llm with timeout
+# _unpack_llm_result: unpack llm result
+# _run_3stage_pipeline_sync: 3단계 분리형 파이프라인 실행 (동기 함수 — asyncio
+# query_llm_simple: query llm simple
+# _split_for_streaming: split for streaming
+# query_llm_simple_stream: query llm simple stream
+# _progress: progress
+# ════════════════════════════════════════════════════════════════════════════
 import hashlib
 import json
 import os

@@ -1,14 +1,25 @@
-# ═════════════════════════════════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════
 # 대화 히스토리 저장소
 # PostgreSQL 기반 영속 저장 + 인메모리 폴백으로 멀티턴 대화를 지원한다.
 # --->
-# _SessionData: 인메모리 폴백용 세션 데이터
-# ConversationStore: 대화 이력 저장소 (메모리+DB)
-#   - _summarize_old_turns: MAX_TURNS 초과 시 오래된 턴을 LLM으로 요약 후 VectorDB 저장
-#   - _delete_old_turns: 요약 성공/실패 무관하게 오래된 턴 PostgreSQL에서 삭제 (무한 누적 방지)
-#   - _store_summary_to_vectordb: 대화 요약을 conversation_collection에 임베딩 저장
-# get_conversation_store: 글로벌 ConversationStore 싱글톤을 반환한다.
-# ═════════════════════════════════════════════════════════════════════════════════════════════
+# get_conversation_store: get conversation store
+# __init__: init
+# __init__: init
+# _init_db: init db
+# add_turn: add turn
+# get_history: get history
+# get_recent_turns: get recent turns
+# _db_get_recent_turns: db get recent turns
+# _memory_get_recent_turns: memory get recent turns
+# _db_add_turn: db add turn
+# _db_get_history: db get history
+# _summarize_old_turns: summarize old turns
+# _delete_old_turns: 오래된 턴 N개를 PostgreSQL에서 삭제한다
+# _store_summary_to_vectordb: store summary to vectordb
+# _memory_add_turn: memory add turn
+# _memory_get_history: memory get history
+# _evict_expired: evict expired
+# ═════════════════════════════════════════════════════════════════════
 import os
 import re
 import threading

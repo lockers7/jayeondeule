@@ -1,6 +1,28 @@
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 # 데이터 분석: 센서/릴레이 통계 분석 및 최적 환경 조건 도출.
-# ══════════════════════════════════════════════════════════
+# --->
+# get_growth_status_rank: get growth status rank
+# is_positive_remark: is positive remark
+# initialize_optimal_conditions: initialize optimal conditions
+# initialize_time_patterns: initialize time patterns
+# select_top_crops: select top crops
+# collect_optimal_data: collect optimal data
+# _apply_stats: apply stats
+# _collect_sensor_values: collect sensor values
+# _collect_day_night_values: collect day night values
+# analyze_temperature_conditions: analyze temperature conditions
+# analyze_humidity_conditions: analyze humidity conditions
+# analyze_co2_conditions: analyze co2 conditions
+# analyze_water_temperature_conditions: analyze water temperature conditions
+# analyze_light_level_conditions: analyze light level conditions
+# analyze_optimal_conditions: analyze optimal conditions
+# analyze_farm_optimal_conditions: analyze farm optimal conditions
+# collect_sensor_data: collect sensor data
+# update_time_patterns_with_sensor_data: update time patterns with sensor data
+# analyze_relay_data_for_time_patterns: analyze relay data for time patterns
+# analyze_farm_time_patterns: analyze farm time patterns
+# update_learning_timestamp: update learning timestamp
+# ════════════════════════════════════════════════════════════════════════════
 import numpy as np
 from datetime import datetime
 

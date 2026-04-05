@@ -1,9 +1,26 @@
-# ═════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # 제어 모듈 공통 상수, 매핑, 유틸리티.
-#
 # manual_control, ai_control, relay_manager 등 제어 모듈이 공유하는
 # 상수·핀맵·로깅·포맷팅 함수를 제공한다.
-# ═════════════════════════════════════════════════════════════════
+# --->
+# check_heater_cooldown: 히터 연속 가동 체크
+# update_heater_tracking: 히터 ON/OFF 상태 추적 업데이트
+# reset_heater_state: 히터 상태 초기화
+# resolve_device_alias: 장치명 또는 한글 별칭을 시멘틱 flag 이름으로 변환
+# set_llm_relay_lock: set llm relay lock
+# is_llm_relay_locked: is llm relay locked
+# clear_llm_relay_lock: clear llm relay lock
+# to_sortable_int: to sortable int
+# sort_houses: sort houses
+# house_prefix: house prefix
+# get_pin_map: get pin map
+# reverse_pin_map: reverse pin map
+# format_sensor_parts: format sensor parts
+# _get_relay_names: get relay names
+# format_relay_on_str: format relay on str
+# format_relay_off_str: format relay off str
+# format_device_decision: format device decision
+# ═══════════════════════════════════════════════════════════════════════
 import os
 
 

@@ -1,5 +1,9 @@
 # ═══════════════════════════════════════════════════════════
 # ChromaDB 데이터 로더: 미학습 데이터 조회 및 학습 상태 관리.
+# --->
+# update_learned_last_status: update learned last status
+# _parse_after_date: parse after date
+# get_unlearned_data: get unlearned data
 # ═══════════════════════════════════════════════════════════
 import traceback
 from datetime import datetime, timedelta

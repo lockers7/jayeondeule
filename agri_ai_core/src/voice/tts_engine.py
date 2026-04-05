@@ -2,7 +2,7 @@
 # TTS(텍스트→음성) 엔진 모듈
 # edge-tts 기반 한국어 음성 합성 (ko-KR-SunHiNeural 보이스) 기능을 제공합니다.
 # --->
-# synthesize: 텍스트를 MP3 바이트로 변환
+# synthesize: synthesize
 # ════════════════════════════════════════════════════════════════════════════
 import io
 import edge_tts

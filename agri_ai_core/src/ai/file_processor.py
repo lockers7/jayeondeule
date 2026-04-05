@@ -1,5 +1,12 @@
 # ════════════════════════════════════════════════════════════════════════════
 # 파일 처리 모듈 — 업로드 파일(CSV/Excel/PDF/텍스트)을 LLM 입력 형식으로 변환.
+# --->
+# _format_dataframe: format dataframe
+# read_csv_file: read csv file
+# read_excel_file: read excel file
+# read_text_file: read text file
+# read_pdf_file: read pdf file
+# process_uploaded_files: process uploaded files
 # ════════════════════════════════════════════════════════════════════════════
 import os
 import pandas as pd

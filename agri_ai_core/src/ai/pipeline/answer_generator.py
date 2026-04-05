@@ -1,6 +1,12 @@
-# ═══════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════════════
 # 3단계 답변 작성: 수집된 데이터 기반 LLM 답변 생성 및 출처 선별.
-# ═══════════════════════════════════════════════════════════════
+# --->
+# generate_answer: 3단계: 수집된 데이터 기반 정교한 답변 생성
+# _extract_used_sources: LLM 응답에서 <USED_SOURCES>1,3,5</USED_SOURCES> 태그를 파싱합니다
+# _remove_source_tags: 응답에서 <USED_SOURCES> 태그와 내용을 제거
+# _format_collected_data: format collected data
+# _generate_simple_response: generate simple response
+# ════════════════════════════════════════════════════════════════════════════════════════
 import re
 import time
 import traceback

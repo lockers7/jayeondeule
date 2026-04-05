@@ -1,7 +1,10 @@
 # ═════════════════════════════════════════════════════════════════════════════
 # 데이터 검증 모듈 - is_true, clean_sensor_value, parse_boolean 등 유효성 검사.
+# --->
+# is_true: is true
+# clean_sensor_value: clean sensor value
+# parse_boolean: parse boolean
 # ═════════════════════════════════════════════════════════════════════════════
-
 import re
 from decimal import Decimal
 

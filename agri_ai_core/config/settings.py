@@ -1,7 +1,10 @@
 # ════════════════════════════════════════════════════════════════════════════════
 # 설정 모듈 - 환경변수 기반 애플리케이션 설정 로드 (dataclass + lru_cache 싱글톤).
+# --->
+# _get_int: get int
+# _get_first_env: get first env
+# get_settings: get settings
 # ════════════════════════════════════════════════════════════════════════════════
-
 import logging
 import os
 from dataclasses import dataclass

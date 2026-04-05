@@ -3,9 +3,9 @@
 # faster-whisper 기반 음성 인식 (CPU, int8 양자화, VAD 필터) 기능을 제공합니다.
 # 변경: small → medium 모델로 업그레이드 (한국어 인식 정확도 향상, CPU 유지)
 # --->
-# _get_model: Whisper STT 모델 로드 (싱글톤, medium/CPU/int8)
-# _webm_to_wav_bytes: WebM/Opus 바이트를 WAV 바이트로 변환 (PyAV 사용)
-# transcribe: 음성 바이트를 텍스트로 변환
+# _get_model: get model
+# _webm_to_wav_bytes: webm to wav bytes
+# transcribe: transcribe
 # ═════════════════════════════════════════════════════════════════════════════
 import io
 import tempfile

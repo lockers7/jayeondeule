@@ -1,5 +1,8 @@
 # ═════════════════════════════════════════════
 # 음성 API 라우터: STT/TTS REST API 엔드포인트.
+# --->
+# stt_endpoint: stt endpoint
+# tts_endpoint: tts endpoint
 # ═════════════════════════════════════════════
 import time
 from fastapi import APIRouter, UploadFile, File, HTTPException

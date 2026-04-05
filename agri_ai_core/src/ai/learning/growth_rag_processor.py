@@ -1,6 +1,28 @@
-# ═══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════════════
 # 생육 기반 인과 관계 RAG: 환경 통계와 생육 데이터를 VectorDB에 저장.
-# ═══════════════════════════════════════════════════════════════════
+# --->
+# _get_last_rag_datetime: get last rag datetime
+# _update_last_rag_datetime: update last rag datetime
+# _db_fetch: db fetch
+# _get_active_farm_houses: get active farm houses
+# _get_new_crop_entries: get new crop entries
+# _get_sensor_stats: get sensor stats
+# _get_relay_stats: get relay stats
+# _get_day_night_stats: get day night stats
+# _get_moving_averages: get moving averages
+# _check_today_crops: check today crops
+# _get_season: get season
+# _sv: safe_float 값을 문자열로 포맷한다
+# _format_sensor_stat_block: 센서 통계 한 줄을 포맷한다 (평균, 주야간, 표준편차, 범위)
+# _format_relay_pct: 릴레이 가동 비율을 퍼센트 문자열로 포맷한다
+# _format_trend_line: 이동평균 트렌드 한 줄을 포맷한다
+# _build_growth_context: build growth context
+# _build_rag_document: build rag document
+# _build_rag_metadata: build rag metadata
+# _store_growth_rag: store growth rag
+# _ensure_daily_rag: ensure daily rag
+# run_growth_rag: run growth rag
+# ════════════════════════════════════════════════════════════════════════════════════
 import hashlib
 import time
 import traceback

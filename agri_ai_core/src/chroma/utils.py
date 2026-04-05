@@ -1,5 +1,12 @@
 # ══════════════════════════════════════════════════════════════
 # ChromaDB 유틸리티: 메타데이터 변환, JSON 직렬화, 문서 ID 생성.
+# --->
+# _embedding_dim: embedding dim
+# _sanitize_for_json: sanitize for json
+# prepare_metadata_for_chroma: prepare metadata for chroma
+# clean_metadata: clean metadata
+# restore_metadata_from_chroma: restore metadata from chroma
+# generate_doc_id: generate doc id
 # ══════════════════════════════════════════════════════════════
 import json
 import pandas as pd
