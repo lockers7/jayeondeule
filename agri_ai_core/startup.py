@@ -2,8 +2,8 @@
 # 애플리케이션 초기화 모듈
 # 시작 시 ChromaDB 연결, 스케줄러 설정 등을 수행합니다.
 # --->
-# initialize_app: 애플리케이션 시작 초기화
-# shutdown_app: 애플리케이션 종료 처리
+# initialize_app: initialize app
+# shutdown_app: shutdown app
 # ═════════════════════════════════════════════════════
 import os
 import sys

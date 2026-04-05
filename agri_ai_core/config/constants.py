@@ -1,7 +1,9 @@
 # ══════════════════════════════════════════════════════════════════════
 # 상수 모듈 - 시스템 전역 상수, 임계값, 스케줄링 설정, Ollama/모델 헬퍼.
+# --->
+# get_ollama_url: get ollama url
+# get_model_name: get model name
 # ══════════════════════════════════════════════════════════════════════
-
 import os
 from .settings import settings
 

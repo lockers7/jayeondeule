@@ -1,8 +1,16 @@
 # ═══════════════════════════════════════════════════════════
 # 릴레이 스케줄 제어 모듈.
-#
 # 시간대별 자동 제어 스케줄(조명/관수밸브)을 관리·실행하며,
 # 주기/요일 기반 실행 여부를 판단하여 릴레이를 자동 제어한다.
+# --->
+# _format_sensor_status: format sensor status
+# should_execute_interval: should execute interval
+# should_execute_weekdays: should execute weekdays
+# is_time_in_range: is time in range
+# _handle_schedule_control: handle schedule control
+# control_lighting_schedule: control lighting schedule
+# control_irrigation_schedule: control irrigation schedule
+# control_all_schedules: control all schedules
 # ═══════════════════════════════════════════════════════════
 import traceback
 from datetime import datetime

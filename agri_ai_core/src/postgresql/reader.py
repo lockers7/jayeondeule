@@ -1,6 +1,17 @@
-# ═══════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 # PostgreSQL 데이터 수집: 센서, 릴레이, 생육 데이터 조회.
-# ═══════════════════════════════════════════════════════
+# --->
+# _db_query: db query
+# read_farm_house_list: read farm house list
+# read_units_data: read units data
+# read_crops_data: read crops data
+# read_current_growth_stage: read current growth stage
+# read_farm_info: read farm info
+# read_optimal_condition: read optimal condition
+# read_current_sensor_info: read current sensor info
+# read_latest_relay_info: read latest relay info
+# read_light_irrigation_settings: read light irrigation settings
+# ══════════════════════════════════════════════════════════════
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.postgresql.connection import db_session
 # queries를 직접 import (postgresql/__init__.py 경유 방지 → 순환 참조 해소)

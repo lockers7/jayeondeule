@@ -1,6 +1,17 @@
-# ═══════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
 # ChromaDB 클라이언트: REST API 통신, 컬렉션 관리, heartbeat.
-# ═══════════════════════════════════════════════════════════
+# --->
+# _http_request: http request
+# get_chroma_url: get chroma url
+# heartbeat: heartbeat
+# _is_valid_uuid: is valid uuid
+# _refresh_collection_ids: refresh collection ids
+# get_collection_id_from_name: get collection id from name
+# get_collection: get collection
+# list_collections: list collections
+# create_collection: create collection
+# ensure_required_collections_exist: ensure required collections exist
+# ════════════════════════════════════════════════════════════════════
 import time
 from datetime import datetime
 

@@ -1,6 +1,11 @@
-# ══════════════════════════════════════════════
+# ════════════════════════════════════════════════════
 # ChromaDB 컬렉션 관리: 컬렉션 이름 반환 함수들.
-# ══════════════════════════════════════════════
+# --->
+# farm_knowledge_collection: farm knowledge collection
+# document_collection: document collection
+# conversation_collection: conversation collection
+# web_knowledge_collection: web knowledge collection
+# ════════════════════════════════════════════════════
 from agri_ai_core.config import settings
 
 

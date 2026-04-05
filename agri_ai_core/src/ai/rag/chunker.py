@@ -1,5 +1,8 @@
 # ══════════════════════════════════════════════════════════════
 # 텍스트 청킹: 문서를 의미 단위 청크로 분할하여 VectorDB에 저장.
+# --->
+# chunk_document: chunk document
+# store_document_with_chunks: store document with chunks
 # ══════════════════════════════════════════════════════════════
 import re
 import traceback

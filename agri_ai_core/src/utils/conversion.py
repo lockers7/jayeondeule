@@ -1,5 +1,11 @@
 # ═══════════════════════════════════════════════════════════════════════
 # 변환 유틸리티 모듈 - 센서/릴레이 데이터 추출, safe_float/safe_int 변환.
+# --->
+# safe_float: safe float
+# safe_int: safe int
+# _merge_relay_stats: merge relay stats
+# convert_sensor_relay_data: convert sensor relay data
+# extract_relay_data: extract relay data
 # ═══════════════════════════════════════════════════════════════════════
 import json
 

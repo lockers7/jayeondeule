@@ -1,6 +1,25 @@
-# ══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════════
 # FastAPI 애플리케이션: REST API 서버, LLM 질의, RAG 엔드포인트.
-# ══════════════════════════════════════════════════════════════
+# --->
+# verify_api_key: verify api key
+# _try_parse_json: try parse json
+# lifespan: lifespan
+# _is_private_ip: is private ip
+# _to_korean: to korean
+# geo_location: 클라이언트 IP 기반 지역 정보 반환 (한글, 최소 구/시/군 단위)
+# health_check: health check
+# get_ai_judgment: 현재 센서값 기반 AI 환경 판단 조회 (실제 제어 없음)
+# get_stats: get stats
+# query_llm: query llm
+# query_llm_stream: query llm stream
+# rag_perform: rag perform
+# rag_save: rag save
+# get_conversation_history: 세션의 최근 대화 이력을 반환합니다 (최대 limit 개 Q&A 쌍)
+# get_available_models: Ollama에 설치된 모델 목록과 현재 선택된 모델을 반환합니다
+# change_model: 관리자 전용:
+# dispatch: dispatch
+# event_generator: event generator
+# ═══════════════════════════════════════════════════════════════════════════════════
 import json
 import os
 import time

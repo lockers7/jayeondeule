@@ -1,9 +1,32 @@
-# ═════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 # 환경제어 모듈.
-#
 # 센서값 기반 릴레이 자동 제어 알고리즘 (온도/습도/CO2).
 # 생육단계별 제어, 비상제어, 열풍기 쿨다운, 외부순환, 64케이스 분기를 포함한다.
-# ═════════════════════════════════════════════════════════════════════════════
+# --->
+# _log_house_status: log house status
+# _classify: classify
+# _is_external_normal: is external normal
+# _is_internal_abnormal: is internal abnormal
+# _reset_heater_cooldown: reset heater cooldown
+# _get_current_heater_state: get current heater state
+# _build_device_settings: 4대 장치 설정 딕셔너리를 생성한다
+# _determine_devices: determine devices
+# _determine_circulation: determine circulation
+# _check_emergency: check emergency
+# _build_relay_values: build relay values
+# _write_relay: write relay
+# _execute_control: execute control
+# _execute_water_temp_emergency: execute water temp emergency
+# _handle_ai_emergency: handle ai emergency
+# _determine_environment_action: 센서 데이터 기반으로 장치/순환모드를 결정하고 판단 결과를 반환한다
+# get_ai_environment_judgment: 현재 센서값 기반으로 알고리즘이 판단하는 최적 릴레이 상태를 반환 (실제 제어 없음)
+# control_manual_environment: control manual environment
+# control_all_manual: control all manual
+# _ai_control_loop: AI 재배사 순환 제어 루프 (별도 스레드에서 실행)
+# start_ai_control_loop: AI 순환 제어 루프를 별도 스레드로 시작
+# stop_ai_control_loop: AI 순환 제어 루프 정지
+# _mode_short: mode short
+# ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 import time
 import traceback
 from datetime import datetime, timedelta

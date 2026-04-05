@@ -1,6 +1,17 @@
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════
 # ChromaDB 데이터 작업: 문서 CRUD, 벡터 검색, 임베딩 upsert.
-# ══════════════════════════════════════════════════════════
+# --->
+# _http_post: http post
+# _build_embedding_from_text: build embedding from text
+# add_document: add document
+# get_documents: get documents
+# delete_document: delete document
+# upsert_collection_data: upsert collection data
+# upsert_documents_with_embedding: upsert documents with embedding
+# query_documents: query documents
+# flatten: flatten
+# _flatten: flatten
+# ════════════════════════════════════════════════════════════════
 import os
 import time
 import traceback

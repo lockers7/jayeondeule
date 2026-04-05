@@ -1,6 +1,28 @@
-# ════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════════════════
 # LLM Tool 실행기 — LLM이 요청한 도구(검색, DB, 릴레이 등)를 실행.
-# ════════════════════════════════════════════════════════════════
+# --->
+# _get_farm_name: farm_id에 해당하는 farm_name을 반환
+# _normalize_id: LLM이 전달한 ID에서 숫자만 추출
+# _resolve_relay_ids: 릴레이 제어용 house_id/farm_id를 정규화하고 검증한다
+# _json_default: json default
+# delete_farm_knowledge: delete farm knowledge
+# search_farm_knowledge: search farm knowledge
+# get_farm_realtime_data: get farm realtime data
+# _get_ai_judgment_safe: AI 환경 판단을 안전하게 호출 (실패해도 None 반환)
+# _build_ai_conflict: 사용자 수동 제어와 AI 권장 사이의 차이점을 비교하여 반환
+# _control_relay_all_houses: house_id='all' 요청 시 모든 재배사(hous_id!=0)에 대해 일괄 제어
+# control_relay: control relay
+# control_relays_batch: control relays batch
+# _opinet_api_call: Opinet 실시간 API 호출 (실패 시 None)
+# _opinet_db_fallback: DB 폴백: 가장 최근 저장된 데이터 조회
+# search_gas_price: Opinet 유가정보 조회 — 실시간 API 우선, 실패 시 DB 폴백
+# execute_tool: execute tool
+# _collect_ids_for_file: 특정 파일명에 대한 삭제 대상 ID 수집 (공백↔밑줄 자동 변환 검색)
+# _parse_positive_int: parse positive int
+# _parse_positive_float: parse positive float
+# _parse_optional_int: parse optional int
+# _to_chroma_where: to chroma where
+# ══════════════════════════════════════════════════════════════════════════════════════════
 import json
 import os
 import re

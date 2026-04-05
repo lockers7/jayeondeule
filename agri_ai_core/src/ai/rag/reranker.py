@@ -1,5 +1,9 @@
 # ═════════════════════════════════════════════════════════
 # LLM 기반 Reranker: 벡터 검색 후보를 관련성 점수로 재정렬.
+# --->
+# _build_rerank_prompt: build rerank prompt
+# _parse_scores: parse scores
+# rerank_results: rerank results
 # ═════════════════════════════════════════════════════════
 import os
 import re

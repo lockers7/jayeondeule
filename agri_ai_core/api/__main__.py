@@ -2,7 +2,7 @@
 # REST API 서버 실행 진입점
 # python -m agri_ai_core.api 명령으로 Uvicorn 기반 FastAPI 서버를 시작합니다.
 # --->
-# main: FastAPI 서버 실행 진입점
+# main: main
 # ═══════════════════════════════════════════════════════════════════════════
 import os
 import uvicorn

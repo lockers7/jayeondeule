@@ -1,8 +1,18 @@
 # ═══════════════════════════════════════════════════════════════
 # 작업 스케줄러 모듈.
-#
 # 주기적 작업(학습, 통계, 환경제어, 로그 정리 등)을 관리·실행하는
 # APScheduler 기반 백그라운드 스케줄러를 제공한다.
+# --->
+# setup_scheduler: setup scheduler
+# start_scheduler: start scheduler
+# stop_scheduler: stop scheduler
+# add_job: add job
+# remove_job: remove job
+# _daily_log_cleanup: daily log cleanup
+# _chunk_cleanup_job: chunk cleanup job
+# setup_default_jobs: setup default jobs
+# _opinet_daily_job: opinet daily job
+# _lotto_weekly_job: lotto weekly job
 # ═══════════════════════════════════════════════════════════════
 import traceback
 

@@ -1,6 +1,22 @@
-# ═════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════════
 # 2단계 데이터 수집: 도구 실행 및 LLM 기반 충분성 판단.
-# ═════════════════════════════════════════════════════
+# --->
+# __init__: init
+# collect: 메인 수집 + LLM 검증 루프
+# _execute_tasks: 태스크 리스트를 순차 실행하고 결과를 수집
+# _execute_single_tool: 단일 도구 실행 + 결과 정제
+# _merge_args: 도구별 기본 인자와 태스크 인자를 병합
+# _encode_url: 한글 포함 URL을 percent-encoding
+# _get_search_result_urls: 수집된 search_web 결과에서 URL 목록을 추출하여 LLM에 제공
+# _collect_sources: collect sources
+# _extract_all_search_sources: search_web 결과의 모든 출처를 수집 (최대 5건)
+# _add_fetch_source: fetch_url 출처 추가
+# _expand_multi_house: expand multi house
+# _add_result: add result
+# _build_result: build result
+# _report_progress: report progress
+# _tool_display: tool display
+# ══════════════════════════════════════════════════════════════════════════════════
 import json
 import time
 import traceback

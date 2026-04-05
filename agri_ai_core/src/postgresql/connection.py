@@ -1,5 +1,24 @@
 # ═══════════════════════════════════════════════════════════════
 # PostgreSQL 연결 관리: 커넥션 풀 싱글톤 및 세션 컨텍스트 매니저.
+# --->
+# db_session: db session
+# __init__: init
+# _safe_positive_int: safe positive int
+# _to_sql_literal: to sql literal
+# _bind_sql: bind sql
+# _execute_mcp_query: execute mcp query
+# _log_mcp_fallback: log mcp fallback
+# _ensure_pool: ensure pool
+# _getconn: getconn
+# _putconn: putconn
+# connect: connect
+# close: close
+# get_connection: get connection
+# _run_direct: run direct
+# execute_query: execute query
+# fetch_all: fetch all
+# fetch_one: fetch one
+# _replace: replace
 # ═══════════════════════════════════════════════════════════════
 import os
 import re

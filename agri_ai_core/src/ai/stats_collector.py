@@ -1,5 +1,11 @@
 # ═══════════════════════════════════════════════════════════════════════
 # 질의 통계 수집기 — LLM 응답 시간, 도구 호출, 검색 성공률 인메모리 수집.
+# --->
+# get_stats_collector: get stats collector
+# __init__: init
+# record_query: record query
+# record_search: record search
+# get_stats: get stats
 # ═══════════════════════════════════════════════════════════════════════
 import time
 import threading

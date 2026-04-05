@@ -1,6 +1,15 @@
-# ═══════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
 # 텍스트 임베딩 생성: Ollama 기반 벡터 변환 및 캐시 관리.
-# ═══════════════════════════════════════════════════════
+# --->
+# _disable_embedding: disable embedding
+# _mcp_get_status: mcp get status
+# _extract_embedding_from_payload: extract embedding from payload
+# _get_expected_dim: get expected dim
+# check_ollama_health: check ollama health
+# get_dynamic_timeout: get dynamic timeout
+# generate_dummy_embedding: generate dummy embedding
+# embed_text: embed text
+# ═══════════════════════════════════════════════════════════════
 import os
 import time
 import hashlib

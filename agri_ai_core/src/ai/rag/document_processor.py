@@ -1,6 +1,14 @@
-# ═════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════
 # 문서 처리 파이프라인: 파싱, 유형 감지, 청크 저장, LLM enrichment.
-# ═════════════════════════════════════════════════════════════════
+# --->
+# messages_to_text: messages to text
+# format_rag_save_result: format rag save result
+# detect_document_type: detect document type
+# _store_crop_chunks_to_farm_knowledge: store crop chunks to farm knowledge
+# _background_enrich: background enrich
+# llm_document_process: llm document process
+# process_attached_files: process attached files
+# ═════════════════════════════════════════════════════════════════════════
 import os
 import traceback
 from datetime import datetime

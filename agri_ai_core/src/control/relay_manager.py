@@ -1,8 +1,13 @@
 # ═══════════════════════════════════════════════════════════
 # 릴레이 제어 관리자 모듈.
-#
 # 릴레이 설정값 변경, 상태 조회, IoT 폴링 생존용 반복 쓰기 등
 # 릴레이 제어의 상위 레벨 관리 기능을 제공한다.
+# --->
+# _relay_detail_parts: relay detail parts
+# log_relay_detail: log relay detail
+# _persist_relay_values: persist relay values
+# set_relay_value: set relay value
+# get_relay_status: get relay status
 # ═══════════════════════════════════════════════════════════
 import traceback
 import threading

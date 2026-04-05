@@ -1,5 +1,9 @@
 # ══════════════════════════════════════════════════
 # 모델 학습 관리: 농장 데이터 분석 및 ChromaDB 저장.
+# --->
+# verify_chroma_connection: verify chroma connection
+# process_farm_hour_data: process farm hour data
+# update_ollama_model: update ollama model
 # ══════════════════════════════════════════════════
 import json
 import traceback

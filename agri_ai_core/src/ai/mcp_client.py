@@ -1,5 +1,35 @@
 # ══════════════════════════════════════════════════════════════════════════════════════
 # MCP (Model Context Protocol) 클라이언트 — MCP 서버(web-search, postgres 등) 공통 호출.
+# --->
+# _mark_server_unavailable: mark server unavailable
+# _get_runtime_disable_seconds: get runtime disable seconds
+# _get_runtime_disabled_reason: get runtime disabled reason
+# _mark_server_available: mark server available
+# _error_to_text: error to text
+# _should_mark_unavailable: should mark unavailable
+# _is_dns_resolution_error: is dns resolution error
+# _log_dns_diagnostics_once: log dns diagnostics once
+# _load_mcp_servers: load mcp servers
+# _jsonrpc: jsonrpc
+# _find_response: find response
+# _extract_text_blocks: extract text blocks
+# _format_search_result: 검색 결과 항목을 표준 dict 형태로 생성
+# _check_error_with_dns_diag: 에러 텍스트에 DNS 관련 키워드가 있으면 DNS 진단을 1회 실행
+# _try_parse_json: 텍스트를 JSON으로 파싱 시도
+# call_mcp_server_tool: call mcp server tool
+# _coerce_json_and_text: coerce json and text
+# _direct_http_json_request: direct http json request
+# _parse_mcp_fetch_result: parse mcp fetch result
+# _parse_fetch_tool_names: parse fetch tool names
+# mcp_fetch_request: mcp fetch request
+# mcp_fetch_json: mcp fetch json
+# mcp_http_request: mcp http request
+# _parse_markdown_table: parse markdown table
+# _pick_postgres_tool_name: pick postgres tool name
+# _call_postgres_tool: call postgres tool
+# postgres_query: postgres query
+# search_web: search web
+# get_current_weather: get current weather
 # ══════════════════════════════════════════════════════════════════════════════════════
 import json
 import os

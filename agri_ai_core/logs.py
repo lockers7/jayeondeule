@@ -1,5 +1,19 @@
 # ════════════════════════════════════════════════════════════════
 # 로그 모듈 - 로거 생성, 일별 로테이션 핸들러, 로그 정리 유틸리티.
+# --->
+# _setup_logger_impl: setup logger impl
+# setup_logger: setup logger
+# setup_web_logger: setup web logger
+# setup_api_logger: setup api logger
+# _write_temp_and_replace: write temp and replace
+# delete_old_daily_logs: delete old daily logs
+# trim_old_log_entries: trim old log entries
+# trim_large_plain_logs: trim large plain logs
+# cleanup_all_logs: cleanup all logs
+# __init__: init
+# _get_log_filename: get log filename
+# _open: open
+# emit: emit
 # ════════════════════════════════════════════════════════════════
 import os
 import re

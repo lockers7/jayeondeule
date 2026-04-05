@@ -1,8 +1,20 @@
 # ════════════════════════════════════════════════════════════════════
 # AI 릴레이 제어 모듈.
-#
 # LLM이 센서값·릴레이·생육단계·최적조건을 종합 분석하여 릴레이를 결정.
 # 센서 트렌드 분석으로 임계치 도달 전 선행(예방) 제어를 수행한다.
+# --->
+# _to_float: to float
+# _log_ai_status: log ai status
+# _log_ai_decision: log ai decision
+# _detect_trend: detect trend
+# _check_threshold_proximity: check threshold proximity
+# monitor_ai_emergency: monitor ai emergency
+# _build_system_prompt: build system prompt
+# _build_user_prompt: build user prompt
+# _call_llm: call llm
+# _parse_relay_response: parse relay response
+# _validate_safety: validate safety
+# control_ai_environment: control ai environment
 # ════════════════════════════════════════════════════════════════════
 import os
 import re

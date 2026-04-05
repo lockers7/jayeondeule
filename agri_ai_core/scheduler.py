@@ -2,7 +2,8 @@
 # 백그라운드 서비스 러너
 # ChromaDB 연결 확인, 스케줄러(조명/관수밸브) 등
 # --->
-# main: 백그라운드 서비스 시작 후 대기
+# main: main
+# handle_signal: handle signal
 # ══════════════════════════════════════════════
 import signal
 import sys

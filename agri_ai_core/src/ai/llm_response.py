@@ -1,6 +1,21 @@
-# ═════════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════════════════════════════════
 # LLM 응답 후처리 모듈 — 도구 결과 정제, 응답 필터링, 마크다운 표 정렬.
-# ═════════════════════════════════════════════════════════════════════
+# --->
+# _clean_page_content: clean page content
+# _refine_search_web: refine search web
+# _refine_fetch_url: refine fetch url
+# _refine_realtime_data: get_farm_realtime_data 결과를 컴팩트 텍스트로 변환
+# _refine_tool_result: refine tool result
+# _strip_nav_noise: 웹 스크래핑 네비게이션 잡음을 제거한다
+# _refine_farm_knowledge: search_farm_knowledge 결과를 경량화한다
+# _finalize_user_facing_answer: LLM 응답 후처리: think 태그 제거 + 기본 포맷 정리만 수행
+# _display_width: 문자열의 터미널 표시 너비를 계산한다 (한글=2, 영문=1)
+# _pad_to_width: 문자열을 target_width 너비로 패딩한다
+# _align_markdown_tables: 텍스트 내 모든 마크다운 표의 | 구분자 위치를 정렬한다
+# clean_llm_response: LLM 응답 기본 정리: Think 태그 제거, 마크다운 헤더/코드블록 제거, 빈 줄 정리, 표 정렬
+# _strip_hallucinated_urls: LLM이 만든 가짜 URL을 제거
+# _check_url: check url
+# ═════════════════════════════════════════════════════════════════════════════════════════════════════════
 import os
 import re
 import json

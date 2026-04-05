@@ -1,6 +1,24 @@
-# ═════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════════
 # LLM Tool — 웹 검색 및 URL 본문 가져오기 모듈.
-# ═════════════════════════════════════════════
+# --->
+# _search_via_naver_api: search via naver api
+# _search_via_brave_api: search via brave api
+# _search_via_searxng: search via searxng
+# _merge_search_results: primary(Naver) 와 secondary(SearXNG) 를 인터리브 병합
+# _search_via_api: search via api
+# _is_location: 지역명 여부 판별 (3글자 이상 + 행정구역 접미사, 또는 광역시도 약칭)
+# _filter_relevant_results: filter relevant results
+# _build_retry_query: build retry query
+# search_web: search web
+# _cache_web_results_to_vectordb: cache web results to vectordb
+# _strip_html: strip html
+# _direct_fetch_url: direct fetch url
+# _auto_fetch_urls: auto fetch urls
+# fetch_url_content: fetch url content
+# _fetch_one: fetch one
+# _run_searxng: run searxng
+# _run_naver: run naver
+# ═════════════════════════════════════════════════════════════════════════════════
 import json
 import os
 import re

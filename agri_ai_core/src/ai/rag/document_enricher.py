@@ -1,5 +1,12 @@
 # ═══════════════════════════════════════════════════════════════
 # LLM 문서 요약 및 QA 쌍 생성: enriched 데이터를 VectorDB에 저장.
+# --->
+# _call_llm: call llm
+# _generate_summary: generate summary
+# _parse_qa_response: parse qa response
+# _generate_qa_pairs: generate qa pairs
+# _store_enriched_data: store enriched data
+# enrich_document: enrich document
 # ═══════════════════════════════════════════════════════════════
 import os
 import re
