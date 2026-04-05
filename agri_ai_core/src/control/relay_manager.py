@@ -67,8 +67,9 @@ def _persist_relay_values(farm_id, house_id, relay_values, count=_PERSIST_COUNT,
             with db_session() as database:
                 database.execute_query(dbQry.SET_RELAY_VALUE, params)
             logger.info(f"[릴레이유지] 반복쓰기 {i + 1}/{count} farm_id={farm_id} house_id={house_id}")
+            logger.debug(f"[릴레이유지] 반복쓰기 성공 {i + 1}/{count}")
         except Exception as e:
-            logger.warning(f"[릴레이유지] 반복쓰기 실패 {i + 1}/{count}: {e}")
+            logger.error(f"[릴레이유지] 반복쓰기 실패 {i + 1}/{count}: {e}")
 
 
 # ═════════════════════════════════════════════════

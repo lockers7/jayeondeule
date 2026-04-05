@@ -256,7 +256,7 @@ class ConversationStore:
             # conversation_collection에 임베딩 저장
             self._store_summary_to_vectordb(session_id, summary)
 
-            logger.info(f"[대화저장소] 대화 요약 완료 ({len(old_turns)}턴→{len(summary)}자)")
+            logger.debug(f"[대화저장소] 대화 요약 완료 ({len(old_turns)}턴→{len(summary)}자)")
             return summary
 
         except Exception as e:

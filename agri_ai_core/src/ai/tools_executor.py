@@ -355,6 +355,7 @@ def search_farm_knowledge(
                 source_where_candidates = [None]
 
         t_embed = time.time()
+        logger.debug(f"[VectorDB검색] 임베딩 생성 시작 query=\"{(query or '')[:60]}\"")
         query_embedding = embed_text(query)
         embed_elapsed = time.time() - t_embed
         if not query_embedding:
@@ -800,7 +801,7 @@ def get_farm_realtime_data(house_id: str = None, farm_id: str = None, data_type:
                 if ai_judgment:
                     result["ai_environment_judgment"] = ai_judgment
             except Exception as e:
-                logger.debug(f"[PostgreSQL조회] AI 환경 판단 조회 실패: {e}")
+                logger.info(f"[PostgreSQL조회] AI 환경 판단 조회 실패: {e}")
 
         if (
             (data_type in ["sensor", "all"] and not result.get("sensor"))
@@ -940,6 +941,7 @@ def control_relay(house_id: str, device_name: str = None, action: str = None,
 
     t_start = time.time()
     logger.info(f"[릴레이제어] 시작 farm_id={farm_id} house_id={house_id} device={device_name} action={action}")
+    logger.info(f"[릴레이제어] 제어 시도 house_id={house_id} device={device_name} action={action} mode={mode}")
     try:
         from agri_ai_core.src.control.relay_manager import set_relay_value
         from agri_ai_core.src.control.control_common import SEMANTIC_LABELS, set_llm_relay_lock, resolve_device_alias

@@ -415,14 +415,14 @@ def _finalize_user_facing_answer(
     raw_answer: str,
 ) -> str:
     """LLM 응답 후처리: think 태그 제거 + 기본 포맷 정리만 수행."""
-    logger.info(f"[필터링전-원본] len={len(raw_answer or '')}자")
-    logger.info(f"[필터링전-원본내용]\n{raw_answer}")
+    logger.debug(f"[필터링전-원본] len={len(raw_answer or '')}자")
+    logger.debug(f"[필터링전-원본내용]\n{raw_answer}")
 
     candidate = clean_llm_response(raw_answer)
 
     diff = len(raw_answer or '') - len(candidate)
     logger.info(f"[필터링완료] {len(raw_answer or '')}자→{len(candidate)}자 ({diff}자 삭제)")
-    logger.info(f"[최종답변내용]\n{candidate}")
+    logger.debug(f"[최종답변내용]\n{candidate}")
     return candidate
 
 
@@ -571,7 +571,7 @@ def clean_llm_response(response_text):
     if original_length > 0:
         removal_ratio = (original_length - final_length) / original_length
         if removal_ratio > 0.9:
-            logger.warning(f"필터링으로 인해 응답의 {removal_ratio*100:.1f}%가 제거됨")
+            logger.error(f"필터링으로 인해 응답의 {removal_ratio*100:.1f}%가 제거됨")
             if final_length < 10:
                 fallback = re.sub(r"<think>.*?</think>\s*", "", original_text, flags=re.DOTALL | re.IGNORECASE)
                 if len(fallback.strip()) > final_length:

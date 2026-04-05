@@ -840,6 +840,7 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
                 )
                 break
             except asyncio.TimeoutError:
+                logger.warning(f"[스트리밍] 하트비트 타임아웃 ({_STREAM_HEARTBEAT_SECONDS}s)")
                 # LLM 자체 타임아웃이면 즉시 에러 반환
                 if llm_task.done():
                     logger.error(f"[스트리밍][LLM타임아웃] {_LLM_TIMEOUT}초 초과")

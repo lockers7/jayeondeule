@@ -30,7 +30,7 @@ def _db_query(query, vals=(), *, fetch="all", error_msg="DB 조회", default=Non
                 return database.fetch_one(query=query, vals=vals)
             return database.fetch_all(query=query, vals=vals, as_dict=True)
         except Exception as e:
-            logger.warning(f"{error_msg}: {e}")
+            logger.error(f"{error_msg}: {e}")
             return default
 
 

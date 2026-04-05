@@ -3,6 +3,7 @@
 # --->
 # get_relay_mapping: get relay mapping
 # ════════════════════════════════════════════════════════════════════
+
 # 센서 필드 매핑 - 키: 센서 필드명, 값: (한글명, 단위)
 SENSOR_FIELD_MAPPING = {
     "indoor_temperature_value": ("내부온도", "℃"),

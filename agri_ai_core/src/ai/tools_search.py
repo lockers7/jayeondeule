@@ -724,6 +724,7 @@ def _strip_html(raw_text: str) -> str:
 # urllib로 직접 URL을 가져온다 (MCP fallback용).
 # ══════════════════════════════════════════════
 def _direct_fetch_url(url: str, timeout: int = 15) -> Dict[str, Any]:
+    logger.debug(f"[직접HTTP] 요청 시작 url={url[:120]} timeout={timeout}s")
     from urllib import request as urlrequest, error as urlerror
 
     headers = {
@@ -737,6 +738,7 @@ def _direct_fetch_url(url: str, timeout: int = 15) -> Dict[str, Any]:
             raw = resp.read().decode("utf-8", errors="replace")
             return {"success": True, "text": raw}
     except urlerror.HTTPError as e:
+        logger.warning(f"[직접HTTP] HTTPError url={url[:120]} code={e.code}")
         return {"success": False, "text": f"HTTP {e.code}"}
     except Exception as e:
         return {"success": False, "text": str(e)}
@@ -798,7 +800,7 @@ def fetch_url_content(url: str) -> Dict[str, Any]:
 
         if result.get("success"):
             raw_text = result.get("text", "") or ""
-            logger.info(f"[URL본문] MCP fetch 성공 raw_len={len(raw_text)}자")
+            logger.info(f"[URL본문] MCP fetch 성공 url={url[:120]} raw_len={len(raw_text)}자")
         else:
             # 2차: 직접 HTTP 요청 fallback
             mcp_error = result.get("text", "")[:80]
