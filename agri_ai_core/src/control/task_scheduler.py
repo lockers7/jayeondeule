@@ -1,8 +1,9 @@
-"""작업 스케줄러 모듈.
-
-주기적 작업(학습, 통계, 환경제어, 로그 정리 등)을 관리·실행하는
-APScheduler 기반 백그라운드 스케줄러를 제공한다.
-"""
+# ════════════════════════════════════════════════════════════
+# 작업 스케줄러 모듈.
+#
+# 주기적 작업(학습, 통계, 환경제어, 로그 정리 등)을 관리·실행하는
+# APScheduler 기반 백그라운드 스케줄러를 제공한다.
+# ════════════════════════════════════════════════════════════
 import traceback
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -325,6 +326,23 @@ def setup_default_jobs(learning_func=None, stats_func=None,
             func=_opinet_daily_job,
             trigger_type="cron",
             hour=10,
+            minute=0
+        )
+
+        # 로또 당첨번호 수집 (매주 토요일 22:00)
+        def _lotto_weekly_job():
+            try:
+                from agri_ai_core.src.lotto.lotto_collector import update_lotto_db
+                update_lotto_db()
+            except Exception as le:
+                logger.error(f"[로또수집] 주간 수집 실패: {le}")
+
+        add_job(
+            job_id="lotto_weekly_job",
+            func=_lotto_weekly_job,
+            trigger_type="cron",
+            day_of_week="sat",
+            hour=22,
             minute=0
         )
 

@@ -1,4 +1,6 @@
-"""AI Module - LLM, RAG, Learning, MCP"""
+# ════════════════════════════════════════════════════════════
+# AI Module - LLM, RAG, Learning, MCP
+# ════════════════════════════════════════════════════════════
 
 __all__ = [
     "get_llm_response_with_tools",

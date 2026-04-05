@@ -1,4 +1,6 @@
-"""API 요청/응답 Pydantic 모델 정의."""
+# ════════════════════════════════════════════════════════════
+# API 요청/응답 Pydantic 모델 정의.
+# ════════════════════════════════════════════════════════════
 from pydantic import BaseModel, Field
 from typing import Optional, List
 

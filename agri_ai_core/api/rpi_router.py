@@ -1,4 +1,6 @@
-"""라즈베리파이 관리 API: SSH 재시작 및 센서 상태 모니터링."""
+# ════════════════════════════════════════════════════════════
+# 라즈베리파이 관리 API: SSH 재시작 및 센서 상태 모니터링.
+# ════════════════════════════════════════════════════════════
 import subprocess
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
