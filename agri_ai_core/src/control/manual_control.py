@@ -82,7 +82,7 @@ def _log_house_status(farm_id, house_id, order_label=""):
 
 def _classify(value, low, high):
     if value is None:
-        logger.warning(f"센서값 None → 'normal' 처리 (범위: {low}~{high})")
+        logger.debug(f"센서값 None → 'normal' 처리 (범위: {low}~{high})")
         return 'normal'
     if value < low:
         return 'low'
@@ -347,6 +347,7 @@ def _execute_control(
         phase1_semantic['exhaust_fan_flag'] = False
 
     # Phase 1 쓰기
+    logger.debug(f"Phase 1 릴레이 시멘틱 설정: {phase1_semantic}")
     phase1_values = _build_relay_values(house_id, phase1_semantic, current_relay, harvest_mode)
     _write_relay(farm_id, house_id, phase1_values)
 
@@ -367,6 +368,7 @@ def _execute_control(
     phase2_semantic['indoor_heater_valve_flag'] = heater_damper_on
 
     # Phase 2 쓰기
+    logger.debug(f"Phase 2 릴레이 시멘틱 설정: {phase2_semantic}")
     phase2_values = _build_relay_values(house_id, phase2_semantic, current_relay, harvest_mode)
     result = _write_relay(farm_id, house_id, phase2_values)
 
@@ -618,6 +620,8 @@ def control_manual_environment(farm_id, house_id, growth_stage='생육기', orde
 
         # 공통 판단 로직 호출
         action = _determine_environment_action(sensor_data, growth_stage, farm_id, house_id)
+        if action:
+            logger.debug(f"{scope}: 모드 판단 결과: reason={action['reason']}, circulation={action.get('circulation')}, is_emergency={action['is_emergency']}")
         if not action:
             logger.info(f"{scope}: 판단 불가 (센서 부족)")
             return {"success": False, "message": "판단 불가"}
@@ -632,7 +636,7 @@ def control_manual_environment(farm_id, house_id, growth_stage='생육기', orde
                 )
             if action["devices"].get('indoor_heater_flag', False):
                 _reset_heater_cooldown(farm_id, house_id, order_label=order_label)
-            logger.info(f"{scope}: 비상제어 발동")
+            logger.warning(f"{scope}: 비상제어 발동")
             return _execute_control(
                 farm_id, house_id, action["devices"], action["circulation"],
                 current_relay, harvest_mode, reason="비상제어", order_label=order_label

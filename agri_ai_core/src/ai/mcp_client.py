@@ -333,8 +333,10 @@ def call_mcp_server_tool(
 
         _mark_server_available(server_name)
         elapsed = time.time() - t_start
+        result_data = response.get("result", {})
+        logger.debug(f"[MCP응답구조] server={server_name} tool={tool_name} keys={list(result_data.keys()) if isinstance(result_data, dict) else type(result_data).__name__}")
         logger.info(f"[MCP호출] 성공 server={server_name} tool={tool_name} ({elapsed:.1f}s)")
-        return response.get("result", {})
+        return result_data
 
     except subprocess.TimeoutExpired:
         if process:

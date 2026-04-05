@@ -97,7 +97,7 @@ def add_document(collection_name, doc_id, text, metadata, embedding=None):
 
     status_code, _, text = _http_post(url, payload, timeout=20)
     if status_code in [200, 201]:
-        logger.debug(f"[add_document] 문서 추가 성공: doc_id={doc_id}")
+        logger.info(f"[add_document] 문서 추가 성공: doc_id={doc_id}")
         return {"success": True}
     else:
         return {"error": f"{status_code}: {text}"}
@@ -302,6 +302,8 @@ def upsert_documents_with_embedding(collection_name, docs):
         metadatas.append(metadata)
         embeddings.append(embedding)
 
+    logger.debug(f"[upsert_documents_with_embedding] upsert 대상 문서 수: {len(ids)}")
+
     if not ids:
         return {"error": "업서트할 유효한 문서 없음"}
 
@@ -368,7 +370,7 @@ def query_documents(collection_name, query_embeddings=None, n_results=5, where=N
                 status_code, result, text = _http_post(url, payload, timeout=10)
                 if status_code == 200:
                     if not isinstance(result, dict):
-                        logger.warning("[query_documents] 응답 JSON 파싱 실패")
+                        logger.error("[query_documents] 응답 JSON 파싱 실패")
                         time.sleep(1.5 ** retry)
                         continue
 
@@ -403,13 +405,13 @@ def query_documents(collection_name, query_embeddings=None, n_results=5, where=N
                     logger.info(f"[query_documents] '{collection_name}' 검색 성공: {len(ids)}건")
                     return result
                 else:
-                    logger.warning(f"[query_documents] 쿼리 실패: {status_code} - {text}")
+                    logger.error(f"[query_documents] 쿼리 실패: {status_code} - {text}")
                     time.sleep(1.5 ** retry)
             except Exception as e:
-                logger.warning(f"[query_documents] 요청 예외 발생: {e}")
+                logger.error(f"[query_documents] 요청 예외 발생: {e}")
                 time.sleep(1.5 ** retry)
 
-        logger.warning("[query_documents] 최대 재시도 초과")
+        logger.error("[query_documents] 최대 재시도 초과")
         return dict(_RETRY_EMPTY)
 
     except Exception as e:

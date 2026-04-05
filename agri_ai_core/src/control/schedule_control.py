@@ -155,6 +155,9 @@ def _handle_schedule_control(farm_id, house_id, setting_type, relay_flag_key, la
                     schedule_info += f"({'/'.join(days)})"
                 active_schedules.append(schedule_info)
 
+        if active_schedules:
+            logger.debug(f"농장 {farm_id}, 재배사 {house_id}: {label} 활성 스케줄 목록: {active_schedules}")
+
         # 스케줄 시간대 내 → ON / 스케줄 있고 시간대 밖 → OFF (스케줄 종료)
         # 스케줄 설정 자체가 없으면 → 현재 상태 유지 (웹 수동 제어값 보존)
         # ※ raw_mode=True로 호출하여 반복쓰기 스레드 생성 방지 (다른 릴레이 덮어쓰기 방지)
@@ -233,6 +236,7 @@ def control_all_schedules():
                     "results": []
                 }
 
+            logger.debug(f"스케줄 제어 대상 재배사 수: {len(houses)}")
             ordered_houses = _sort_houses(houses)
             house_order = ", ".join(
                 str(house.get("hous_id"))
@@ -240,7 +244,7 @@ def control_all_schedules():
                 if house.get("hous_id") is not None
             )
             if house_order:
-                logger.info(f"스케줄 제어 대상 순서: {house_order}")
+                logger.debug(f"스케줄 제어 대상 순서: {house_order}")
 
             results = []
             success_count = 0

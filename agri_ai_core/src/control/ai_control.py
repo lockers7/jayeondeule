@@ -412,6 +412,7 @@ def _call_llm(system_prompt, user_prompt):
             },
         }
 
+        logger.debug(f"[AI제어] LLM 요청: model={model_name}")
         t_start = time.time()
 
         status_code, data, error_text = mcp_http_request(
@@ -424,7 +425,7 @@ def _call_llm(system_prompt, user_prompt):
         elapsed = time.time() - t_start
 
         if status_code != 200 or not data:
-            logger.warning(f"[AI제어] LLM 호출 실패: status={status_code}, {elapsed:.1f}s")
+            logger.error(f"[AI제어] LLM 호출 실패: status={status_code}, {elapsed:.1f}s")
             return None
 
         response_text = data.get("response", "") if isinstance(data, dict) else ""
@@ -432,7 +433,7 @@ def _call_llm(system_prompt, user_prompt):
         return response_text
 
     except Exception as e:
-        logger.warning(f"[AI제어] LLM 호출 예외: {e}")
+        logger.error(f"[AI제어] LLM 호출 예외: {e}")
         return None
 
 
@@ -447,13 +448,13 @@ def _parse_relay_response(response_text):
     # 중첩 1단계 JSON 매칭 (devices:{...} 포함)
     match = re.search(r'\{(?:[^{}]|\{[^{}]*\})*\}', response_text, re.DOTALL)
     if not match:
-        logger.warning(f"[AI제어] JSON 패턴 없음: {response_text[:100]}")
+        logger.error(f"[AI제어] JSON 패턴 없음: {response_text[:100]}")
         return None
 
     try:
         parsed = json.loads(match.group())
     except json.JSONDecodeError as e:
-        logger.warning(f"[AI제어] JSON 파싱 실패: {e}")
+        logger.error(f"[AI제어] JSON 파싱 실패: {e}")
         return None
 
     action = parsed.get("action", "keep")
@@ -463,7 +464,7 @@ def _parse_relay_response(response_text):
         return {"action": "keep", "reason": reason}
 
     if action != "change":
-        logger.warning(f"[AI제어] 알 수 없는 action: {action}")
+        logger.error(f"[AI제어] 알 수 없는 action: {action}")
         return None
 
     devices = parsed.get("devices")
@@ -474,11 +475,11 @@ def _parse_relay_response(response_text):
         circulation = devices.pop("circulation", None)
 
     if not isinstance(devices, dict) or not circulation:
-        logger.warning(f"[AI제어] devices 또는 circulation 누락: {json.dumps(parsed, ensure_ascii=False)[:150]}")
+        logger.error(f"[AI제어] devices 또는 circulation 누락: {json.dumps(parsed, ensure_ascii=False)[:150]}")
         return None
 
     if circulation not in VALID_CIRCULATIONS:
-        logger.warning(f"[AI제어] 잘못된 순환모드: {circulation}")
+        logger.error(f"[AI제어] 잘못된 순환모드: {circulation}")
         return None
 
     normalized_devices = {
@@ -620,8 +621,8 @@ def control_ai_environment(farm_id, house_id, growth_stage='생육기', order_la
         user_prompt = _build_user_prompt(
             sensor_data, current_relay, growth_stage, optimal, trend_info, house_id
         )
-        logger.info(f"{scope}: [AI] === 시스템 프롬프트 ===\n{system_prompt}")
-        logger.info(f"{scope}: [AI] === 유저 프롬프트 ===\n{user_prompt}")
+        logger.debug(f"{scope}: [AI] === 시스템 프롬프트 ===\n{system_prompt}")
+        logger.debug(f"{scope}: [AI] === 유저 프롬프트 ===\n{user_prompt}")
         llm_result = _call_llm(system_prompt, user_prompt)
 
         if not llm_result:

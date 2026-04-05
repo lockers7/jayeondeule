@@ -25,13 +25,16 @@ def _create_session():
         'X-Requested-With': 'XMLHttpRequest',
         'Referer': RESULT_PAGE,
     })
+    logger.debug("[로또수집] 동행복권 세션 생성 중...")
     session.get(RESULT_PAGE, timeout=15)
+    logger.debug("[로또수집] 세션 생성 완료 (쿠키 획득)")
     return session
 
 
 def fetch_results(session, start_epsd):
     """특정 회차부터 10건씩 당첨번호를 조회한다."""
     try:
+        logger.debug(f"[로또수집] API 요청: epsd={start_epsd}")
         resp = session.get(f"{API_URL}?srchLtEpsd={start_epsd}", timeout=15)
         data = resp.json()
         return data.get('data', {}).get('list', [])
@@ -45,6 +48,7 @@ def update_lotto_db():
     from agri_ai_core.src.postgresql.connection import db_session
 
     # 마지막 회차 확인
+    logger.debug("[로또수집] DB에서 마지막 회차 조회 중...")
     with db_session() as db:
         rows = db.execute_query("SELECT MAX(draw_no) FROM lotto_results")
         last_draw = rows[0][0] if rows and rows[0][0] else 0

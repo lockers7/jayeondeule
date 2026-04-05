@@ -84,11 +84,13 @@ def _is_valid_uuid(value):
 # list_collections()를 호출하여 모든 컬렉션 ID를 캐시에 갱신
 # ══════════════════════════════════════════════════════════
 def _refresh_collection_ids():
+    logger.debug("[_refresh_collection_ids] 컬렉션 ID 캐시 갱신 시작")
     now = time.time()
     collections = list_collections().get("collections", [])
     for col in collections:
         _COLLECTION_ID_MAP[col["name"]] = col["id"]
         _COLLECTION_ID_TIMESTAMPS[col["name"]] = now
+    logger.debug(f"[_refresh_collection_ids] 컬렉션 ID 캐시 갱신 완료: {len(collections)}건")
 
 
 def get_collection_id_from_name(collection_name):
@@ -256,7 +258,7 @@ def ensure_required_collections_exist():
 
         missing = set(expected_names) - set(existing_names)
         if missing:
-            logger.warning(f" 누락된 컬렉션: {missing}")
+            logger.error(f" 누락된 컬렉션: {missing}")
             for name in missing:
                 metadata = {
                     "created_by": "ensure_required_collections_exist",
