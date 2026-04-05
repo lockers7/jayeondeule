@@ -1,6 +1,6 @@
-# ════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 # 텍스트 청킹: 문서를 의미 단위 청크로 분할하여 VectorDB에 저장.
-# ════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════
 import re
 import traceback
 from datetime import datetime
@@ -13,6 +13,7 @@ from agri_ai_core.src.ai.rag.embedder import embed_text
 logger = setup_logger(__name__)
 
 
+# ══════════════════
 # 문서를 청크로 분할
 # ══════════════════
 def chunk_document(document_content, chunk_size=1000, chunk_overlap=200):
@@ -80,8 +81,9 @@ def chunk_document(document_content, chunk_size=1000, chunk_overlap=200):
     return chunks
 
 
+# ═══════════════════════════════════
 # 문서를 청크로 나누어 벡터 DB에 저장
-# ═════════════════════
+# ═══════════════════════════════════
 def store_document_with_chunks(document_content, document_metadata, chunk_size=1000, chunk_overlap=200):
     result = {
         "success": False,

@@ -1,6 +1,6 @@
-# ════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════
 # LLM 쿼리 핸들러 — Tool Use 방식으로 사용자 질문 처리 및 SSE 스트리밍.
-# ════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════
 import hashlib
 import json
 import os
@@ -27,9 +27,10 @@ _LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT_SECONDS", "600"))
 _STREAM_HEARTBEAT_SECONDS = max(1, int(os.getenv("STREAM_HEARTBEAT_SECONDS", "3")))
 
 
+# ═════════════════════════════════════════════════════════════
 # 대화 주제 분류 (규칙 기반, LLM 호출 불필요)
 # VectorDB 저장 시 topic 메타데이터로 추가하여 검색 정확도 향상
-# ═════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════
 _TOPIC_PATTERNS = [
     (re.compile(r'센서|온도|습도|CO2|수온|릴레이|재배사|생육|균사'), "farm_data"),
     (re.compile(r'날씨|기온|비|바람|강수|예보|기상'), "weather"),
@@ -48,8 +49,9 @@ def _classify_topic(query: str) -> str:
     return "general"
 
 
+# ═══════════════════
 # 공통 중복 제거 헬퍼
-# ══════════════════
+# ═══════════════════
 def _dedupe_list(items, type_check, key_fn, value_fn=None):
     deduped, seen = [], set()
     for item in items or []:
@@ -63,8 +65,9 @@ def _dedupe_list(items, type_check, key_fn, value_fn=None):
     return deduped
 
 
+# ═════════════════════
 # 도구별 기본 인자 생성
-# ══════════════════
+# ═════════════════════
 # 파일명 패턴: UUID prefix + 파일명.확장자 또는 단순 파일명.확장자
 # 확장자는 알파벳만 허용 (소수점 숫자 오탐 방지: 2528.92000 등)
 # 단순 파일명은 최소 1개 문자(한글/영문) 포함 필수
@@ -118,8 +121,9 @@ def _build_default_tool_args(user_query, farm_id, house_id, auth_farm_id=None):
     }
 
 
+# ═════════════════════════════════════════════
 # 하이브리드 대화 컨텍스트 (VectorDB + 최근 턴)
-# ═══════════════════════════════
+# ═════════════════════════════════════════════
 _HYBRID_RECENT_TURNS = int(os.getenv("HYBRID_RECENT_TURNS", "2"))
 _HYBRID_RELATED_RESULTS = int(os.getenv("HYBRID_RELATED_RESULTS", "5"))
 _HYBRID_MAX_RECORDS_PER_FARM = int(os.getenv("HYBRID_MAX_RECORDS", "30"))
@@ -127,8 +131,9 @@ _HYBRID_MAX_RECORDS_PER_FARM = int(os.getenv("HYBRID_MAX_RECORDS", "30"))
 _CONVERSATION_MAX_DISTANCE = float(os.getenv("CONV_VECTOR_MAX_DISTANCE", "3.0"))
 
 
+# ════════════════════════════════════════════════════════════
 # 하이브리드 대화 컨텍스트: 직전 N턴 + VectorDB 관련 대화 검색
-# ════════════════════════════════════════
+# ════════════════════════════════════════════════════════════
 def _load_hybrid_context(session_id, user_query, farm_id, label=""):
     if not session_id:
         return None
@@ -192,8 +197,9 @@ def _load_hybrid_context(session_id, user_query, farm_id, label=""):
     return history if history else None
 
 
+# ══════════════════════════════════════════════════════════
 # VectorDB conversation_collection에서 관련 과거 대화를 검색
-# ═══════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def _search_related_conversations(user_query, farm_id):
     try:
         from agri_ai_core.src.ai.rag.embedder import embed_text
@@ -310,8 +316,9 @@ def _search_related_conversations(user_query, farm_id):
         return None
 
 
+# ═════════════════════════════════════════════════
 # 대화 턴 저장: PostgreSQL(동기) + VectorDB(비동기)
-# ═══════════════════════════════════════
+# ═════════════════════════════════════════════════
 def _save_conversation_turn_hybrid(session_id, user_query, response_text, farm_id=None, label=""):
     if not session_id:
         return
@@ -340,8 +347,9 @@ def _save_conversation_turn_hybrid(session_id, user_query, response_text, farm_i
         ).start()
 
 
+# ═══════════════════════════════════════════════════════
 # 백그라운드: Q+A 쌍을 VectorDB에 임베딩 저장 + 수명 관리
-# ══════════════════════════════════════
+# ═══════════════════════════════════════════════════════
 def _async_vectordb_save(session_id, user_query, response_text, farm_id):
     try:
         from agri_ai_core.src.ai.rag.embedder import embed_text
@@ -400,9 +408,10 @@ def _async_vectordb_save(session_id, user_query, response_text, farm_id):
         logger.warning(f"[하이브리드] VectorDB 비동기 저장 실패: {e}")
 
 
+# ═══════════════════════════════════════
 # farm_id별 대화 기록을 최대 N건으로 유지
 # LLM 호출 + 타임아웃 처리
-# ══════════════════
+# ═══════════════════════════════════════
 def _prune_old_conversations(collection_name, farm_id):
     try:
         from agri_ai_core.src.chroma.operations import get_documents, delete_document
@@ -463,8 +472,9 @@ async def _call_llm_with_timeout(full_query, farm_name, default_tool_args, conve
     )
 
 
+# ════════════════════════════════════════════════════════════════════════════
 # LLM 결과를 (response_text, sources, tools_used, response_type) 튜플로 언패킹
-# ═══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 def _unpack_llm_result(result):
     if isinstance(result, dict):
         return (
@@ -476,10 +486,11 @@ def _unpack_llm_result(result):
     return (str(result), [], [], "general")
 
 
+# ═══════════════════════════════════════════
 # 3단계 파이프라인 모드 설정
 # USE_3STAGE_PIPELINE=true 환경변수로 활성화
 # 기존 Tool Use 루프는 fallback으로 항상 보존
-# ════════════════════════════════
+# ═══════════════════════════════════════════
 _USE_3STAGE_PIPELINE = os.getenv("USE_3STAGE_PIPELINE", "false").lower() == "true"
 
 
@@ -580,8 +591,9 @@ def _run_3stage_pipeline_sync(user_query, full_query, farm_id, house_id, farm_na
         )
 
 
+# ═════════════════════════
 # 질의 처리 (Tool Use 방식)
-# ═══════════════════
+# ═════════════════════════
 async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=None,
 
 # (query_llm_simple 파라미터 블록 계속)
@@ -708,8 +720,9 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
         }
 
 
+# ══════════════════════
 # SSE 스트리밍 질의 처리
-# ══════════════════
+# ══════════════════════
 
 def _split_for_streaming(text, target_size=30):
     if not text:

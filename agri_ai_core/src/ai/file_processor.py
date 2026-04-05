@@ -1,6 +1,6 @@
-# ═════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 # 파일 처리 모듈 — 업로드 파일(CSV/Excel/PDF/텍스트)을 LLM 입력 형식으로 변환.
-# ═════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 import os
 import pandas as pd
 from typing import List, Dict
@@ -10,8 +10,9 @@ from agri_ai_core.logs import setup_logger
 logger = setup_logger(__name__)
 
 
+# ═════════════════════════════════════════════
 # DataFrame → 요약 텍스트 변환 (CSV/Excel 공용)
-# ════════════════════════════════════
+# ═════════════════════════════════════════════
 def _format_dataframe(df, max_rows, prefix=""):
     total_rows = len(df)
     if total_rows > max_rows:
@@ -31,6 +32,7 @@ def read_csv_file(file_path: str, max_rows: int = 100) -> str:
         return f"CSV 파일을 읽을 수 없습니다: {str(e)}"
 
 
+# ══════════════════
 # Excel 파일 읽기
 # ══════════════════
 def read_excel_file(file_path: str, max_rows: int = 100) -> str:
@@ -50,6 +52,7 @@ def read_excel_file(file_path: str, max_rows: int = 100) -> str:
         return f"Excel 파일을 읽을 수 없습니다: {str(e)}"
 
 
+# ══════════════════
 # 텍스트 파일 읽기
 # ══════════════════
 _TEXT_ENCODINGS = ("utf-8", "cp949", "euc-kr", "utf-8-sig", "latin-1")
@@ -72,6 +75,7 @@ def read_text_file(file_path: str, max_chars: int = 10000) -> str:
     return "텍스트 파일을 읽을 수 없습니다: 인코딩을 감지할 수 없습니다."
 
 
+# ══════════════════
 # PDF 파일 읽기
 # ══════════════════
 def read_pdf_file(file_path: str) -> str:
@@ -151,8 +155,9 @@ def read_pdf_file(file_path: str) -> str:
         return ""
 
 
+# ═══════════════════════
 # 업로드된 파일 목록 처리
-# ══════════════════
+# ═══════════════════════
 def process_uploaded_files(file_paths: List[Dict[str, str]]) -> str:
     if not file_paths:
         return ""

@@ -1,6 +1,6 @@
-# ═══════════════════════════════════════
+# ════════════════════════════════════════════════════════════════
 # 로그 모듈 - 로거 생성, 일별 로테이션 핸들러, 로그 정리 유틸리티.
-# ═══════════════════════════════════════
+# ════════════════════════════════════════════════════════════════
 import os
 import re
 import sys
@@ -15,6 +15,7 @@ from agri_ai_core.config import settings
 _loggers_initialized = {}
 
 
+# ═══════════════════════════
 # LOG CONFIGURATION CONSTANTS
 # ═══════════════════════════
 
@@ -27,9 +28,10 @@ LOG_RETENTION_DAYS = 100
 MAX_PLAIN_LOG_LINES = 50000
 
 
+# ═════════════════════════════════════════════════════════
 # DAILY ROTATING FILE HANDLER
 # 날짜가 바뀌면 새로운 로그 파일을 자동으로 생성하는 핸들러
-# ════════════════════════════════
+# ═════════════════════════════════════════════════════════
 class DailyRotatingFileHandler(logging.FileHandler):
     def __init__(self, filename_pattern, encoding=None):
         self.filename_pattern = filename_pattern
@@ -64,6 +66,7 @@ class DailyRotatingFileHandler(logging.FileHandler):
         super().emit(record)
 
 
+# ═════════════════════
 # LOGGER SETUP FUNCTION
 # ═════════════════════
 def _setup_logger_impl(cache_key, logger_name, file_pattern, error_label, use_plain_file=False):
@@ -137,6 +140,7 @@ def setup_api_logger(name=None):
     return _setup_logger_impl(cache_key, cache_key, "api.log", "API 로그", use_plain_file=True)
 
 
+# ═════════════════════
 # LOG CLEANUP FUNCTIONS
 # ═════════════════════
 def _write_temp_and_replace(filepath, lines):
@@ -151,8 +155,9 @@ def _write_temp_and_replace(filepath, lines):
     os.replace(tmp_path, filepath)
 
 
+# ════════════════════════════════════════════════════════
 # ai_*.log, web_*.log, shop_*.log 중 지정일 이전 파일 삭제
-# ══════════════════════════════════════════════
+# ════════════════════════════════════════════════════════
 def delete_old_daily_logs(log_dir, days=LOG_RETENTION_DAYS):
     cutoff = datetime.now() - timedelta(days=days)
     deleted_count = 0
@@ -174,8 +179,9 @@ def delete_old_daily_logs(log_dir, days=LOG_RETENTION_DAYS):
     return deleted_count
 
 
+# ═══════════════════════════════════════════════════════
 # 타임스탬프 기반으로 단일 로그 파일에서 오래된 항목 제거
-# ═══════════════════════════════
+# ═══════════════════════════════════════════════════════
 def trim_old_log_entries(log_dir, days=LOG_RETENTION_DAYS):
     cutoff = datetime.now() - timedelta(days=days)
     cutoff_str = cutoff.strftime("%Y-%m-%d")
@@ -236,8 +242,9 @@ def trim_old_log_entries(log_dir, days=LOG_RETENTION_DAYS):
     return trimmed_count
 
 
+# ════════════════════════════════════════════════════════
 # 타임스탬프 없는 로그 파일의 크기를 제한 (최근 줄만 유지)
-# ═════════════════════════════════
+# ════════════════════════════════════════════════════════
 def trim_large_plain_logs(log_dir, max_lines=MAX_PLAIN_LOG_LINES):
     target_files = ["ollama.log", "react_build.log"]
     trimmed_count = 0
@@ -266,8 +273,9 @@ def trim_large_plain_logs(log_dir, max_lines=MAX_PLAIN_LOG_LINES):
     return trimmed_count
 
 
+# ════════════════════════════════════
 # 전체 로그 정리 (앱 시작 시 1회 호출)
-# ═══════════════════════
+# ════════════════════════════════════
 def cleanup_all_logs():
     log_dir = settings.logging.path or "logs"
     if not os.path.isdir(log_dir):
@@ -292,6 +300,7 @@ def cleanup_all_logs():
         print("[로그정리] 완료 (정리할 항목 없음)")
 
 
+# ══════════════════
 # EXPORTS
 # ══════════════════
 
