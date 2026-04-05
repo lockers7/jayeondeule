@@ -1,6 +1,6 @@
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 # ChromaDB 클라이언트: REST API 통신, 컬렉션 관리, heartbeat.
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 import time
 from datetime import datetime
 
@@ -32,9 +32,8 @@ def _http_request(method: str, url: str, payload=None, timeout: int = 10):
     return status_code, data, text
 
 
-# ════════════════════════════════════════════════════════════
 # ChromaDB API URL 생성
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def get_chroma_url(endpoint: str, collection_id: str = None):
     base = f"http://{CHROMA_HOST}:{CHROMA_PORT}/api/v2"
     if collection_id:
@@ -42,9 +41,8 @@ def get_chroma_url(endpoint: str, collection_id: str = None):
     return f"{base}/{endpoint}"
 
 
-# ════════════════════════════════════════════════════════════
 # 서버 연결 확인 (heartbeat)
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def heartbeat():
     try:
         url = get_chroma_url("heartbeat")
@@ -62,16 +60,14 @@ def heartbeat():
 
 
 
-# ════════════════════════════════════════════════════════════
 # 컬렉션 이름으로 ID 조회
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def _is_valid_uuid(value):
     return isinstance(value, str) and ("-" in value or len(value) == 36)
 
 
-# ════════════════════════════════════════════════════════════
 # list_collections()를 호출하여 모든 컬렉션 ID를 캐시에 갱신
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def _refresh_collection_ids():
     now = time.time()
     collections = list_collections().get("collections", [])
@@ -99,9 +95,8 @@ def get_collection_id_from_name(collection_name):
     return _COLLECTION_ID_MAP.get(collection_name)
 
 
-# ════════════════════════════════════════════════════════════
 # 컬렉션 조회
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def get_collection(collection_name):
     try:
         collections = list_collections()
@@ -135,9 +130,8 @@ def get_collection(collection_name):
         return {"error": str(e)}
 
 
-# ════════════════════════════════════════════════════════════
 # 컬렉션 목록 조회
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def list_collections():
     try:
         url = f"{CHROMA_API_BASE}/collections"
@@ -167,9 +161,8 @@ def list_collections():
         return {"error": str(e)}
 
 
-# ════════════════════════════════════════════════════════════
 # 컬렉션 생성
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def create_collection(collection_name=None, metadata=None):
     from agri_ai_core.src.chroma.utils import _sanitize_for_json, _embedding_dim
 
@@ -216,9 +209,8 @@ def create_collection(collection_name=None, metadata=None):
         return {"error": str(e)}
 
 
-# ════════════════════════════════════════════════════════════
 # 필수 컬렉션 존재 확인 및 생성
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def ensure_required_collections_exist():
     try:
         names = [

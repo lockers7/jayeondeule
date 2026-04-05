@@ -1,6 +1,6 @@
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 # ChromaDB 유틸리티: 메타데이터 변환, JSON 직렬화, 문서 ID 생성.
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 import json
 import pandas as pd
 from decimal import Decimal
@@ -12,14 +12,12 @@ from agri_ai_core.config import settings
 logger = setup_logger(__name__)
 
 
-# ════════════════════════════════════════════════════════════
 # 임베딩 차원 반환
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def _embedding_dim() -> int:
     return settings.embedding_dim
 
 
-# ════════════════════════════════════════════════════════════
 # JSON 직렬화를 위한 데이터 정리
 # 값을 JSON 직렬화 가능한 형태로 변환
 #
@@ -28,7 +26,7 @@ def _embedding_dim() -> int:
 #
 # Returns:
 #     JSON 직렬화 가능한 값
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def _sanitize_for_json(value):
     if isinstance(value, Decimal):
         return int(value) if value == int(value) else float(value)
@@ -43,7 +41,6 @@ def _sanitize_for_json(value):
     return value
 
 
-# ════════════════════════════════════════════════════════════
 # 메타데이터를 ChromaDB 호환 형식으로 변환
 # 메타데이터를 ChromaDB 호환 형식으로 변환
 # 문자열, 숫자, 불린값은 그대로 유지
@@ -54,7 +51,7 @@ def _sanitize_for_json(value):
 #
 # Returns:
 #     dict: ChromaDB 호환 메타데이터
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def prepare_metadata_for_chroma(metadata: dict) -> dict:
     if not isinstance(metadata, dict):
         return {}
@@ -84,14 +81,12 @@ def prepare_metadata_for_chroma(metadata: dict) -> dict:
     return clean_metadata
 
 
-# ════════════════════════════════════════════════════════════
 # 메타데이터 정리 (prepare_metadata_for_chroma 별칭)
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def clean_metadata(metadata: dict) -> dict:
     return prepare_metadata_for_chroma(metadata)
 
 
-# ════════════════════════════════════════════════════════════
 # ChromaDB에서 조회한 metadata를 원래 형태로 복원
 # ChromaDB에서 조회한 메타데이터를 원래 형태로 복원
 #
@@ -100,7 +95,7 @@ def clean_metadata(metadata: dict) -> dict:
 #
 # Returns:
 #     dict: 복원된 메타데이터
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def restore_metadata_from_chroma(metadata: dict) -> dict:
     if not isinstance(metadata, dict):
         return {}
@@ -124,7 +119,6 @@ def restore_metadata_from_chroma(metadata: dict) -> dict:
     return restored_metadata
 
 
-# ════════════════════════════════════════════════════════════
 # 문서 ID 생성기
 # 문서 ID 생성
 #
@@ -136,7 +130,7 @@ def restore_metadata_from_chroma(metadata: dict) -> dict:
 #
 # Returns:
 #     str: 생성된 문서 ID
-# ════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════════════
 def generate_doc_id(kind=None, farm_id=None, house_id=None, timestamp=None):
     try:
         if timestamp is None:

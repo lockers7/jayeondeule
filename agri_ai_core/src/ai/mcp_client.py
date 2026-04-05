@@ -1,6 +1,6 @@
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
 # MCP (Model Context Protocol) 클라이언트 — MCP 서버(web-search, postgres 등) 공통 호출.
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
 import json
 import os
 import subprocess
@@ -133,9 +133,8 @@ def _log_dns_diagnostics_once(min_interval_sec: int = 30) -> None:
             logger.warning(f"[DNS진단] {name} 실행 실패: {diag_err}")
 
 
-# ════════════════════════════════════════════════════════════
 # `.vscode/mcp.json`에서 MCP 서버 설정을 로드.
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def _load_mcp_servers() -> Dict[str, Dict[str, Any]]:
     try:
         if not MCP_CONFIG_PATH.exists():
@@ -216,9 +215,8 @@ def call_mcp_server_tool(
     arguments: Dict[str, Any],
     timeout: int = 30,
 
-# ════════════════════════════════════════════════════════════
 # 지정 MCP 서버의 도구를 1회 호출.
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 ) -> Dict[str, Any]:
     t_start = time.time()
     # 인자 요약 (긴 값 잘라서 로깅)
@@ -474,10 +472,9 @@ def mcp_fetch_request(
     json_body: Optional[Any] = None,
     timeout: int = 20,
 
-# ════════════════════════════════════════════════════════════
 # MCP fetch 서버를 사용해 HTTP 요청 수행.
 # 서버/도구 비호환 시 실패 응답을 반환하며, 호출자가 직접 폴백을 적용한다.
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 ) -> Dict[str, Any]:
     if not url or not isinstance(url, str):
         return {"success": False, "status_code": 400, "json": None, "text": "URL is required"}
@@ -579,9 +576,8 @@ def mcp_fetch_json(
     json_body: Optional[Any] = None,
     timeout: int = 20,
 
-# ════════════════════════════════════════════════════════════
 # MCP fetch 요청 결과를 JSON 중심으로 반환.
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 ) -> Dict[str, Any]:
     result = mcp_fetch_request(
         url=url,
@@ -616,10 +612,9 @@ def mcp_http_request(
     timeout: int = 20,
     headers: Optional[Dict[str, str]] = None,
 
-# ════════════════════════════════════════════════════════════
 # MCP fetch 기반 공통 HTTP JSON 요청.
 # Returns: (status_code, data, text_or_error)
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 ) -> Tuple[int, Optional[Any], str]:
     # .env 미적용 환경에서도 지연/오류를 줄이기 위해 기본 비활성.
     use_mcp_fetch = is_true(os.getenv("USE_MCP_FETCH", "false"))
@@ -721,9 +716,8 @@ def _call_postgres_tool(sql: str, timeout: int = 30) -> Dict[str, Any]:
     return last_error
 
 
-# ════════════════════════════════════════════════════════════
 # MCP postgres 서버를 통해 SQL 실행 후 행 데이터를 정규화.
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def postgres_query(sql: str, timeout: int = 30) -> Dict[str, Any]:
     if not sql or not isinstance(sql, str):
         return {"success": False, "error": "SQL is required", "rows": []}
@@ -768,9 +762,8 @@ def postgres_query(sql: str, timeout: int = 30) -> Dict[str, Any]:
     return {"success": True, "rows": [], "raw": result, "text": "\n".join(text_blocks)}
 
 
-# ════════════════════════════════════════════════════════════
 # MCP web-search 서버를 통한 웹 검색.
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def search_web(query: str, max_results: int = 5) -> Dict[str, Any]:
     try:
         if not query or not query.strip():
@@ -838,9 +831,8 @@ def search_web(query: str, max_results: int = 5) -> Dict[str, Any]:
         return {"success": False, "error": str(e), "results": []}
 
 
-# ════════════════════════════════════════════════════════════
 # MCP web-search 기반 현재 날씨 조회.
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def get_current_weather(location: str) -> Dict[str, Any]:
     try:
         logger.debug(f"날씨 조회: {location}")

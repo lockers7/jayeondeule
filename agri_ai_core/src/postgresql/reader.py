@@ -1,6 +1,6 @@
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 # PostgreSQL 데이터 수집: 센서, 릴레이, 생육 데이터 조회.
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.postgresql.connection import db_session
 # queries를 직접 import (postgresql/__init__.py 경유 방지 → 순환 참조 해소)
@@ -9,9 +9,8 @@ import agri_ai_core.src.postgresql.queries as dbQry
 logger = setup_logger(__name__)
 
 
-# ════════════════════════════════════════════════════════════
 # DB 조회 공통 래퍼 (fetch_all / fetch_one 통합)
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def _db_query(query, vals=(), *, fetch="all", error_msg="DB 조회", default=None):
     with db_session() as database:
         try:
