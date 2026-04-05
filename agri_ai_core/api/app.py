@@ -1,6 +1,6 @@
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 # FastAPI 애플리케이션: REST API 서버, LLM 질의, RAG 엔드포인트.
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 import json
 import os
 import time
@@ -49,9 +49,8 @@ async def verify_api_key(api_key: str = Security(api_key_header)):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
-# ════════════════════════════════════════════════════════════
 # 바이트/문자열을 JSON 파싱, 실패 시 fallback 반환
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def _try_parse_json(data, fallback="(non-JSON)"):
     if not data:
         return None
@@ -61,9 +60,8 @@ def _try_parse_json(data, fallback="(non-JSON)"):
         return fallback
 
 
-# ════════════════════════════════════════════════════════════
 # SSE 스트리밍 질의 엔드포인트 — 실시간 status/token/done 이벤트 전송
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 class JsonLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if not request.url.path.startswith("/api/"):
@@ -562,9 +560,8 @@ async def rag_save(request: RagSaveRequest, _=Depends(verify_api_key)):
         )
 
 
-# ════════════════════════════════════════════════════════════
 # 대화 이력 조회 API
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 
 @app.get("/api/v1/conversation/history")
 async def get_conversation_history(session_id: str, limit: int = 10, _=Depends(verify_api_key)):
@@ -580,9 +577,8 @@ async def get_conversation_history(session_id: str, limit: int = 10, _=Depends(v
         return {"success": False, "history": [], "session_id": session_id}
 
 
-# ════════════════════════════════════════════════════════════
 # 관리자 전용: LLM 모델 관리 API
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 
 @app.get("/api/v1/admin/models")
 async def get_available_models(_=Depends(verify_api_key)):

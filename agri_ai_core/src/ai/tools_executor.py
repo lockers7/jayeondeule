@@ -1,6 +1,6 @@
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 # LLM Tool 실행기 — LLM이 요청한 도구(검색, DB, 릴레이 등)를 실행.
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 import json
 import os
 import re
@@ -81,9 +81,8 @@ def _resolve_relay_ids(house_id, farm_id):
 
 
 
-# ════════════════════════════════════════════════════════════
 # json.dumps 기본 직렬화로 처리할 수 없는 타입 변환.
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def _json_default(value: Any) -> Any:
     if isinstance(value, Decimal):
         if value.is_nan() or value.is_infinite():
@@ -96,9 +95,8 @@ def _json_default(value: Any) -> Any:
     return str(value)
 
 
-# ════════════════════════════════════════════════════════════
 # 학습 데이터 삭제
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def delete_farm_knowledge(file_name: str, farm_id: str = None) -> Dict[str, Any]:
     t_start = time.time()
     logger.info(f"[학습삭제] 시작 file_name={file_name} farm_id={farm_id}")
@@ -641,9 +639,8 @@ def search_farm_knowledge(
         }
 
 
-# ════════════════════════════════════════════════════════════
 # 농장 실시간 데이터 가져오기 (센서+릴레이+임계값+AI판단)
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def get_farm_realtime_data(house_id: str = None, farm_id: str = None, data_type: str = "all") -> Dict[str, Any]:
     t_start = time.time()
     logger.info(f"[PostgreSQL조회] 시작 farm_id={farm_id} house_id={house_id} data_type={data_type}")
@@ -804,11 +801,10 @@ def get_farm_realtime_data(house_id: str = None, farm_id: str = None, data_type:
         }
 
 
-# ════════════════════════════════════════════════════════════
 # 릴레이(장치) 제어
 # LLM이 호출하여 특정 재배사의 장치를 켜거나 끈다.
 # relay_manager.set_relay_value를 통해 실제 DB에 릴레이 값을 설정한다.
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def _get_ai_judgment_safe(farm_id, house_id):
     """AI 환경 판단을 안전하게 호출 (실패해도 None 반환)"""
     try:
@@ -999,10 +995,9 @@ def control_relay(house_id: str, device_name: str = None, action: str = None,
         return {"success": False, "error": str(e)}
 
 
-# ════════════════════════════════════════════════════════════
 # 릴레이 다중 일괄 제어
 # 여러 장치를 한 번에 제어한다 (LLM의 반복 tool call 횟수 절감).
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def control_relays_batch(house_id: str, devices: List[Dict[str, str]] = None,
                          farm_id: str = None, mode: str = None) -> Dict[str, Any]:
     t_start = time.time()
@@ -1121,10 +1116,9 @@ def control_relays_batch(house_id: str, devices: List[Dict[str, str]] = None,
 
 
 
-# ════════════════════════════════════════════════════════════
 # Opinet 유가정보 API 조회
 # 전국/시도/시군구 평균 유가, 최저가 주유소 등 조회
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 _OPINET_API_KEY = os.getenv("OPNET_API", "")
 _OPINET_BASE = "http://www.opinet.co.kr/api"
 
@@ -1325,9 +1319,8 @@ def search_gas_price(query_type: str = "avg_national", sido: str = None,
     return {"success": False, "error": "유가 정보를 조회할 수 없습니다 (API 장애 + DB 데이터 없음)"}
 
 
-# ════════════════════════════════════════════════════════════
 # 도구 실행기 (메인)
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
     t_start = time.time()
     logger.info(f"[도구실행] 시작 tool={tool_name} args={tool_args}")

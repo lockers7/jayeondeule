@@ -1,6 +1,6 @@
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 # 데이터 분석: 센서/릴레이 통계 분석 및 최적 환경 조건 도출.
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 import numpy as np
 from datetime import datetime
 
@@ -13,9 +13,8 @@ from agri_ai_core.src.utils import clean_sensor_value
 logger = setup_logger(__name__)
 
 
-# ════════════════════════════════════════════════════════════
 # 생육상태 순위 키워드
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 RANK_KEYWORDS = {
     "최상": 5, "특상": 5, "특급": 5,
     "상": 4, "1등급": 4, "A급": 4, "우수": 4,
@@ -27,9 +26,8 @@ POSITIVE_KEYWORDS = ["좋음", "양호", "우수", "성공", "높음", "품질",
 NEGATIVE_KEYWORDS = ["벌레", "문제", "부족", "실패", "병해", "충해", "질병", "곰팡이", "나쁨", "이상", "낮음"]
 
 
-# ════════════════════════════════════════════════════════════
 # 생육상태 순위 점수 반환
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def get_growth_status_rank(status):
     logger.debug(f"생육상태 순위 분석: {status}")
 
@@ -44,9 +42,8 @@ def get_growth_status_rank(status):
     return 0
 
 
-# ════════════════════════════════════════════════════════════
 # 리마크 긍정/부정 분석
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def is_positive_remark(remark):
     logger.debug(f"리마크 긍정/부정 분석: {remark}")
 
@@ -66,9 +63,8 @@ def is_positive_remark(remark):
         return 0
 
 
-# ════════════════════════════════════════════════════════════
 # 최적 환경 조건 초기화
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def initialize_optimal_conditions(hour):
     return {
         "hour_of_day": hour,
@@ -88,9 +84,8 @@ def initialize_optimal_conditions(hour):
     }
 
 
-# ════════════════════════════════════════════════════════════
 # 시간 패턴 초기화
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def initialize_time_patterns(current_hour):
     return {
         "hour_of_day": current_hour,
@@ -106,9 +101,8 @@ def initialize_time_patterns(current_hour):
     }
 
 
-# ════════════════════════════════════════════════════════════
 # 최적 작물 선택
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def select_top_crops(crops_data):
     if not crops_data:
         return []
@@ -140,9 +134,8 @@ def select_top_crops(crops_data):
     return best_crops[:min(3, len(best_crops))]
 
 
-# ════════════════════════════════════════════════════════════
 # 최적 환경 데이터 수집
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def collect_optimal_data(units_data, top_crops, current_hour):
     optimal_sensor_data = []
     optimal_relay_data = []
@@ -205,9 +198,8 @@ def collect_optimal_data(units_data, top_crops, current_hour):
     }
 
 
-# ════════════════════════════════════════════════════════════
 # 센서 통계 공통 헬퍼
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def _apply_stats(values, target_dict):
     if values:
         target_dict["min"] = round(np.percentile(values, 25), 1)
@@ -215,17 +207,15 @@ def _apply_stats(values, target_dict):
         target_dict["optimal"] = round(np.mean(values), 1)
 
 
-# ════════════════════════════════════════════════════════════
 # 센서 데이터에서 특정 필드의 값 리스트를 추출 (0 제외).
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def _collect_sensor_values(sensor_data, field_key):
     return [entry["values"].get(field_key, 0) for entry in sensor_data
             if entry.get("values", {}).get(field_key)]
 
 
-# ════════════════════════════════════════════════════════════
 # 센서 데이터에서 주간/야간 분리하여 값 리스트 추출.
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def _collect_day_night_values(sensor_data, field_key):
     day = [entry["values"].get(field_key, 0) for entry in sensor_data
            if entry["is_daytime"] and entry.get("values", {}).get(field_key)]
@@ -234,9 +224,8 @@ def _collect_day_night_values(sensor_data, field_key):
     return day, night
 
 
-# ════════════════════════════════════════════════════════════
 # 온도 조건 분석
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def analyze_temperature_conditions(sensor_data, optimal_conditions):
     day_temps = []
     night_temps = []
@@ -258,42 +247,37 @@ def analyze_temperature_conditions(sensor_data, optimal_conditions):
     _apply_stats(night_temps, optimal_conditions["temperature"]["night"])
 
 
-# ════════════════════════════════════════════════════════════
 # 습도 조건 분석
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def analyze_humidity_conditions(sensor_data, optimal_conditions):
     day_humidity, night_humidity = _collect_day_night_values(sensor_data, "indoor_humidity_value")
     _apply_stats(day_humidity, optimal_conditions["humidity"]["day"])
     _apply_stats(night_humidity, optimal_conditions["humidity"]["night"])
 
 
-# ════════════════════════════════════════════════════════════
 # CO2 조건 분석
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def analyze_co2_conditions(sensor_data, optimal_conditions):
     values = _collect_sensor_values(sensor_data, "co2_concentration_value")
     _apply_stats(values, optimal_conditions["co2"])
 
 
-# ════════════════════════════════════════════════════════════
 # 수온 조건 분석
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def analyze_water_temperature_conditions(sensor_data, optimal_conditions):
     values = _collect_sensor_values(sensor_data, "water_temperature_value")
     _apply_stats(values, optimal_conditions["water_temperature"])
 
 
-# ════════════════════════════════════════════════════════════
 # 광량 조건 분석
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def analyze_light_level_conditions(sensor_data, optimal_conditions):
     values = _collect_sensor_values(sensor_data, "light_level_value")
     _apply_stats(values, optimal_conditions["light_level"])
 
 
-# ════════════════════════════════════════════════════════════
 # 최적 조건 분석
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def analyze_optimal_conditions(optimal_data, current_hour):
     optimal_conditions = initialize_optimal_conditions(current_hour)
 
@@ -311,9 +295,8 @@ def analyze_optimal_conditions(optimal_data, current_hour):
     return optimal_conditions
 
 
-# ════════════════════════════════════════════════════════════
 # 농장별 최적 조건 분석
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def analyze_farm_optimal_conditions(data):
     current_hour = datetime.now().hour
 
@@ -348,9 +331,8 @@ def analyze_farm_optimal_conditions(data):
     return optimal_conditions
 
 
-# ════════════════════════════════════════════════════════════
 # 센서 데이터 수집
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def collect_sensor_data(hour_units):
     sensor_data = {"temperature": [], "humidity": [], "co2": []}
     field_map = {
@@ -370,9 +352,8 @@ def collect_sensor_data(hour_units):
     return sensor_data
 
 
-# ════════════════════════════════════════════════════════════
 # 센서 데이터로 시간 패턴 업데이트
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def update_time_patterns_with_sensor_data(time_patterns, sensor_data, current_hour):
     current_hour_str = str(current_hour)
 
@@ -386,9 +367,8 @@ def update_time_patterns_with_sensor_data(time_patterns, sensor_data, current_ho
         time_patterns["daily"]["co2"][current_hour_str] = round(np.mean(sensor_data["co2"]), 1)
 
 
-# ════════════════════════════════════════════════════════════
 # 릴레이 데이터 분석 및 시간 패턴 업데이트
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def analyze_relay_data_for_time_patterns(time_patterns, hour_units, current_hour):
     for key in RELAY_KEYS:
         relay_values = []
@@ -410,9 +390,8 @@ def analyze_relay_data_for_time_patterns(time_patterns, hour_units, current_hour
             time_patterns["daily"]["relay_usage"][key][str(current_hour)] = round(on_ratio, 2)
 
 
-# ════════════════════════════════════════════════════════════
 # 농장별 시간 패턴 분석
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def analyze_farm_time_patterns(data, hour):
     logger.debug("농장 시간 패턴 분석 시작")
 
@@ -440,9 +419,8 @@ def analyze_farm_time_patterns(data, hour):
     return time_patterns
 
 
-# ════════════════════════════════════════════════════════════
 # AI 학습 마지막 실행 타임스탬프를 DB에 기록
-# ════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
 def update_learning_timestamp():
     try:
         logger.debug("-" * 100)
