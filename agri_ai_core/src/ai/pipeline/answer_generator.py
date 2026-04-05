@@ -1,6 +1,6 @@
-# ════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
 # 3단계 답변 작성: 수집된 데이터 기반 LLM 답변 생성 및 출처 선별.
-# ════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
 import re
 import time
 import traceback
@@ -147,8 +147,9 @@ def generate_answer(user_query, analysis_result, collected_result,
         }
 
 
+# ═════════════════════════════════════
 # LLM 응답에서 <USED_SOURCES> 태그 파싱
-# ═════════════════════════════
+# ═════════════════════════════════════
 def _extract_used_sources(raw_answer):
     """
     LLM 응답에서 <USED_SOURCES>1,3,5</USED_SOURCES> 태그를 파싱합니다.
@@ -183,6 +184,7 @@ def _remove_source_tags(text):
     return re.sub(r'\s*<USED_SOURCES>.*?</USED_SOURCES>\s*', '', text, flags=re.IGNORECASE | re.DOTALL).strip()
 
 
+# ══════════════════
 # 수집 데이터 포맷
 # ══════════════════
 def _format_collected_data(collected_result):
@@ -213,8 +215,9 @@ def _format_collected_data(collected_result):
     return "\n\n".join(parts)
 
 
+# ══════════════════════════
 # 인사/대화참조 등 단순 응답
-# ══════════════════
+# ══════════════════════════
 def _generate_simple_response(user_query, conversation_history, farm_name, speech_style, response_type):
     try:
         from agri_ai_core.src.ai.llm_client import (

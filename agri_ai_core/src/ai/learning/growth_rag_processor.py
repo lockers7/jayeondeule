@@ -1,6 +1,6 @@
-# ═════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # 생육 기반 인과 관계 RAG: 환경 통계와 생육 데이터를 VectorDB에 저장.
-# ═════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 import hashlib
 import time
 import traceback
@@ -15,9 +15,10 @@ from agri_ai_core.src.utils.conversion import safe_float, safe_int
 logger = setup_logger(__name__)
 
 
+# ═════════════════════════════════════════════════════════
 # 마지막 RAG 처리 시점 관리
 # 마지막 생육 RAG 처리 시점을 조회한다. 없으면 7일 전 반환.
-# ════════════════════════════════════
+# ═════════════════════════════════════════════════════════
 def _get_last_rag_datetime() -> str:
     try:
         with db_session() as database:
@@ -31,8 +32,9 @@ def _get_last_rag_datetime() -> str:
     return (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
 
 
+# ═══════════════════════════════════════════════════
 # 현재 시간을 마지막 생육 RAG 처리 시점으로 저장한다.
-# ═══════════════════════════════
+# ═══════════════════════════════════════════════════
 def _update_last_rag_datetime() -> None:
     try:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -46,9 +48,10 @@ def _update_last_rag_datetime() -> None:
         logger.error(f"[생육RAG] 처리 시점 갱신 실패: {e}")
 
 
+# ═════════════════════════
 # 데이터 조회 헬퍼
 # 생육RAG DB 조회 공통 래퍼
-# ══════════════════
+# ═════════════════════════
 def _db_fetch(query, vals=(), *, fetch="all", error_msg="DB 조회", default=None):
     try:
         with db_session() as database:
@@ -60,36 +63,41 @@ def _db_fetch(query, vals=(), *, fetch="all", error_msg="DB 조회", default=Non
         return default if default is not None else []
 
 
+# ═════════════════════════════════
 # 활성 농장-재배사 목록을 조회한다.
-# ═══════════════════
+# ═════════════════════════════════
 def _get_active_farm_houses() -> List[Dict[str, Any]]:
     return _db_fetch(dbQry.GET_ACTIVE_FARM_HOUSES_WITH_CROP, error_msg="농장-재배사 목록 조회 실패", default=[])
 
 
+# ═════════════════════════════════════════════════
 # 마지막 RAG 시점 이후 새로운 생육 입력을 조회한다.
-# ══════════════════════════════
+# ═════════════════════════════════════════════════
 def _get_new_crop_entries(farm_id, house_id, after_dt: str) -> List[Dict[str, Any]]:
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return _db_fetch(dbQry.GET_CROPS_IN_RANGE, (farm_id, house_id, after_dt, now_str),
                      error_msg=f"생육 데이터 조회 실패 farm={farm_id} house={house_id}", default=[])
 
 
+# ═════════════════════════════════
 # 시간 구간의 센서 통계를 조회한다.
-# ═══════════════════
+# ═════════════════════════════════
 def _get_sensor_stats(farm_id, house_id, start_dt: str, end_dt: str) -> Dict[str, Any]:
     return _db_fetch(dbQry.GET_SENSOR_STATS_IN_RANGE, (farm_id, house_id, start_dt, end_dt),
                      fetch="one", error_msg="센서 통계 조회 실패", default={})
 
 
+# ════════════════════════════════════════
 # 시간 구간의 릴레이 가동 비율을 조회한다.
-# ═══════════════════════
+# ════════════════════════════════════════
 def _get_relay_stats(farm_id, house_id, start_dt: str, end_dt: str) -> Dict[str, Any]:
     return _db_fetch(dbQry.GET_RELAY_STATS_IN_RANGE, (farm_id, house_id, start_dt, end_dt),
                      fetch="one", error_msg="릴레이 통계 조회 실패", default={})
 
 
+# ═════════════════════════════════
 # 주야간 분리 센서 통계를 조회한다.
-# ═══════════════════
+# ═════════════════════════════════
 def _get_day_night_stats(farm_id, house_id, start_dt: str, end_dt: str) -> Dict[str, Dict]:
     result = {"day": {}, "night": {}}
     try:
@@ -108,15 +116,17 @@ def _get_day_night_stats(farm_id, house_id, start_dt: str, end_dt: str) -> Dict[
     return result
 
 
+# ═════════════════════════════════════════════════
 # 이동평균 시작/끝 샘플을 조회한다 (트렌드 파악용).
-# ═════════════════════════════
+# ═════════════════════════════════════════════════
 def _get_moving_averages(farm_id, house_id, start_dt: str, end_dt: str) -> List[Dict]:
     return _db_fetch(dbQry.GET_SENSOR_MOVING_AVG, (farm_id, house_id, start_dt, end_dt),
                      error_msg="이동평균 조회 실패", default=[])
 
 
+# ═════════════════════════════════════
 # 당일 생육 입력이 존재하는지 확인한다.
-# ═════════════════════
+# ═════════════════════════════════════
 def _check_today_crops(farm_id, house_id) -> bool:
     try:
         with db_session() as database:
@@ -130,8 +140,9 @@ def _check_today_crops(farm_id, house_id) -> bool:
         return False
 
 
+# ═════════════════════════════════
 # 컨텍스트 / 문서 / 메타데이터 생성
-# ════════════════════
+# ═════════════════════════════════
 _SEASON_MAP = {3: "봄", 4: "봄", 5: "봄", 6: "여름", 7: "여름", 8: "여름",
                9: "가을", 10: "가을", 11: "가을", 12: "겨울", 1: "겨울", 2: "겨울"}
 
@@ -185,8 +196,9 @@ def _format_trend_line(label: str, first: Dict, last: Dict, key: str, unit: str,
         else f"- {label}: {trend} ({v1}~{v2}{unit})"
 
 
+# ═════════════════════════════════════════════════════
 # 생육 컨텍스트를 구성한다 (계절, 시간대, 재배일수 등).
-# ════════════════════════════════
+# ═════════════════════════════════════════════════════
 def _build_growth_context(crop_entry: Dict, sensor_stats: Dict, day_night: Dict) -> Dict[str, Any]:
     record_dt_str = crop_entry.get("record_datetime", "")
     try:
@@ -227,8 +239,9 @@ def _build_growth_context(crop_entry: Dict, sensor_stats: Dict, day_night: Dict)
     }
 
 
+# ═══════════════════════════
 # RAG 문서 텍스트를 생성한다.
-# ══════════════════
+# ═══════════════════════════
 def _build_rag_document(
     crop_entry: Dict,
     sensor_stats: Dict,
@@ -352,8 +365,9 @@ def _build_rag_document(
     return "\n".join(lines)
 
 
+# ═══════════════════════════════
 # VectorDB 메타데이터를 구성한다.
-# ═════════════════════
+# ═══════════════════════════════
 def _build_rag_metadata(
     farm_id,
     house_id,
@@ -407,9 +421,10 @@ def _build_rag_metadata(
     }
 
 
+# ════════════════════════════════════════════
 # VectorDB 저장
 # RAG 문서를 farm_knowledge 컬렉션에 저장한다.
-# ═════════════════════════════════
+# ════════════════════════════════════════════
 def _store_growth_rag(document: str, metadata: Dict[str, Any]) -> bool:
     try:
         from agri_ai_core.src.ai.rag.embedder import embed_text
@@ -455,9 +470,10 @@ def _store_growth_rag(document: str, metadata: Dict[str, Any]) -> bool:
         return False
 
 
+# ══════════════════════════════════════════════════
 # 00:00 일일 보장 RAG
 # 당일 생육 입력이 없을 때 정상 간주 RAG를 생성한다.
-# ═══════════════════════════════
+# ══════════════════════════════════════════════════
 def _ensure_daily_rag(farm_id, house_id, last_rag_dt: str, farm_name: str = "", house_name: str = "") -> bool:
     if _check_today_crops(farm_id, house_id):
         return False  # 당일 입력이 있으면 불필요
@@ -506,9 +522,10 @@ def _ensure_daily_rag(farm_id, house_id, last_rag_dt: str, farm_name: str = "", 
     return _store_growth_rag(document, metadata)
 
 
+# ═══════════════════════════════════
 # 메인 진입점
 # 생육 기반 인과 관계 RAG를 실행한다.
-# ══════════════════════
+# ═══════════════════════════════════
 def run_growth_rag(is_midnight: bool = False) -> Dict[str, Any]:
     t_start = time.time()
     logger.info("=" * 80)

@@ -1,9 +1,9 @@
-# ══════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 # 릴레이 스케줄 제어 모듈.
 #
 # 시간대별 자동 제어 스케줄(조명/관수밸브)을 관리·실행하며,
 # 주기/요일 기반 실행 여부를 판단하여 릴레이를 자동 제어한다.
-# ══════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 import traceback
 from datetime import datetime
 
@@ -52,8 +52,9 @@ def _format_sensor_status(sensor):
     return ", ".join(parts)
 
 
+# ════════════════════════
 # 주기 기반 실행 여부 확인
-# ══════════════════
+# ════════════════════════
 def should_execute_interval(start_date, interval, current_date):
     if not start_date or not interval:
         return False
@@ -65,8 +66,9 @@ def should_execute_interval(start_date, interval, current_date):
     return days_elapsed >= 0 and days_elapsed % interval == 0
 
 
+# ════════════════════════
 # 요일 기반 실행 여부 확인
-# ══════════════════
+# ════════════════════════
 def should_execute_weekdays(weekdays_str, current_date):
     if not weekdays_str:
         return False
@@ -84,8 +86,9 @@ def should_execute_weekdays(weekdays_str, current_date):
         return False
 
 
+# ════════════════════════════════════════
 # 현재 시간이 스케줄 시간 범위 내인지 확인
-# ═══════════════════════
+# ════════════════════════════════════════
 def is_time_in_range(current_time, start_time, finish_time):
     # 시작 시간과 종료 시간이 같은 날인 경우
     if start_time <= finish_time:
@@ -95,8 +98,9 @@ def is_time_in_range(current_time, start_time, finish_time):
         return current_time >= start_time or current_time <= finish_time
 
 
+# ═══════════════════════════════
 # 조명/관수 공통 스케줄 제어 로직
-# ══════════════════
+# ═══════════════════════════════
 def _handle_schedule_control(farm_id, house_id, setting_type, relay_flag_key, label, action_name):
     try:
         settings = read_light_irrigation_settings(farm_id, house_id, setting_type)
@@ -200,8 +204,9 @@ def control_irrigation_schedule(farm_id, house_id):
     return _handle_schedule_control(farm_id, house_id, 'water', 'irrigation_flag', '관수밸브', 'irrigation_controlled')
 
 
+# ═════════════════════════════════════
 # 모든 재배사 조명/관수밸브 스케줄 제어
-# ═════════════════════
+# ═════════════════════════════════════
 def control_all_schedules():
     try:
         with db_session() as database:

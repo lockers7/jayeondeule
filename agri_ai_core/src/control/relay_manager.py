@@ -1,9 +1,9 @@
-# ═════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 # 릴레이 제어 관리자 모듈.
 #
 # 릴레이 설정값 변경, 상태 조회, IoT 폴링 생존용 반복 쓰기 등
 # 릴레이 제어의 상위 레벨 관리 기능을 제공한다.
-# ═════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 import traceback
 import threading
 
@@ -46,10 +46,11 @@ _PERSIST_INTERVAL = 2          # 반복 쓰기 간격 (초)
 _PERSIST_COUNT = 7             # 반복 쓰기 횟수 (2초 × 7회 = 14초간 유지)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
 # LLM/일괄 제어 시 DB에 반복 쓰기하여 IoT 폴링 주기를 생존하는 백그라운드 스레드
 # IoT 하드웨어가 4초마다 물리적 릴레이 상태를 DB에 기록하므로,
 # LLM이 설정한 값이 IoT 기록에 의해 즉시 덮어써지는 문제를 방지합니다.
-# ══════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 def _persist_relay_values(farm_id, house_id, relay_values, count=_PERSIST_COUNT, interval=_PERSIST_INTERVAL):
     import time
     from datetime import datetime
@@ -65,9 +66,10 @@ def _persist_relay_values(farm_id, house_id, relay_values, count=_PERSIST_COUNT,
             logger.warning(f"[릴레이유지] 반복쓰기 실패 {i + 1}/{count}: {e}")
 
 
+# ═════════════════════════════════════════════════
 # 릴레이 값 설정
 # 마이크로초 타임스탬프 + IoT 폴링 생존용 반복 쓰기
-# ══════════════════════════════
+# ═════════════════════════════════════════════════
 def set_relay_value(farm_id, house_id, relay_settings, raw_mode=False):
     try:
         # raw_mode: 수동환경제어에서 16개 relay_*st_flag를 직접 전달할 때 사용
@@ -151,6 +153,7 @@ def set_relay_value(farm_id, house_id, relay_settings, raw_mode=False):
         }
 
 
+# ══════════════════
 # 릴레이 상태 조회
 # ══════════════════
 def get_relay_status(farm_id, house_id):

@@ -1,9 +1,9 @@
-# ══════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
 # 작업 스케줄러 모듈.
 #
 # 주기적 작업(학습, 통계, 환경제어, 로그 정리 등)을 관리·실행하는
 # APScheduler 기반 백그라운드 스케줄러를 제공한다.
-# ══════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
 import traceback
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -23,6 +23,7 @@ logger = setup_logger(__name__)
 _scheduler = None
 
 
+# ══════════════════
 # 스케줄러 설정
 # ══════════════════
 def setup_scheduler():
@@ -50,6 +51,7 @@ def setup_scheduler():
         return None
 
 
+# ══════════════════
 # 스케줄러 시작
 # ══════════════════
 def start_scheduler():
@@ -77,6 +79,7 @@ def start_scheduler():
         return False
 
 
+# ══════════════════
 # 스케줄러 중지
 # ══════════════════
 def stop_scheduler():
@@ -98,6 +101,7 @@ def stop_scheduler():
         logger.error(traceback.format_exc())
 
 
+# ══════════════════
 # 작업 추가
 # ══════════════════
 def add_job(job_id, func, trigger_type="interval", **trigger_kwargs):
@@ -143,6 +147,7 @@ def add_job(job_id, func, trigger_type="interval", **trigger_kwargs):
         return False
 
 
+# ══════════════════
 # 작업 제거
 # ══════════════════
 def remove_job(job_id):
@@ -169,8 +174,9 @@ def remove_job(job_id):
 
 
 
+# ═════════════════════════
 # 매일 00:00 로그 정리 작업
-# ══════════════════
+# ═════════════════════════
 def _daily_log_cleanup():
     try:
         from agri_ai_core.logs import cleanup_all_logs
@@ -180,8 +186,9 @@ def _daily_log_cleanup():
         logger.error(f"[스케줄] 일일 로그 정리 실패: {e}")
 
 
+# ════════════════════════════════════════════════════════════════════════════
 # 매일 03:00에 실행 — farm_knowledge 컬렉션에서 180일 이상 된 오래된 청크 삭제
-# ═══════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 def _chunk_cleanup_job():
     try:
         from datetime import datetime, timedelta

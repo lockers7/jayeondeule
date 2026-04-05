@@ -1,14 +1,15 @@
-# ════════════════════════
+# ══════════════════════════════
 # PostgreSQL SQL 쿼리 상수 정의.
-# ════════════════════════
+# ══════════════════════════════
 # farm_id=0(시스템/가상 농장)을 제외한 실제 운영 농장을 기본값으로 사용
 GET_ONE_FARM = "SELECT farm_id, farm_name FROM FARM_M_INFO WHERE farm_id != 0 ORDER BY farm_id LIMIT 1"
 GET_ONE_HOUSE = "SELECT hous_id, hous_name FROM FARMHOUSE_M_INFO WHERE farm_id = %s AND hous_id != 0 ORDER BY hous_id LIMIT 1"
 GET_ALL_HOUSES = "SELECT hous_id FROM FARMHOUSE_M_INFO WHERE farm_id = %s AND hous_id != 0 ORDER BY hous_id"
 GET_LIST_FARM = "SELECT farm_id, farm_name FROM FARM_M_INFO"
 
+# ═════════════════════
 # 농장/재배사 정보 조회
-# ══════════════════
+# ═════════════════════
 GET_FARM_NAME = """SELECT DISTINCT farm_id, farm_name
                    FROM FARM_M_INFO
                    WHERE farm_id != 0 AND (farm_id = %s OR %s IS NULL)
@@ -35,8 +36,9 @@ GET_FARM_HOUSE_LIST = """SELECT DISTINCT FMI.farm_id, FMI.farm_name, HMI.hous_id
                          WHERE 1 = 1 AND FMI.farm_id != 0 AND HMI.hous_id != 99
                          ORDER BY 1, 3;"""
 
+# ═══════════════════
 # 현재 센서 정보 조회
-# ══════════════════
+# ═══════════════════
 GET_NOW_UNIT_INFO = """SELECT TO_CHAR(recd_dttm, 'YYYY-MM-DD HH24:MI:SS') AS record_datetime
                             , indr_tprt_valu AS indoor_temperature
                             , indr_hmdt_valu AS indoor_humidity
@@ -52,6 +54,7 @@ GET_NOW_UNIT_INFO = """SELECT TO_CHAR(recd_dttm, 'YYYY-MM-DD HH24:MI:SS') AS rec
                         ORDER BY recd_dttm DESC
                         LIMIT 1"""
 
+# ══════════════════
 # 센서 히스토리 조회
 # ══════════════════
 GET_SENSOR_HISTORY = """SELECT recd_dttm       AS record_datetime
@@ -66,6 +69,7 @@ GET_SENSOR_HISTORY = """SELECT recd_dttm       AS record_datetime
                          ORDER BY recd_dttm ASC
                          LIMIT %s"""
 
+# ══════════════════
 # 릴레이 정보 조회
 # ══════════════════
 GET_LATEST_RELAY_INFO = """SELECT relay_1st_flag,  relay_2st_flag,  relay_3st_flag,  relay_4st_flag
@@ -78,8 +82,9 @@ GET_LATEST_RELAY_INFO = """SELECT relay_1st_flag,  relay_2st_flag,  relay_3st_fl
                             ORDER BY recd_dttm DESC
                             LIMIT 1"""
 
+# ═══════════════════
 # 농장 상세 정보 조회
-# ══════════════════
+# ═══════════════════
 GET_FARM_INFO_LIST = """SELECT FMI.farm_id                         AS 농장코드
                              , FMI.farm_name                       AS 농장명
                              , farm_domi                           AS 도메인
@@ -117,6 +122,7 @@ GET_FARM_INFO_LIST = """SELECT FMI.farm_id                         AS 농장코�
                                   tel_no, FMI.hp_no, fax_no, mail, CM1.code_name, addr,
                                   main_prdt, FMI.rmks, user_name, UMI.hp_no;"""
 
+# ══════════════════
 # Units 데이터 조회
 # ══════════════════
 GET_UNITS_VALUE = """SELECT FMI.farm_id                       AS 농장코드
@@ -156,6 +162,7 @@ GET_UNITS_VALUE = """SELECT FMI.farm_id                       AS 농장코드
                         AND SLR.recd_dttm >= HMI.last_get_dttm
                       ORDER BY FMI.farm_id ASC, HMI.hous_id ASC, SLR.recd_dttm ASC;"""
 
+# ══════════════════
 # Crops 데이터 조회
 # ══════════════════
 GET_CROPS_VALUE = """SELECT FMI.farm_id                      AS 농장코드
@@ -192,8 +199,9 @@ GET_CROPS_VALUE = """SELECT FMI.farm_id                      AS 농장코드
                         AND HLC.recd_dttm >= HMI.last_get_dttm
                       ORDER BY FMI.farm_id ASC, HMI.hous_id ASC, HLC.recd_dttm ASC;"""
 
+# ════════════════════════════════════════════════════
 # 최신 생육단계 조회 (FARMHOUSE_M_INFO.crop_lvel 기반)
-# ══════════════════════════════════════════
+# ════════════════════════════════════════════════════
 GET_CURRENT_CROP_LVEL = """SELECT HMI.crop_lvel   AS crop_lvel
                                 , CMI.code_name    AS 생육단계
                              FROM FARMHOUSE_M_INFO HMI
@@ -201,6 +209,7 @@ GET_CURRENT_CROP_LVEL = """SELECT HMI.crop_lvel   AS crop_lvel
                             WHERE HMI.farm_id = %s
                               AND HMI.hous_id = %s;"""
 
+# ══════════════════
 # 최적 조건 조회
 # ══════════════════
 GET_OPTIMAL_CONDITION = """SELECT setn_dttm      AS 저장일자
@@ -229,8 +238,9 @@ GET_OPTIMAL_CONDITION = """SELECT setn_dttm      AS 저장일자
                              ORDER BY setn_dttm DESC
                              LIMIT 1"""
 
+# ═══════════════════════
 # 조명/관수밸브 설정 조회
-# ══════════════════
+# ═══════════════════════
 GET_LIGHT_IRRIGATION = """SELECT strt_time
                                , fnsh_time
                                , excs_type
@@ -244,6 +254,7 @@ GET_LIGHT_IRRIGATION = """SELECT strt_time
                              AND dlte_yn          = FALSE
                            ORDER BY strt_time"""
 
+# ══════════════════
 # 릴레이 설정 저장
 # ══════════════════
 SET_RELAY_VALUE = """INSERT INTO RELAY_L_RECORDING (farm_id,          hous_id,         recd_dttm
@@ -275,12 +286,14 @@ SET_RELAY_VALUE = """INSERT INTO RELAY_L_RECORDING (farm_id,          hous_id,  
                                                 relay_15st_flag = EXCLUDED.relay_15st_flag,
                                                 relay_16st_flag = EXCLUDED.relay_16st_flag;"""
 
+# ════════════════════
 # 재배사 정보 업데이트
-# ══════════════════
+# ════════════════════
 SET_FARMHOUSE_INFO = "UPDATE FARMHOUSE_M_INFO SET last_get_dttm=%s WHERE farm_id=%s AND hous_id=%s;"
 
 SET_MANAGE_METHOD = "UPDATE FARMHOUSE_M_INFO SET mnul_ctrl_flag=%s, ctrl_type=%s WHERE farm_id=%s AND hous_id=%s;"
 
+# ══════════════════
 # AI 대화 히스토리
 # ══════════════════
 CREATE_AI_CONVERSATION_TABLE = """
@@ -332,8 +345,9 @@ SELECT role, content FROM (
 ) sub ORDER BY created_at ASC
 """
 
+# ════════════════════════════════════════════════════════════
 # AI 학습 상태 관리 (기존 ChromaDB job_status_collection 대체)
-# ══════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════
 CREATE_AI_LEARNING_STATUS_TABLE = """
 CREATE TABLE IF NOT EXISTS ai_learning_status (
     id              SERIAL PRIMARY KEY,
@@ -353,8 +367,9 @@ GET_AI_LEARNING_STATUS = """
 SELECT status_value, updated_at FROM ai_learning_status WHERE status_key = %s
 """
 
+# ═════════════════════════════════════════════════════════════════════
 # AI 학습 패턴 관리 (기존 ChromaDB self_learning/pattern_learning 대체)
-# ═══════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════
 CREATE_AI_LEARNING_PATTERN_TABLE = """
 CREATE TABLE IF NOT EXISTS ai_learning_pattern (
     id              SERIAL PRIMARY KEY,
@@ -368,10 +383,11 @@ CREATE TABLE IF NOT EXISTS ai_learning_pattern (
 
 CREATE_AI_LEARNING_PATTERN_INDEX = "CREATE INDEX IF NOT EXISTS idx_ai_lp_farm ON ai_learning_pattern(farm_id);"
 
+# ═════════════════════════════════════════════════════════════
 # 미학습 센서/릴레이 데이터 조회 (학습용)
 # 모든 농장-재배사의 센서+릴레이 데이터를 특정 일시 이후로 조회
 # 영문 키 반환 (model_trainer 호환)
-# ══════════════════════════
+# ═════════════════════════════════════════════════════════════
 GET_UNLEARNED_UNITS_DATA = """SELECT FMI.farm_id                                               AS farm_id
                                   , FMI.farm_name                                              AS farm_name
                                   , HMI.hous_id                                                AS house_id
@@ -410,10 +426,11 @@ GET_UNLEARNED_UNITS_DATA = """SELECT FMI.farm_id                                
                               ORDER BY SLR.recd_dttm ASC
                               LIMIT %s;"""
 
+# ══════════════════════════════════════════════════════
 # 미학습 작물 데이터 조회 (학습용)
 # 모든 농장-재배사의 작물 데이터를 특정 일시 이후로 조회
 # 영문 키 반환 (model_trainer 호환)
-# ══════════════════════════
+# ══════════════════════════════════════════════════════
 GET_UNLEARNED_CROPS_DATA = """SELECT FMI.farm_id                                               AS farm_id
                                   , FMI.farm_name                                              AS farm_name
                                   , HMI.hous_id                                                AS house_id
@@ -461,8 +478,9 @@ GET_UNLEARNED_CROPS_DATA = """SELECT FMI.farm_id                                
                               ORDER BY HLC.recd_dttm ASC
                               LIMIT %s;"""
 
+# ══════════════════════════════════════════════
 # 생육 RAG용 쿼리 — 생육 기반 인과 관계 RAG 전환
-# ═══════════════════════════════
+# ══════════════════════════════════════════════
 
 # FARMHOUSE_L_CROPS 테이블에 생육 세분화 컬럼 추가 (IF NOT EXISTS이므로 중복 실행 안전)
 ALTER_CROPS_ADD_GROWTH_DETAIL_COLUMNS = """
