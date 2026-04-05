@@ -1,6 +1,6 @@
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════════
 # LLM 응답 후처리 모듈 — 도구 결과 정제, 응답 필터링, 마크다운 표 정렬.
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════════
 import os
 import re
 import json
@@ -12,14 +12,14 @@ from agri_ai_core.logs import setup_logger
 logger = setup_logger(__name__)
 
 # 환경 변수 설정 (웹 검색 결과 정제)
-# ══════════════════════════════════════════════════════════
+# ═════════════════════
 _SEARCH_WEB_REFINE_MAX_RESULTS = max(1, int(os.getenv("SEARCH_WEB_REFINE_MAX_RESULTS", "5")))
 _SEARCH_WEB_REFINE_DESC_CHARS = max(80, int(os.getenv("SEARCH_WEB_REFINE_DESC_CHARS", "200")))
 _SEARCH_WEB_REFINE_CONTENT_CHARS = max(120, int(os.getenv("SEARCH_WEB_REFINE_CONTENT_CHARS", "400")))
 _SEARCH_WEB_REFINE_TOTAL_CHARS = max(1000, int(os.getenv("SEARCH_WEB_REFINE_TOTAL_CHARS", "3200")))
 
 # 노이즈 라인 패턴
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 _NOISE_LINE_RE = re.compile(
     r"^(검색|로그인|회원가입|메뉴|홈|공유|댓글|구독|광고|쿠키|Copyright|All rights)"
 )
@@ -62,7 +62,7 @@ _MARKDOWN_URL_RE = re.compile(
 
 
 # 페이지 본문에서 노이즈 제거 후 도입부 추출 (키워드 불필요, LLM이 관련성 판단).
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════
 def _clean_page_content(text: str, max_chars: int) -> str:
     if not text or not text.strip():
         return ""
@@ -88,7 +88,7 @@ def _clean_page_content(text: str, max_chars: int) -> str:
 # search_web 결과를 구조적으로 정제하여 간결한 텍스트로 변환한다 (LLM이 관련성 판단).
 # 출처 목록은 LLM이 보는 결과와 동일하게 구성 (별도 키워드 필터 없음).
 # Returns: tuple(정제된 텍스트, 출처 리스트[{title, url}])
-# ══════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════
 def _refine_search_web(tool_result: str, user_query: str) -> tuple:
     empty_sources = []
     try:
@@ -150,7 +150,7 @@ def _refine_search_web(tool_result: str, user_query: str) -> tuple:
 
 
 # fetch_url_content 결과를 구조적으로 정제한다 (LLM이 관련성 판단).
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════
 def _refine_fetch_url(tool_result: str, user_query: str) -> str:
     try:
         data = json.loads(tool_result)
@@ -262,7 +262,7 @@ def _refine_realtime_data(tool_result: str) -> str:
 
 
 # 도구 결과를 LLM 메시지에 넣기 전에 도구별 지능형 정제를 수행한다.
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════
 def _refine_tool_result(tool_name: str, tool_result: str, user_query: str) -> str:
     if not tool_result:
         return tool_result or ""
@@ -406,7 +406,7 @@ def _finalize_user_facing_answer(
 
 
 # 마크다운 표 정렬 유틸리티 (한글 너비 고려)
-# ══════════════════════════════════════════════════════════
+# ═════════════════════════
 def _display_width(text: str) -> int:
     """문자열의 터미널 표시 너비를 계산한다 (한글=2, 영문=1)."""
     width = 0
@@ -424,7 +424,7 @@ def _pad_to_width(text: str, target_width: int) -> str:
 
 
 # LLM 응답 내 마크다운 표의 컬럼 구분자(|)를 정렬한다 (한글 너비 고려).
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════════
 def _align_markdown_tables(text: str) -> str:
     """텍스트 내 모든 마크다운 표의 | 구분자 위치를 정렬한다."""
     if '|' not in text:
@@ -493,7 +493,7 @@ def _align_markdown_tables(text: str) -> str:
 
 
 # LLM 응답 필터링
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def clean_llm_response(response_text):
     """LLM 응답 기본 정리: Think 태그 제거, 마크다운 헤더/코드블록 제거, 빈 줄 정리, 표 정렬."""
     if not response_text:

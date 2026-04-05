@@ -1,6 +1,6 @@
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════════
 # ChromaDB 데이터 작업: 문서 CRUD, 벡터 검색, 임베딩 upsert.
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════════
 import os
 import time
 import traceback
@@ -55,7 +55,7 @@ def _build_embedding_from_text(text):
 
 
 # 문서 추가 (단일 문서)
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def add_document(collection_name, doc_id, text, metadata, embedding=None):
     logger.debug(f" add_document: collection_name: {collection_name}, doc_id: {doc_id}")
 
@@ -93,7 +93,7 @@ def add_document(collection_name, doc_id, text, metadata, embedding=None):
 
 # 문서 읽기 (복수 문서)
 # 문서 조회
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def get_documents(collection_name, ids=None, where=None, limit=None, offset=None, sort=None, where_document=None, include=None):
     collection_id = get_collection_id_from_name(collection_name)
     if not collection_id:
@@ -157,7 +157,7 @@ def get_documents(collection_name, ids=None, where=None, limit=None, offset=None
 
 
 # 문서 삭제
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def delete_document(collection_name, ids):
     logger.debug(f" delete_document: collection_name: {collection_name}, ids: {ids}")
 
@@ -187,7 +187,7 @@ def delete_document(collection_name, ids):
 
 # 문서 업서트 (있으면 업데이트, 없으면 추가)
 # 문서 업서트
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def upsert_collection_data(calledby, collection, doc_id, document, metadata):
     logger.info(f" upsert_collection_data: calledby: {calledby}, collection: {collection}, doc_id: {doc_id}")
 
@@ -257,7 +257,7 @@ def upsert_collection_data(calledby, collection, doc_id, document, metadata):
 
 
 # 복수 문서 업서트 (임베딩 포함)
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def upsert_documents_with_embedding(collection_name, docs):
     logger.info(f" upsert_documents_with_embedding: collection_name: {collection_name}")
 
@@ -307,7 +307,7 @@ def upsert_documents_with_embedding(collection_name, docs):
 
 
 # 벡터 검색
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def query_documents(collection_name, query_embeddings=None, n_results=5, where=None, include=None, where_document=None):
     try:
         collection = get_collection(collection_name)

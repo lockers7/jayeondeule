@@ -7,13 +7,13 @@ from decimal import Decimal
 
 
 # 환경변수 등 문자열 값을 불리언 참/거짓으로 판단
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════
 def is_true(value) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 # 센서 값을 float로 정리/변환 (소수점 2자리)
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════
 def clean_sensor_value(value):
     try:
         if value is None:
@@ -37,7 +37,7 @@ def clean_sensor_value(value):
 
 
 # 다양한 형태의 값을 불리언으로 변환
-# ══════════════════════════════════════════════════════════
+# ═══════════════════
 def parse_boolean(value):
     if value is None:
         return False

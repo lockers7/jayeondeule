@@ -1,6 +1,6 @@
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════════
 # 음성 API 라우터: STT/TTS REST API 엔드포인트.
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════════
 import time
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import Response
@@ -14,14 +14,14 @@ voice_router = APIRouter(prefix="/api/v1/voice", tags=["voice"])
 
 
 # 음성 파일을 텍스트로 변환 (STT)
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════
 # 텍스트를 음성(MP3)으로 변환 (TTS)
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════
 class TtsRequest(BaseModel):
     text: str
 
 # 음성 파일을 텍스트로 변환 (STT)
-# ══════════════════════════════════════════════════════════
+# ════════════════════
 @voice_router.post("/stt")
 async def stt_endpoint(file: UploadFile = File(...)):
     from agri_ai_core.src.voice.stt_engine import transcribe

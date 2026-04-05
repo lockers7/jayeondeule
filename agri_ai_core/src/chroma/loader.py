@@ -1,6 +1,6 @@
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════
 # ChromaDB 데이터 로더: 미학습 데이터 조회 및 학습 상태 관리.
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════
 import traceback
 from datetime import datetime, timedelta
 
@@ -13,7 +13,7 @@ logger = setup_logger(__name__)
 
 # 최종 학습 완료 시간 저장 (PostgreSQL)
 # 학습 완료 시점을 ai_learning_status 테이블에 기록
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════
 def update_learned_last_status():
     current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -33,7 +33,7 @@ def update_learned_last_status():
 
 # 미학습 데이터 가져오기 (PostgreSQL 직접 조회)
 # PostgreSQL에서 마지막 학습 시점 이후의 센서/릴레이/작물 데이터를 직접 조회
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════
 def _parse_after_date(after_date) -> datetime:
     _DEFAULT_RANGE = timedelta(days=365 * 3)
 

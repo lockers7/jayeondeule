@@ -1,6 +1,6 @@
-# ══════════════════════════════════════════════════════════
+# ══════════════════════════════════
 # 모델 학습 관리: 농장 데이터 분석 및 ChromaDB 저장.
-# ══════════════════════════════════════════════════════════
+# ══════════════════════════════════
 import json
 import traceback
 import pandas as pd
@@ -30,7 +30,7 @@ logger = setup_logger(__name__)
 
 
 # ChromaDB 연결 상태 확인
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def verify_chroma_connection():
     try:
         status = heartbeat()
@@ -45,7 +45,7 @@ def verify_chroma_connection():
 
 
 # 농장별 시간대 데이터 처리
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def process_farm_hour_data(farm_id, hour, data, hour_timestamp=None):
     if not farm_id or hour is None:
         logger.warning("농장코드 또는 시간대가 유효하지 않습니다.")
@@ -147,7 +147,7 @@ def process_farm_hour_data(farm_id, hour, data, hour_timestamp=None):
 
 
 # LLM 모델 업데이트 (학습)
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def update_ollama_model(after_date=None, top_cnt=0):
     start_time = datetime.now()
     current_hour = start_time.hour

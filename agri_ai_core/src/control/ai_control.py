@@ -1,9 +1,9 @@
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════
 # AI 릴레이 제어 모듈.
 #
 # LLM이 센서값·릴레이·생육단계·최적조건을 종합 분석하여 릴레이를 결정.
 # 센서 트렌드 분석으로 임계치 도달 전 선행(예방) 제어를 수행한다.
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════
 import os
 import re
 import json
@@ -41,7 +41,7 @@ from agri_ai_core.src.control.manual_control import _execute_control
 logger = setup_logger(__name__)
 
 # 설정
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 AI_CONTROL_TIMEOUT = int(os.getenv("AI_CONTROL_TIMEOUT", "60"))
 AI_PROXIMITY_RATIO = float(os.getenv("AI_PROXIMITY_RATIO", "0.8"))
 
@@ -50,7 +50,7 @@ PROTECTED_DEVICES = {'lighting_flag', 'irrigation_flag', 'drainage_motor_flag'}
 
 
 # 인메모리 상태 추적
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 _sensor_history = {}
 
 
@@ -67,7 +67,7 @@ def _to_float(value):
 
 # 상세 로깅 함수 (공통 포맷팅 함수 활용)
 # 센서 현황 + 릴레이 상태 로그 (AI 태그)
-# ══════════════════════════════════════════════════════════
+# ═════════════════════════
 def _log_ai_status(scope, sensor_data, current_relay, house_id):
     sensor_str = format_sensor_parts(sensor_data, include_outdoor=True)
     if sensor_str:
@@ -83,7 +83,7 @@ def _log_ai_status(scope, sensor_data, current_relay, house_id):
 
 
 # AI 판단 결과 상세 로그
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def _log_ai_decision(scope, action, reason, devices=None, circulation=None):
     if action == "keep":
         logger.info(f"{scope}: [AI] 판단: 현상 유지 → {reason}")
@@ -101,7 +101,7 @@ def _log_ai_decision(scope, action, reason, devices=None, circulation=None):
 
 # 트렌드 분석 (선행 조치 핵심)
 # 최근 30회 센서값으로 기울기 분석 → 임계치 도달 예측
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════
 def _detect_trend(farm_id, house_id, sensor_data):
     key = (farm_id, house_id)
     if key not in _sensor_history:
@@ -167,7 +167,7 @@ def _detect_trend(farm_id, house_id, sensor_data):
 
 # 임계치 근접 판단
 # 정상범위 이탈 후 비상 임계치까지 80% 이상 근접 여부
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════
 def _check_threshold_proximity(sensor_data):
     checks = [
         ('indoor_temperature', TEMP_LOW, TEMP_HIGH, TEMP_CRITICAL_LOW, TEMP_CRITICAL_HIGH),
@@ -197,7 +197,7 @@ def _check_threshold_proximity(sensor_data):
 
 # 10초 주기 AI 센서 모니터링 (긴급 개입 판단)
 # 임계치 근접 OR 트렌드 급변 감지 시 True → 즉시 LLM 호출 필요
-# ══════════════════════════════════════════════════════════
+# ═════════════════════════════════════════
 def monitor_ai_emergency(farm_id, house_id, order_label=""):
     scope = house_prefix(order_label, farm_id, house_id)
 
@@ -223,7 +223,7 @@ def monitor_ai_emergency(farm_id, house_id, order_label=""):
 
 
 # 시스템 프롬프트
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def _build_system_prompt(growth_stage):
     base = (
         "/no_think\n"
@@ -327,7 +327,7 @@ def _build_system_prompt(growth_stage):
 
 
 # 유저 프롬프트
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def _build_user_prompt(sensor_data, current_relay, growth_stage, optimal, trend_info, house_id):
     # 릴레이 ON 상태를 시멘틱 이름으로 (보호장치 제외)
     pin_map = get_pin_map(house_id)
@@ -370,7 +370,7 @@ def _build_user_prompt(sensor_data, current_relay, growth_stage, optimal, trend_
 
 # LLM 호출
 # Ollama /api/generate 호출 → 응답 텍스트 반환
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════════
 def _call_llm(system_prompt, user_prompt):
     try:
         from agri_ai_core.src.ai.mcp_client import mcp_http_request
@@ -416,7 +416,7 @@ def _call_llm(system_prompt, user_prompt):
 
 # JSON 응답 파싱
 # LLM JSON 응답 파싱
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def _parse_relay_response(response_text):
     if not response_text:
         return None
@@ -475,7 +475,7 @@ def _parse_relay_response(response_text):
 
 # 안전 검증
 # LLM 응답 안전 검증 — 비상조건 위반·쿨다운 위반·외부순환 제한 거부
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════
 def _validate_safety(parsed, sensor_data, farm_id, house_id):
     devices = parsed.get("devices", {})
     circulation = parsed.get("circulation", "")
@@ -565,7 +565,7 @@ def _validate_safety(parsed, sensor_data, farm_id, house_id):
 
 # 메인 AI 제어 함수
 # AI 릴레이 제어 메인 함수
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def control_ai_environment(farm_id, house_id, growth_stage='생육기', order_label=""):
     try:
         scope = house_prefix(order_label, farm_id, house_id)

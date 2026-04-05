@@ -1,6 +1,6 @@
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════
 # Opinet 유가정보 수집기: 무료 API 데이터 수집 → PostgreSQL 저장.
-# ══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════
 import os
 import sys
 import time
@@ -19,7 +19,7 @@ from agri_ai_core.src.postgresql.reader import db_session
 logger = logging.getLogger(__name__)
 
 # 설정
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 _API_BASE = "http://www.opinet.co.kr/api"
 _API_KEY = os.getenv("OPNET_API", "")
 if not _API_KEY:
@@ -37,7 +37,7 @@ PROD_CODES = {
 }
 
 # 테이블 생성 DDL
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 _DDL_AREA_CODE = """
 CREATE TABLE IF NOT EXISTS opinet_area_code (
     area_cd   VARCHAR(10) NOT NULL,
@@ -92,7 +92,7 @@ def _init_tables():
 
 
 # API 호출
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def _api_call(endpoint: str, params: dict = None) -> Optional[List[Dict]]:
     """Opinet API 호출, 결과 OIL 리스트 반환"""
     url = f"{_API_BASE}/{endpoint}.do"
@@ -116,7 +116,7 @@ def _api_call(endpoint: str, params: dict = None) -> Optional[List[Dict]]:
 
 
 # 데이터 수집 함수
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def collect_area_codes():
     """시도/시군구 코드 수집 저장"""
     # 시도
@@ -295,7 +295,7 @@ def collect_low_price(area_cd: str = None, trade_dt: str = None):
 
 
 # 전체 수집 (스케줄러/CLI)
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 def collect_all(target_date: str = None):
     """전체 무료 API 데이터 수집
     Args:
@@ -345,7 +345,7 @@ def collect_initial(days: int = 7):
 
 
 # CLI
-# ══════════════════════════════════════════════════════════
+# ══════════════════
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s")
 
