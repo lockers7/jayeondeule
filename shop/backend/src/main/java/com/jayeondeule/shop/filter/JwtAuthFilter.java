@@ -27,7 +27,8 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             "/api/shop/auth/check-id",
             "/api/shop/products",
             "/api/shop/categories",
-            "/api/shop/board/posts"
+            "/api/shop/board/posts",
+            "/api/shop/lotto"
     );
 
     @Override

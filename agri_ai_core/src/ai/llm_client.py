@@ -312,8 +312,8 @@ def _build_chat_payload(
         payload["options"] = options
     if tools:
         payload["tools"] = tools
-    if keep_alive:
-        payload["keep_alive"] = keep_alive
+    # keep_alive -1: Ollama 재시작 전까지 모델을 GPU VRAM에 영구 상주
+    payload["keep_alive"] = keep_alive or "-1"
     if think is not None:
         payload["think"] = think
     return payload
@@ -780,6 +780,7 @@ def _normalize_tool_arguments(
             "file_name": _pick("file_name"),
             "farm_id": _farm_id,
             "house_id": _pick("house_id"),
+            "auth_farm_id": default_args.get("auth_farm_id"),
         }
         if _user_has_meta and not _query_has_meta:
             result["_meta_hint"] = True
@@ -790,6 +791,7 @@ def _normalize_tool_arguments(
         return {
             "file_name": _pick("file_name"),
             "farm_id": _farm_id,
+            "auth_farm_id": default_args.get("auth_farm_id"),
         }
     if tool_name == "get_farm_realtime_data":
         default_farm_id = default_args.get("farm_id")

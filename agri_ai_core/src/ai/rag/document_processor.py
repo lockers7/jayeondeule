@@ -270,13 +270,13 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None, origin
             file_size = os.path.getsize(file_path)
             file_ext = os.path.splitext(filename)[1].lower()
 
-            # 파일 읽기 (PDF는 바이너리이므로 별도 처리)
+            # 파일 읽기 (PDF는 바이너리, 그 외 텍스트는 다중 인코딩 자동 감지)
             if file_ext == '.pdf':
                 from agri_ai_core.src.ai.file_processor import read_pdf_file
                 document_content = read_pdf_file(file_path)
             else:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    document_content = f.read()
+                from agri_ai_core.src.ai.file_processor import read_text_file
+                document_content = read_text_file(file_path, max_chars=10_000_000)
 
             logger.debug(f"문서 로드 완료: {filename}, 크기: {file_size/1024:.2f}KB")
 

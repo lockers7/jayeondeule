@@ -15,6 +15,7 @@ import java.util.*;
 @RestController
 @RequestMapping("/api/shop/orders")
 @RequiredArgsConstructor
+@SuppressWarnings("null")
 public class OrderController {
     private final OrderService orderService;
     private final ShopOrderRepository orderRepo;

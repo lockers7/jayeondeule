@@ -44,6 +44,7 @@ export function useAttachments(maxImageMB = 300, maxVideoMB = 700) {
       file,
       previewUrl: URL.createObjectURL(file),
       type: file.type.startsWith('video/') ? 'video' : 'image',
+      caption: '',
     }));
     setAttachments(prev => [...prev, ...newItems]);
     return true;
@@ -56,25 +57,33 @@ export function useAttachments(maxImageMB = 300, maxVideoMB = 700) {
     });
   };
 
+  const setCaption = (idx, caption) => {
+    setAttachments(prev => prev.map((att, i) => i === idx ? { ...att, caption } : att));
+  };
+
   const loadExisting = (imageList) => {
     setAttachments(imageList.map(img => ({
       previewUrl: img.imageUrl,
       type: isVideoUrl(img.imageUrl) ? 'video' : 'image',
+      caption: img.caption || '',
       existing: true,
     })));
   };
 
-  /** 새 파일만 서버에 업로드 */
+  /** 새 파일만 서버에 업로드 (캡션 포함) */
   const uploadNew = async (postId) => {
     const newFiles = attachments.filter(a => !a.existing && a.file);
     if (newFiles.length === 0) return;
     const formData = new FormData();
-    for (const att of newFiles) formData.append('files', att.file);
+    for (const att of newFiles) {
+      formData.append('files', att.file);
+      formData.append('captions', att.caption || '');
+    }
     formData.append('postId', postId);
     await api.post('/board/images/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   };
 
-  return { attachments, error, setError, addFiles, remove, loadExisting, uploadNew };
+  return { attachments, error, setError, addFiles, remove, setCaption, loadExisting, uploadNew };
 }

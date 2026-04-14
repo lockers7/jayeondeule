@@ -1,9 +1,9 @@
 import { useRef } from 'react';
-import { Button } from 'react-bootstrap';
+import { Button, Form } from 'react-bootstrap';
 import { ImageFill, XCircleFill } from 'react-bootstrap-icons';
 
-/** 작성 페이지용 첨부 미리보기 + 파일 선택 버튼 */
-export default function AttachmentPreview({ attachments, onAdd, onRemove, count }) {
+/** 작성 페이지용 첨부 미리보기 + 캡션 입력 + 파일 선택 버튼 */
+export default function AttachmentPreview({ attachments, onAdd, onRemove, onCaptionChange, count }) {
   const fileRef = useRef(null);
 
   return (
@@ -14,19 +14,30 @@ export default function AttachmentPreview({ attachments, onAdd, onRemove, count 
           padding: '12px', background: '#fafffe',
         }}>
           {attachments.map((att, i) => (
-            <div key={i} style={{ position: 'relative', marginBottom: i < attachments.length - 1 ? 12 : 0 }}>
-              {att.type === 'video' ? (
-                <video controls style={{ width: '100%', aspectRatio: '16/9', borderRadius: '8px', background: '#000', objectFit: 'contain' }}>
-                  <source src={att.previewUrl} type={att.file?.type} />
-                </video>
-              ) : (
-                <img src={att.previewUrl} alt=""
-                  style={{ width: '100%', borderRadius: '8px', maxHeight: '400px', objectFit: 'contain' }} />
-              )}
-              <XCircleFill size={24} style={{
-                position: 'absolute', top: 8, right: 8, cursor: 'pointer',
-                color: '#dc3545', background: '#fff', borderRadius: '50%',
-              }} onClick={() => onRemove(i)} />
+            <div key={i} style={{ marginBottom: i < attachments.length - 1 ? 16 : 0 }}>
+              <div style={{ position: 'relative' }}>
+                {att.type === 'video' ? (
+                  <video controls style={{ width: '100%', aspectRatio: '16/9', borderRadius: '8px', background: '#000', objectFit: 'contain' }}>
+                    <source src={att.previewUrl} type={att.file?.type} />
+                  </video>
+                ) : (
+                  <img src={att.previewUrl} alt=""
+                    style={{ width: '100%', borderRadius: '8px', maxHeight: '400px', objectFit: 'contain' }} />
+                )}
+                <XCircleFill size={24} style={{
+                  position: 'absolute', top: 8, right: 8, cursor: 'pointer',
+                  color: '#dc3545', background: '#fff', borderRadius: '50%',
+                }} onClick={() => onRemove(i)} />
+              </div>
+              {/* 캡션 입력 */}
+              <Form.Control
+                size="sm"
+                type="text"
+                placeholder="이미지 설명을 입력하세요 (선택사항)"
+                value={att.caption || ''}
+                onChange={(e) => onCaptionChange && onCaptionChange(i, e.target.value)}
+                style={{ marginTop: '6px', fontSize: '0.88rem', borderColor: '#B2DFDB' }}
+              />
             </div>
           ))}
         </div>

@@ -15,7 +15,10 @@ function IntroSection() {
     <>
       <div className="efficacy-card">
         <h3>상황버섯이란?</h3>
-        <img src="/images/efficacy/intro-mushroom.png" alt="상황버섯" className="efficacy-img" />
+        <div className="d-flex gap-3 mb-3">
+          <img src="/images/efficacy/mushroom-1.jpg" alt="상황버섯 근접" className="efficacy-img" style={{ width: '50%', height: '280px', objectFit: 'cover', margin: 0 }} />
+          <img src="/images/efficacy/mushroom-2.jpg" alt="상황버섯 원목재배" className="efficacy-img" style={{ width: '50%', height: '280px', objectFit: 'cover', margin: 0 }} />
+        </div>
         <p>
           상황버섯은 <strong>뽕나무(桑)에서 자라는 누런색(黃) 버섯</strong>이라는 뜻의 다년생 약용 버섯입니다.
           주로 뽕나무의 오래된 고목 그루터기에서 기생하며, 상수리나무, 참나무 등 다양한 활엽수 고목에서도 발견됩니다.

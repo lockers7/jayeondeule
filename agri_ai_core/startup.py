@@ -34,7 +34,8 @@ def initialize_app():
     total_start = time.time()
 
     try:
-        logger.info("-" * 50)
+        for _ in range(20):
+            logger.info(" " * 50)
         logger.info("=" * 60)
         logger.info("AgriAI Core 시작 초기화")
         logger.info("=" * 60)

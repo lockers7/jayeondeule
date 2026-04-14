@@ -10,6 +10,7 @@ import com.jayeondeule.shop.repository.ShopProductRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -30,6 +31,7 @@ public class BoardService {
     private final BoardCommentRepository commentRepo;
     private final BoardImageRepository imageRepo;
     private final ShopProductRepository productRepo;
+    private final JdbcTemplate jdbc;
 
     @Value("${board.upload.path:/workspace/jayeondeule/shop/frontend/dist/images/board}")
     private String uploadPath;
@@ -66,8 +68,17 @@ public class BoardService {
     }
 
     @Transactional
-    public BoardPost getPost(Integer postId) {
-        postRepo.incrementViewCount(postId);
+    public BoardPost getPost(Integer postId, String viewerId) {
+        // 동일 사용자는 1회만 카운트 (viewerId = userId 또는 IP)
+        if (viewerId != null && !viewerId.isEmpty()) {
+            int inserted = jdbc.update(
+                "INSERT INTO shop_board_post_view (post_id, viewer_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                postId, viewerId
+            );
+            if (inserted > 0) {
+                postRepo.incrementViewCount(postId);
+            }
+        }
         return postRepo.findById(postId)
                 .orElseThrow(() -> new RuntimeException("게시글을 찾을 수 없습니다."));
     }
@@ -181,7 +192,7 @@ public class BoardService {
     }
 
     @Transactional
-    public List<String> uploadImages(MultipartFile[] files, Integer postId, Integer commentId) {
+    public List<String> uploadImages(MultipartFile[] files, Integer postId, Integer commentId, String[] captions) {
         List<String> urls = new ArrayList<>();
         try {
             String subDir = postId != null ? "post/" + postId : "comment/" + commentId;
@@ -197,11 +208,13 @@ public class BoardService {
 
                 String url = "/uploads/board/" + subDir + "/" + fileName;
 
+                String caption = (captions != null && i < captions.length) ? captions[i] : null;
                 BoardImage image = BoardImage.builder()
                         .postId(postId)
                         .commentId(commentId)
                         .imageUrl(url)
                         .sortOrder(i)
+                        .caption(caption)
                         .build();
                 imageRepo.save(image);
                 urls.add(url);

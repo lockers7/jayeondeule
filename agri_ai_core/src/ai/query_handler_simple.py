@@ -125,9 +125,11 @@ def _build_default_tool_args(user_query, farm_id, house_id, auth_farm_id=None):
             "file_name": detected_file_name,
             "farm_id": _session_fid,
             "house_id": str(house_id) if house_id is not None else None,
+            "auth_farm_id": _auth_fid,
         },
         "delete_farm_knowledge": {
             "farm_id": _session_fid,
+            "auth_farm_id": _auth_fid,
         },
         "get_farm_realtime_data": {
             "farm_id": str(farm_id) if farm_id is not None else None,

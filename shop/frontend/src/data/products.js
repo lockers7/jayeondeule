@@ -59,7 +59,7 @@ export const companyInfo = {
   name: '자연들에',
   ceo: '대표자명',
   bizNumber: '000-00-00000',
-  address: '농장 주소를 입력하세요',
-  phone: '000-0000-0000',
-  email: 'info@jayeondeule.com',
+  address: '56148	전북특별자치도 정읍시 영원면 성지1길 17-27 (후지리)\n       전북특별자치도 정읍시 영원면 후지리 461-2',
+  phone: '010-2033-5925',
+  email: 'lockers7@gmail.com',
 };
