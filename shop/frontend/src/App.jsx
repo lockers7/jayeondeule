@@ -19,6 +19,7 @@ import StoryWritePage from './pages/board/StoryWritePage';
 import InquiryListPage from './pages/board/InquiryListPage';
 import InquiryDetailPage from './pages/board/InquiryDetailPage';
 import InquiryWritePage from './pages/board/InquiryWritePage';
+import LottoPage from './pages/LottoPage';
 
 function App() {
   return (
@@ -41,6 +42,7 @@ function App() {
             <Route path="/inquiry" element={<InquiryListPage />} />
             <Route path="/inquiry/write" element={<InquiryWritePage />} />
             <Route path="/inquiry/:postId" element={<InquiryDetailPage />} />
+            <Route path="/lotto" element={<LottoPage />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
             <Route path="/mypage" element={<MyPage />} />

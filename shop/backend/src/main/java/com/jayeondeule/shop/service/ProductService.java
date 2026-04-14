@@ -1,7 +1,9 @@
 package com.jayeondeule.shop.service;
 
 import com.jayeondeule.shop.entity.ShopProduct;
+import com.jayeondeule.shop.entity.ShopProductViewLog;
 import com.jayeondeule.shop.repository.ShopProductRepository;
+import com.jayeondeule.shop.repository.ShopProductViewLogRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -13,7 +15,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -22,6 +27,7 @@ import java.util.UUID;
 @Slf4j
 public class ProductService {
     private final ShopProductRepository productRepo;
+    private final ShopProductViewLogRepository viewLogRepo;
 
     @Value("${product.upload.path:/workspace/jayeondeule/shop/uploads/products}")
     private String uploadPath;
@@ -40,9 +46,54 @@ public class ProductService {
     }
 
     @Transactional
-    public ShopProduct getProductWithView(Integer id) {
+    public ShopProduct getProductWithView(Integer id, String viewerId) {
+        // 무제한 누적: 매번 view_count +1, 로그도 매번 기록
         productRepo.incrementViewCount(id);
-        return getProduct(id);
+        ShopProduct product = getProduct(id);
+        try {
+            ShopProductViewLog logEntry = ShopProductViewLog.builder()
+                    .productId(id)
+                    .farmId(product.getFarmId())
+                    .shopUsrId(viewerId != null && !viewerId.isEmpty() ? viewerId : "anonymous")
+                    .build();
+            viewLogRepo.save(logEntry);
+        } catch (Exception e) {
+            log.warn("[상품조회로그] 저장 실패: {}", e.getMessage());
+        }
+        return product;
+    }
+
+    /** 상품별 조회 통계 (전체 + 사용자별) */
+    public Map<String, Object> getProductViewStats(Integer productId) {
+        Map<String, Object> stats = new HashMap<>();
+        stats.put("productId", productId);
+        stats.put("totalViews", viewLogRepo.countByProductId(productId));
+
+        List<Map<String, Object>> userStats = new ArrayList<>();
+        for (Object[] row : viewLogRepo.userViewCountByProduct(productId)) {
+            Map<String, Object> u = new HashMap<>();
+            u.put("userId", row[0]);
+            u.put("count", row[1]);
+            userStats.add(u);
+        }
+        stats.put("byUser", userStats);
+        return stats;
+    }
+
+    /** 전체 상품 조회 랭킹 */
+    public List<Map<String, Object>> getProductViewRanking() {
+        List<Map<String, Object>> ranking = new ArrayList<>();
+        for (Object[] row : viewLogRepo.productViewRanking()) {
+            Map<String, Object> r = new HashMap<>();
+            Integer pid = (Integer) row[0];
+            r.put("productId", pid);
+            r.put("totalViews", row[1]);
+            try {
+                r.put("productName", productRepo.findById(pid).map(ShopProduct::getProductName).orElse("?"));
+            } catch (Exception e) { r.put("productName", "?"); }
+            ranking.add(r);
+        }
+        return ranking;
     }
 
     @Transactional

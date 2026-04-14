@@ -199,7 +199,15 @@ async def lifespan(app: FastAPI):
     api_host = os.getenv("API_HOST", "0.0.0.0")
     api_key_set = "설정됨" if API_KEY else "미설정(인증 없음)"
     logger.info("[REST API] 시작 (Host=%s, Port=%s, API Key=%s)", api_host, api_port, api_key_set)
+
+    # 애플리케이션 초기화 (DB, ChromaDB, 스케줄러, LLM 등)
+    from agri_ai_core.startup import initialize_app, shutdown_app
+    initialize_app()
+
     yield
+
+    # 애플리케이션 종료 처리
+    shutdown_app()
     logger.info("[REST API] 종료")
 
 
@@ -705,3 +713,65 @@ async def change_model(request: Request, _=Depends(verify_api_key)):
     except Exception as e:
         logger.error(f"모델 변경 실패: {e}")
         raise HTTPException(500, f"모델 변경 실패: {str(e)}")
+
+
+# ════════════════════════════════════════════════════════════
+# 로또 추천 API
+# ════════════════════════════════════════════════════════════
+
+@app.post("/api/v1/lotto/recommend")
+async def lotto_recommend(request: Request):
+    """로또 추천 번호 생성."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    prompt = body.get("prompt", "")
+    from agri_ai_core.src.lotto.lotto_recommender import generate_recommendation
+    result = generate_recommendation(prompt)
+    return {"success": True, "data": result}
+
+
+@app.get("/api/v1/lotto/algorithm")
+async def lotto_algorithm():
+    """로또 추천 알고리즘 설명."""
+    from agri_ai_core.src.lotto.lotto_recommender import get_algorithm_description
+    return {"success": True, "data": get_algorithm_description()}
+
+
+@app.post("/api/v1/lotto/analyze-batch")
+async def lotto_analyze_batch(request: Request):
+    """501회부터 미분석 회차를 LLM으로 일괄 분석한다 (백그라운드 실행)."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    start = int(body.get("start", 501))
+    end = body.get("end")
+    if end is not None:
+        end = int(end)
+
+    import threading
+    from agri_ai_core.src.lotto.lotto_analyzer import run_batch
+
+    def _worker():
+        try:
+            run_batch(start=start, end=end)
+        except Exception as e:
+            logger.error(f"[로또분석] 배치 실행 중 오류: {e}")
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    return {"success": True, "data": {"message": f"배치 분석 시작 (start={start}, end={end})"}}
+
+
+@app.post("/api/v1/lotto/analyze-draw")
+async def lotto_analyze_draw(request: Request):
+    """단일 회차를 즉시 분석한다."""
+    body = await request.json()
+    draw_no = int(body.get("draw_no"))
+    from agri_ai_core.src.lotto.lotto_analyzer import analyze_draw
+    ok = analyze_draw(draw_no)
+    return {"success": ok, "data": {"draw_no": draw_no}}
+
+

@@ -68,6 +68,7 @@ def update_lotto_db():
         if not new_items:
             break
 
+        newly_added_draws = []
         with db_session() as db:
             for item in new_items:
                 draw_no = item['ltEpsd']
@@ -83,6 +84,7 @@ def update_lotto_db():
                         (draw_no, draw_date, *nums, bonus)
                     )
                     added += 1
+                    newly_added_draws.append(draw_no)
                     logger.info(f"[로또수집] {draw_no}회 ({draw_date}): {nums} + 보너스 {bonus}")
                 except Exception as e:
                     logger.error(f"[로또수집] {draw_no}회 저장 실패: {e}")
@@ -90,6 +92,19 @@ def update_lotto_db():
         max_epsd = max(it['ltEpsd'] for it in items)
         epsd = max_epsd + 1
         time.sleep(0.5)
+
+        # 새로 추가된 회차는 즉시 LLM 분석 (1회차씩 루핑)
+        if newly_added_draws:
+            try:
+                from agri_ai_core.src.lotto.lotto_analyzer import analyze_draw
+                for dn in sorted(newly_added_draws):
+                    logger.info(f"[로또수집] {dn}회 즉시 LLM 분석 시작")
+                    try:
+                        analyze_draw(dn)
+                    except Exception as e:
+                        logger.error(f"[로또수집] {dn}회 분석 실패: {e}")
+            except Exception as e:
+                logger.error(f"[로또수집] 분석 모듈 로드 실패: {e}")
 
     logger.info(f"[로또수집] 완료: {added}건 추가")
     return added

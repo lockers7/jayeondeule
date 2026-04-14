@@ -16,7 +16,7 @@ export default function InquiryWritePage() {
   const [productId, setProductId] = useState('');
   const [products, setProducts] = useState([]);
   const [submitting, setSubmitting] = useState(false);
-  const { attachments, error, setError, addFiles, remove, uploadNew } = useAttachments();
+  const { attachments, error, setError, addFiles, remove, setCaption, uploadNew } = useAttachments();
 
   useEffect(() => {
     if (!user) { navigate('/login'); return; }
@@ -72,7 +72,7 @@ export default function InquiryWritePage() {
                 <Form.Label className="fw-bold">문의 내용</Form.Label>
                 <Form.Control as="textarea" rows={8} value={content}
                   onChange={(e) => setContent(e.target.value)} placeholder="문의 내용을 상세히 입력하세요" />
-                <AttachmentPreview attachments={attachments} onAdd={addFiles} onRemove={remove} />
+                <AttachmentPreview attachments={attachments} onAdd={addFiles} onRemove={remove} onCaptionChange={setCaption} />
               </Form.Group>
               <div className="text-center">
                 <Button type="submit" disabled={submitting}

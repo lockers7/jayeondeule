@@ -182,3 +182,10 @@ docs/bak/
 shop/uploads/board/**/*.mp4
 shop/uploads/board/**/*.mov
 shop/uploads/board/**/*.webm
+
+# 런타임 생성 파일 (소스코드 아님)
+logs/
+upload/
+shop/uploads/
+shop/frontend/dist/
+shop/frontend/public/images/efficacy/

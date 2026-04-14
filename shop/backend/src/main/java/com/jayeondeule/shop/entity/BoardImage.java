@@ -25,6 +25,9 @@ public class BoardImage {
     @Column(name = "sort_order")
     private Integer sortOrder;
 
+    @Column(name = "caption")
+    private String caption;
+
     @Column(name = "rgst_dt")
     private LocalDateTime rgstDt;
 

@@ -121,9 +121,9 @@ def _json_default(value: Any) -> Any:
 # ══════════════════
 # 학습 데이터 삭제
 # ══════════════════
-def delete_farm_knowledge(file_name: str, farm_id: str = None) -> Dict[str, Any]:
+def delete_farm_knowledge(file_name: str, farm_id: str = None, auth_farm_id: str = None) -> Dict[str, Any]:
     t_start = time.time()
-    logger.info(f"[학습삭제] 시작 file_name={file_name} farm_id={farm_id}")
+    logger.info(f"[학습삭제] 시작 file_name={file_name} farm_id={farm_id} auth_farm_id={auth_farm_id}")
     try:
         from agri_ai_core.src.chroma.collections import document_collection, farm_knowledge_collection
         from agri_ai_core.src.chroma.operations import get_documents, delete_document
@@ -131,8 +131,9 @@ def delete_farm_knowledge(file_name: str, farm_id: str = None) -> Dict[str, Any]
         if not file_name:
             return {"success": False, "error": "file_name이 필요합니다."}
 
-        # farm_id가 없으면(None) 전체 농장, 있으면(0 포함) 해당 농장만 삭제
-        is_admin = not farm_id  # farm_id=None일 때만 전체 삭제 (farm_id="0"은 시스템 농장만)
+        # 시스템관리자: auth_farm_id=None → 전체 농장 삭제 가능
+        # 농장관리자: auth_farm_id=자기농장 → 자기 농장만 삭제 가능
+        is_admin = auth_farm_id is None
         _is_delete_all = file_name.strip().lower() in ("all", "*", "전체", "모두")
 
         # 복수 파일명 지원: 파이프(|) 또는 줄바꿈(\n)으로 구분된 파일명 → 개별 루핑 삭제
@@ -151,8 +152,11 @@ def delete_farm_knowledge(file_name: str, farm_id: str = None) -> Dict[str, Any]
         deleted_files = []  # 삭제 성공한 파일명 목록
         failed_files = []   # 삭제 실패한 파일명 목록
 
+        _SYSTEM_FARM = "0"
+
         def _collect_ids_for_file(coll, target_name):
-            """특정 파일명에 대한 삭제 대상 ID 수집 (공백↔밑줄 자동 변환 검색)"""
+            """특정 파일명에 대한 삭제 대상 ID 수집
+            (공백↔밑줄 자동 변환 + str/int farm_id + 시스템 농장 폴백)"""
             ids = set()
             # 원본 + 공백↔밑줄 변환명으로 양쪽 시도
             name_variants = [target_name]
@@ -160,15 +164,26 @@ def delete_farm_knowledge(file_name: str, farm_id: str = None) -> Dict[str, Any]
                 name_variants.append(target_name.replace(" ", "_"))
             elif "_" in target_name:
                 name_variants.append(target_name.replace("_", " "))
+
+            # farm_id 변형: 선택 농장(str/int) + 시스템 농장("0"/0) + farm_id 없이(전체)
+            farm_id_wheres = []
+            if is_admin and not farm_id:
+                farm_id_wheres.append(None)  # 관리자 + 농장 미선택: 전체
+            elif farm_id:
+                # 관리자/농장관리자 공통: 선택된 농장만 삭제 (str/int 양쪽 시도)
+                farm_id_wheres.append({"farm_id": {"$eq": str(farm_id)}})
+                if str(farm_id).isdigit():
+                    farm_id_wheres.append({"farm_id": {"$eq": int(farm_id)}})
+            else:
+                farm_id_wheres.append(None)  # 폴백
+
             for name in name_variants:
                 for field in ("file_name", "file_name_stored"):
-                    if is_admin:
-                        wl = [{field: {"$eq": name}}]
-                    else:
-                        wl = [{"$and": [{field: {"$eq": name}}, {"farm_id": {"$eq": str(farm_id)}}]}]
-                        if str(farm_id).isdigit():
-                            wl.append({"$and": [{field: {"$eq": name}}, {"farm_id": {"$eq": int(farm_id)}}]})
-                    for w in wl:
+                    for fw in farm_id_wheres:
+                        if fw is None:
+                            w = {field: {"$eq": name}}
+                        else:
+                            w = {"$and": [{field: {"$eq": name}}, fw]}
                         res = get_documents(coll, where=w, include=["metadatas"], limit=10000)
                         for doc_id in (res.get("ids") or []):
                             ids.add(doc_id)
@@ -258,6 +273,7 @@ def search_farm_knowledge(
     file_name: str = None,
     farm_id: str = None,
     house_id: str = None,
+    auth_farm_id: str = None,
     _meta_hint: bool = False,
 ) -> Dict[str, Any]:
     t_start = time.time()
@@ -574,7 +590,8 @@ def search_farm_knowledge(
                 from agri_ai_core.src.chroma.operations import get_documents
                 from agri_ai_core.src.chroma.collections import document_collection, farm_knowledge_collection
 
-                _is_admin_list = (not farm_id or str(farm_id) == _SYSTEM_FARM_ID)
+                # 시스템관리자(auth_farm_id=None): 전체 파일 목록, 농장관리자: 자기 농장만
+                _is_admin_list = (auth_farm_id is None)
                 _seen_files: set = set()
                 _file_entries = []
 
@@ -584,7 +601,7 @@ def search_farm_knowledge(
                 ]:
                     if not _coll_name:
                         continue
-                    # 비관리자: 자기 농장만 (str/int 양쪽 시도), 관리자: 전체
+                    # 관리자: 전체 농장, 비관리자: 자기 농장만 (CRUD는 시스템 농장 제외)
                     if _is_admin_list:
                         _where_list = [None]
                     else:
@@ -620,7 +637,7 @@ def search_farm_knowledge(
                     )
             except Exception as _e:
                 logger.warning(f"[VectorDB검색] 파일 목록 직접조회 실패: {_e} → formatted_results 폴백")
-                _is_admin_list = (not farm_id or str(farm_id) == _SYSTEM_FARM_ID)
+                _is_admin_list = (auth_farm_id is None)
                 _seen_files = set()
                 _file_entries = []
                 for item in formatted_results:
@@ -1361,6 +1378,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
             result = delete_farm_knowledge(
                 file_name=tool_args.get("file_name"),
                 farm_id=tool_args.get("farm_id"),
+                auth_farm_id=tool_args.get("auth_farm_id"),
             )
 
         elif tool_name == "search_farm_knowledge":
@@ -1370,6 +1388,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
                 file_name=tool_args.get("file_name"),
                 farm_id=tool_args.get("farm_id"),
                 house_id=tool_args.get("house_id"),
+                auth_farm_id=tool_args.get("auth_farm_id"),
                 _meta_hint=bool(tool_args.get("_meta_hint")),
             )
 

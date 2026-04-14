@@ -16,7 +16,7 @@ export default function StoryWritePage() {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const { attachments, error, setError, addFiles, remove, loadExisting, uploadNew } = useAttachments();
+  const { attachments, error, setError, addFiles, remove, setCaption, loadExisting, uploadNew } = useAttachments();
 
   useEffect(() => {
     if (!isAdmin) { navigate('/story'); return; }
@@ -71,7 +71,7 @@ export default function StoryWritePage() {
                 <Form.Label className="fw-bold">내용</Form.Label>
                 <Form.Control as="textarea" rows={12} value={content}
                   onChange={(e) => setContent(e.target.value)} placeholder="내용을 입력하세요" />
-                <AttachmentPreview attachments={attachments} onAdd={addFiles} onRemove={remove} />
+                <AttachmentPreview attachments={attachments} onAdd={addFiles} onRemove={remove} onCaptionChange={setCaption} />
               </Form.Group>
               <div className="text-center">
                 <Button type="submit" disabled={submitting}

@@ -16,6 +16,7 @@ import java.util.Set;
 @RestController
 @RequestMapping("/api/shop/board")
 @RequiredArgsConstructor
+@SuppressWarnings("null")
 public class BoardController {
     private final BoardService boardService;
     private final JwtUtil jwtUtil;
@@ -66,9 +67,21 @@ public class BoardController {
 
     // 게시글 상세
     @GetMapping("/posts/{postId}")
-    public ResponseEntity<?> getPost(@PathVariable Integer postId) {
+    public ResponseEntity<?> getPost(
+            @PathVariable Integer postId,
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            jakarta.servlet.http.HttpServletRequest request) {
         try {
-            BoardPost post = boardService.getPost(postId);
+            // viewer_id: 로그인 사용자는 userId, 비로그인은 IP
+            String viewerId = null;
+            if (authHeader != null && authHeader.startsWith("Bearer ")) {
+                try { viewerId = jwtUtil.getUserId(authHeader.substring(7)); } catch (Exception ignored) {}
+            }
+            if (viewerId == null || viewerId.isEmpty()) {
+                String xff = request.getHeader("X-Forwarded-For");
+                viewerId = (xff != null && !xff.isEmpty()) ? xff.split(",")[0].trim() : request.getRemoteAddr();
+            }
+            BoardPost post = boardService.getPost(postId, viewerId);
             return ResponseEntity.ok(ApiResponse.ok(post));
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(ApiResponse.error(e.getMessage()));
@@ -199,9 +212,10 @@ public class BoardController {
     public ResponseEntity<?> uploadImages(
             @RequestParam("files") MultipartFile[] files,
             @RequestParam(required = false) Integer postId,
-            @RequestParam(required = false) Integer commentId) {
+            @RequestParam(required = false) Integer commentId,
+            @RequestParam(required = false) String[] captions) {
         try {
-            return ResponseEntity.ok(ApiResponse.ok(boardService.uploadImages(files, postId, commentId)));
+            return ResponseEntity.ok(ApiResponse.ok(boardService.uploadImages(files, postId, commentId, captions)));
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(ApiResponse.error(e.getMessage()));
         }

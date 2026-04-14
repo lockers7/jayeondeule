@@ -81,6 +81,11 @@ def chunk_document(document_content, chunk_size=1000, chunk_overlap=200):
                 continue
             chunks.append(chunk)
 
+    # 짧은 문서는 전체를 단일 청크로 처리 (최소 10자 이상이면 유효)
+    if not chunks and len(document_content.strip()) >= 10:
+        logger.debug(f"짧은 문서({len(document_content)}자) — 전체를 단일 청크로 처리")
+        chunks = [document_content.strip()]
+
     return chunks
 
 
