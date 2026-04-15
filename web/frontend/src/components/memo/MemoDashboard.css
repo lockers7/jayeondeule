@@ -1,0 +1,9 @@
+.memo-input-border {
+    border: 1px solid #dee2e6 !important;
+}
+
+.memo-input-border:focus {
+    border-color: #dee2e6 !important;
+    box-shadow: none !important;
+    outline: none !important;
+}

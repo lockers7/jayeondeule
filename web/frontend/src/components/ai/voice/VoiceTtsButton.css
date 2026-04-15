@@ -1,0 +1,23 @@
+.voice-tts-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px 4px;
+    color: #6c757d;
+    display: inline-flex;
+    align-items: center;
+    transition: color 0.2s;
+}
+
+.voice-tts-btn:hover {
+    color: #495057;
+}
+
+.voice-tts-playing {
+    color: #28a745;
+}
+
+.voice-tts-loading {
+    color: #ffc107;
+    cursor: wait;
+}

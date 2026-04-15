@@ -1,0 +1,418 @@
+#!/bin/bash
+# -*- coding: utf-8 -*-
+# =========================================================================
+# AgriAI Core 통합 서비스 시작 스크립트
+# 전체 서비스(DB, LLM, API, Web)를 통합 관리
+#
+# 관리 서비스:
+#   1. Ollama        (LLM 서버,       port 11434)
+#   2. PostgreSQL    (관계형 DB,      port 5432)
+#   3. ChromaDB      (벡터 DB,        port 8000)
+#   4. Scheduler     (스케줄/환경제어)
+#   5. FastAPI       (REST API,      port 8002)
+#   6. SearXNG       (메타검색엔진,   port 8888)
+#   7. Spring Boot   (웹 백엔드,      port 9090)
+#   8. Nginx         (웹서버,         port 80)
+# =========================================================================
+
+set -e
+
+# 작업 디렉토리 이동
+cd /workspace/jayeondeule
+
+# .env 로드 (systemd 외 수동 실행 경로 동일 동작 보장)
+if [ -f "/workspace/jayeondeule/.env" ]; then
+    set -a
+    . "/workspace/jayeondeule/.env"
+    set +a
+fi
+
+# Python 캐시 파일 생성 방지
+export PYTHONDONTWRITEBYTECODE=1
+
+# Python 가상환경 경로
+PYTHON_BIN="/workspace/jayeondeule/venv/bin/python"
+
+# PID 파일 경로 (프로젝트 logs 디렉토리 사용 → 소유권 충돌 방지)
+OLLAMA_PID="/tmp/ollama.pid"
+SCHEDULER_PID="/workspace/jayeondeule/logs/scheduler.pid"
+API_PID="/workspace/jayeondeule/logs/api.pid"
+
+# Ollama 설정
+OLLAMA_BIN="/usr/local/bin/ollama"
+OLLAMA_MODEL="${MODEL_NAME:-qwen3:30b-a3b}"
+
+# 로그 파일 경로
+LOG_DIR="${LOG_PATH:-/workspace/jayeondeule/logs}"
+mkdir -p "$LOG_DIR"
+SERVICE_LOG="$LOG_DIR/service.log"
+
+# 서비스 로그 함수 (콘솔 + 로그 파일 동시 기록)
+log_msg() {
+    local ts
+    ts="$(date '+%Y-%m-%d %H:%M:%S')"
+    echo "[$ts] $*"
+    echo "[$ts] $*" >> "$SERVICE_LOG"
+}
+
+WEB_SEARCH_DNS_SERVERS="${WEB_SEARCH_DNS_SERVERS:-1.1.1.1,8.8.8.8,8.8.4.4}"
+
+dns_health_check() {
+    echo "DNS/NS 상태 점검 중..."
+
+    local resolver_target
+    resolver_target="$(readlink -f /etc/resolv.conf 2>/dev/null || echo unknown)"
+    echo "  - /etc/resolv.conf -> ${resolver_target}"
+
+    local success_count=0
+    local host
+    for host in www.google.com search.naver.com www.bing.com; do
+        if getent hosts "$host" >/dev/null 2>&1; then
+            success_count=$((success_count + 1))
+        else
+            echo "  - DNS 조회 실패: ${host}"
+        fi
+    done
+
+    if [ "$success_count" -lt 1 ]; then
+        echo "  - DNS 조회 실패 감지, 웹검색 fallback DNS 활성화: ${WEB_SEARCH_DNS_SERVERS}"
+        export WEB_SEARCH_DNS_SERVERS
+        export WEB_SEARCH_ENABLE_DNS_FALLBACK=1
+        if command -v resolvectl >/dev/null 2>&1; then
+            echo "  - resolvectl 상태(요약):"
+            resolvectl status 2>/dev/null | sed -n '1,40p' || true
+        fi
+    else
+        echo "  - DNS 조회 정상 (${success_count}/3)"
+        export WEB_SEARCH_DNS_SERVERS
+    fi
+}
+
+is_port_listening() {
+    local port_hex
+    port_hex=$(printf '%04X' "$1")
+    awk -v p="$port_hex" '
+        NR > 1 {
+            split($2, addr, ":")
+            if (toupper(addr[2]) == p && $4 == "0A") {
+                found = 1
+                exit 0
+            }
+        }
+        END { if (!found) exit 1 }
+    ' /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
+
+wait_port() {
+    local port="$1" timeout="${2:-30}" waited=0
+    while [ "$waited" -lt "$timeout" ]; do
+        if is_port_listening "$port"; then
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    return 1
+}
+
+# -------------------------------------------------------------------
+# 개별 서비스 시작 함수
+# -------------------------------------------------------------------
+
+start_ollama() {
+    log_msg "[1/8] [Ollama] 시작 중 (모델: $OLLAMA_MODEL)..."
+
+    # systemd ollama 서비스 먼저 중지 (자동 재시작 방지)
+    if systemctl is-active ollama.service >/dev/null 2>&1; then
+        log_msg "[Ollama] systemd ollama.service 중지 중..."
+        sudo systemctl stop ollama.service 2>/dev/null || true
+        sleep 1
+        log_msg "[Ollama] systemd ollama.service 중지 완료"
+    fi
+
+    # 기존 ollama 프로세스 종료
+    if pgrep -x "ollama" >/dev/null 2>&1; then
+        log_msg "[Ollama] 기존 프로세스 종료 중 (PID: $(pgrep -x ollama | tr '\n' ','))..."
+        pkill -x "ollama" 2>/dev/null || true
+        sleep 2
+        # 강제 종료 필요시
+        if pgrep -x "ollama" >/dev/null 2>&1; then
+            log_msg "[Ollama] 강제 종료(SIGKILL) 중..."
+            pkill -9 -x "ollama" 2>/dev/null || true
+            sleep 1
+        fi
+        log_msg "[Ollama] 기존 프로세스 종료 완료"
+    fi
+
+    # 포트 해제 확인
+    local port_wait=0
+    while is_port_listening 11434 && [ "$port_wait" -lt 10 ]; do
+        sleep 1
+        port_wait=$((port_wait + 1))
+    done
+    if [ "$port_wait" -gt 0 ]; then
+        log_msg "[Ollama] 포트 11434 해제 대기 ${port_wait}s"
+    fi
+
+    # ollama serve 백그라운드 실행
+    export OLLAMA_MODELS="${OLLAMA_MODELS:-/workspace/jayeondeule/.ollama/models}"
+    export OLLAMA_NUM_GPU="${OLLAMA_NUM_GPU:-999}"
+    export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+    $OLLAMA_BIN serve >> "$LOG_DIR/ollama.log" 2>&1 &
+    OLLAMA_PID_NUM=$!
+    echo $OLLAMA_PID_NUM > "$OLLAMA_PID"
+
+    # ollama 서버 준비 대기
+    local waited=0
+    while [ "$waited" -lt 15 ]; do
+        if is_port_listening 11434; then
+            log_msg "[Ollama] 시작됨 (PID: $OLLAMA_PID_NUM, Port: 11434, 대기: ${waited}s)"
+            # 모델 사전 로드
+            log_msg "[Ollama] 모델 pull 중: $OLLAMA_MODEL ..."
+            $OLLAMA_BIN pull "$OLLAMA_MODEL" >> "$LOG_DIR/ollama.log" 2>&1 || true
+            log_msg "[Ollama] 모델 pull 완료: $OLLAMA_MODEL"
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    log_msg "[Ollama] 시작 실패 (PID: $OLLAMA_PID_NUM, 15s 타임아웃)"
+    return 1
+}
+
+start_postgresql() {
+    log_msg "[2/8] [PostgreSQL] 시작 확인 중..."
+    if is_port_listening 5432; then
+        log_msg "[PostgreSQL] 이미 실행 중 (port 5432)"
+        return 0
+    fi
+    sudo systemctl start postgresql.service
+    if wait_port 5432 15; then
+        log_msg "[PostgreSQL] 시작됨 (port 5432)"
+    else
+        log_msg "[PostgreSQL] 시작 실패"
+        return 1
+    fi
+}
+
+start_chromadb() {
+    log_msg "[3/8] [ChromaDB] 시작 확인 중..."
+    if is_port_listening 8000; then
+        log_msg "[ChromaDB] 이미 실행 중 (port 8000)"
+        return 0
+    fi
+    sudo systemctl start chromadb.service
+    if wait_port 8000 20; then
+        log_msg "[ChromaDB] 시작됨 (port 8000)"
+    else
+        log_msg "[ChromaDB] 시작 실패"
+        return 1
+    fi
+}
+
+start_scheduler() {
+    log_msg "[4/8] [스케줄러] 시작 중..."
+    pkill -f "agri_ai_core\.scheduler" 2>/dev/null || true
+    sleep 1
+    $PYTHON_BIN -m agri_ai_core.scheduler >> "$LOG_DIR/scheduler.log" 2>&1 &
+    SCHEDULER_PID_NUM=$!
+    echo $SCHEDULER_PID_NUM > "$SCHEDULER_PID"
+    log_msg "[스케줄러] 시작됨 (PID: $SCHEDULER_PID_NUM)"
+}
+
+start_fastapi() {
+    API_PORT="${API_PORT:-8002}"
+    log_msg "[5/8] [REST API] 시작 중 (Port: $API_PORT)..."
+
+    # Python __pycache__ 정리
+    find /workspace/jayeondeule/agri_ai_core -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+
+    # 기존 API 프로세스 정리 (수동 실행된 프로세스 포함)
+    pkill -f "python.*agri_ai_core\.api" 2>/dev/null || true
+    sleep 1
+
+    $PYTHON_BIN -m agri_ai_core.api >> "$LOG_DIR/api.log" 2>&1 &
+    API_PID_NUM=$!
+    echo $API_PID_NUM > "$API_PID"
+    log_msg "[REST API] 시작됨 (PID: $API_PID_NUM, Port: $API_PORT)"
+}
+
+start_searxng() {
+    log_msg "[6/8] [SearXNG] 시작 확인 중..."
+    if is_port_listening 8888; then
+        log_msg "[SearXNG] 이미 실행 중 (port 8888)"
+        return 0
+    fi
+    if docker ps -a --filter "name=searxng" --format "{{.Names}}" 2>/dev/null | grep -q "searxng"; then
+        docker start searxng >/dev/null 2>&1
+    else
+        docker compose -f /workspace/jayeondeule/setup/searxng/docker-compose.yml up -d >/dev/null 2>&1
+    fi
+    if wait_port 8888 15; then
+        log_msg "[SearXNG] 시작됨 (port 8888)"
+    else
+        log_msg "[SearXNG] 시작 실패 (무시하고 계속)"
+    fi
+}
+
+start_springboot() {
+    log_msg "[7/8] [Spring Boot] 시작 확인 중..."
+    if is_port_listening 9090; then
+        log_msg "[Spring Boot] 이미 실행 중 (port 9090)"
+        return 0
+    fi
+    sudo systemctl start jayeondeule_web.service
+    if wait_port 9090 30; then
+        log_msg "[Spring Boot] 시작됨 (port 9090)"
+    else
+        log_msg "[Spring Boot] 시작 실패"
+        return 1
+    fi
+}
+
+start_nginx() {
+    log_msg "[8/8] [Nginx] 시작 확인 중..."
+    if is_port_listening 80; then
+        log_msg "[Nginx] 이미 실행 중 (port 80)"
+        return 0
+    fi
+    sudo systemctl start nginx.service
+    if wait_port 80 10; then
+        log_msg "[Nginx] 시작됨 (port 80, 8080)"
+    else
+        log_msg "[Nginx] 시작 실패"
+        return 1
+    fi
+}
+
+# -------------------------------------------------------------------
+# 프로세스 종료 핸들러
+# -------------------------------------------------------------------
+cleanup() {
+    log_msg "========== 서비스 종료 시작 =========="
+
+    # Nginx 종료
+    log_msg "[Nginx] 종료 중..."
+    sudo systemctl stop nginx.service 2>/dev/null || true
+    log_msg "[Nginx] 종료 완료"
+
+    # Spring Boot 종료
+    log_msg "[Spring Boot] 종료 중..."
+    sudo systemctl stop jayeondeule_web.service 2>/dev/null || true
+    log_msg "[Spring Boot] 종료 완료"
+
+    # SearXNG 종료
+    log_msg "[SearXNG] 종료 중..."
+    docker stop searxng 2>/dev/null || true
+    log_msg "[SearXNG] 종료 완료"
+
+    # REST API 종료
+    if [ -f "$API_PID" ]; then
+        API_PID_NUM=$(cat "$API_PID")
+        if kill -0 "$API_PID_NUM" 2>/dev/null; then
+            log_msg "[REST API] 종료 중 (PID: $API_PID_NUM)..."
+            kill "$API_PID_NUM"
+            wait "$API_PID_NUM" 2>/dev/null || true
+            log_msg "[REST API] 종료 완료"
+        else
+            log_msg "[REST API] 이미 종료됨 (PID: $API_PID_NUM)"
+        fi
+        rm -f "$API_PID"
+    fi
+    pkill -f "python.*agri_ai_core\.api" 2>/dev/null || true
+
+    # 스케줄러 종료
+    if [ -f "$SCHEDULER_PID" ]; then
+        SCHEDULER_PID_NUM=$(cat "$SCHEDULER_PID")
+        if kill -0 "$SCHEDULER_PID_NUM" 2>/dev/null; then
+            log_msg "[스케줄러] 종료 중 (PID: $SCHEDULER_PID_NUM)..."
+            kill "$SCHEDULER_PID_NUM"
+            wait "$SCHEDULER_PID_NUM" 2>/dev/null || true
+            log_msg "[스케줄러] 종료 완료"
+        else
+            log_msg "[스케줄러] 이미 종료됨 (PID: $SCHEDULER_PID_NUM)"
+        fi
+        rm -f "$SCHEDULER_PID"
+    fi
+
+    # ChromaDB 종료
+    log_msg "[ChromaDB] 종료 중..."
+    sudo systemctl stop chromadb.service 2>/dev/null || true
+    log_msg "[ChromaDB] 종료 완료"
+
+    # PostgreSQL 종료
+    log_msg "[PostgreSQL] 종료 중..."
+    sudo systemctl stop postgresql.service 2>/dev/null || true
+    log_msg "[PostgreSQL] 종료 완료"
+
+    # Ollama 종료
+    if [ -f "$OLLAMA_PID" ]; then
+        OLLAMA_PID_NUM=$(cat "$OLLAMA_PID")
+        if kill -0 "$OLLAMA_PID_NUM" 2>/dev/null; then
+            log_msg "[Ollama] 종료 중 (PID: $OLLAMA_PID_NUM)..."
+            kill "$OLLAMA_PID_NUM"
+            wait "$OLLAMA_PID_NUM" 2>/dev/null || true
+            log_msg "[Ollama] 종료 완료"
+        else
+            log_msg "[Ollama] 이미 종료됨 (PID: $OLLAMA_PID_NUM)"
+        fi
+        rm -f "$OLLAMA_PID"
+    fi
+    pkill -x "ollama" 2>/dev/null || true
+    sudo systemctl stop ollama.service 2>/dev/null || true
+
+    log_msg "========== 모든 서비스 종료 완료 =========="
+    exit 0
+}
+
+# SIGTERM, SIGINT 시그널 처리
+trap cleanup SIGTERM SIGINT
+
+# -------------------------------------------------------------------
+# 서비스 시작
+# -------------------------------------------------------------------
+log_msg "========== AgriAI Core 전체 서비스 시작 =========="
+log_msg "  Ollama 모델: $OLLAMA_MODEL"
+
+dns_health_check
+
+# [1/8] Ollama 시작 (LLM 서버 - 가장 먼저 시작)
+start_ollama
+
+# [2/8] PostgreSQL 시작
+start_postgresql
+
+# [3/8] ChromaDB 시작
+start_chromadb
+
+# 초기화 완료 대기
+sleep 3
+
+# [4/7] 스케줄러 시작
+start_scheduler
+
+# [5/8] REST API 시작
+start_fastapi
+
+# [6/8] SearXNG 시작
+start_searxng
+
+# [7/8] Spring Boot 시작
+start_springboot
+
+# [8/8] Nginx 시작
+start_nginx
+
+log_msg "========== 전체 서비스 시작 완료 =========="
+log_msg "  1. Ollama:      http://0.0.0.0:11434 (모델: $OLLAMA_MODEL)"
+log_msg "  2. PostgreSQL:  port 5432"
+log_msg "  3. ChromaDB:    http://0.0.0.0:8000"
+log_msg "  4. Scheduler:   PID $SCHEDULER_PID_NUM"
+log_msg "  5. REST API:    http://0.0.0.0:${API_PORT:-8002}"
+log_msg "  6. SearXNG:     http://0.0.0.0:8888"
+log_msg "  7. Spring Boot: http://0.0.0.0:9090"
+log_msg "  8. Nginx:       http://0.0.0.0:80"
+
+# 모든 프로세스가 종료될 때까지 대기
+wait

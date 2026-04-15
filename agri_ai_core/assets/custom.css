@@ -1,0 +1,156 @@
+/* 전체 텍스트 볼드 */
+body,
+.radix-themes,
+.radix-themes * {
+    font-weight: 700 !important;
+}
+
+/* Remove "Built with Reflex" footer */
+footer {
+    display: none !important;
+}
+
+/* Hide any Reflex branding links */
+a[href*="reflex.dev"],
+a[href*="reflex"] {
+    display: none !important;
+}
+
+/* Hide footer elements */
+.rx-footer,
+[class*="footer"] {
+    display: none !important;
+}
+
+/* Reflex Radix Select: 펼침 목록 글자색 고정 */
+.rt-SelectContent {
+    background-color: #ffffff !important;
+}
+
+.rt-SelectItem,
+.rt-SelectItem span,
+.rt-SelectItemText {
+    color: #000000 !important;
+}
+
+.rt-SelectItem[data-highlighted] {
+    color: #000000 !important;
+    background-color: #e5e7eb !important;
+}
+
+/* 농장/재배사 선택값: 검정 볼드 */
+[data-select-kind="farm-house"],
+[data-select-kind="farm-house"] *,
+.farm-house-select .rt-SelectTrigger,
+.farm-house-select .rt-SelectTrigger *,
+.farm-house-select button,
+.farm-house-select button * {
+    color: #000000 !important;
+    font-weight: 700 !important;
+}
+
+/* 날씨 선택값: 검정 */
+[data-select-kind="weather"],
+[data-select-kind="weather"] *,
+.weather-select .rt-SelectTrigger,
+.weather-select .rt-SelectTrigger *,
+.weather-select button,
+.weather-select button * {
+    color: #000000 !important;
+}
+
+/* 파일 업로드 영역: 큰 드롭존 제거, 하단 컴팩트 배치 */
+.file-upload-area .rx-Upload,
+.file-upload-area .compact-upload {
+    border: none !important;
+    padding: 0 !important;
+    background: transparent !important;
+    text-align: center !important;
+    width: auto !important;
+    min-height: auto !important;
+}
+
+/* 채팅 입력 텍스트 가독성 강화 */
+.chat-textarea,
+.chat-textarea textarea {
+    width: 100% !important;
+}
+
+.chat-textarea textarea {
+    color: #000000 !important;
+    font-size: 14px !important;
+    font-weight: 700 !important;
+    line-height: 20px !important;
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    white-space: pre-wrap !important;
+}
+
+/* 대화 결과(마크다운) 글자색/줄바꿈 고정 */
+.chat-message-markdown,
+.chat-message-markdown * {
+    color: #000000 !important;
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+}
+
+/* 마크다운 기본 단락 여백 제거 (박스 상/하 공백 제거) */
+.chat-message-markdown p,
+.chat-message-markdown pre,
+.chat-message-markdown ul,
+.chat-message-markdown ol,
+.chat-message-markdown li,
+.chat-message-markdown blockquote {
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+}
+
+/* 전송 버튼 컬럼: 자전거 아이콘을 버튼 바로 위에 고정 배치 */
+.send-button-column {
+    min-width: 96px !important;
+    align-self: flex-start !important;
+}
+
+.send-running-fixed-slot {
+    width: 100% !important;
+    height: 32px !important;
+    display: flex !important;
+    align-items: flex-end !important;
+    justify-content: center !important;
+    pointer-events: none !important;
+}
+
+.send-button-raised {
+    position: relative !important;
+    top: -6px !important;
+}
+
+.rag-action-button {
+    min-width: 88px !important;
+    display: inline-flex !important;
+    justify-content: center !important;
+}
+
+.current-selection-box {
+    border: 1px solid #90caf9 !important;
+    border-left: 3px solid #2196f3 !important;
+    border-radius: 6px !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+}
+
+.running-bicycle {
+    font-size: 28px !important;
+    display: inline-block !important;
+    animation: bicycle-run 0.6s ease-in-out infinite alternate !important;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.25));
+}
+
+@keyframes bicycle-run {
+    0% {
+        transform: translateX(0);
+    }
+    100% {
+        transform: translateX(8px);
+    }
+}

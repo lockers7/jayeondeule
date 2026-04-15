@@ -1,0 +1,63 @@
+import React, {useState} from "react";
+import {Dropdown, DropdownDivider} from "react-bootstrap";
+import {ThreeDotsVertical} from "react-bootstrap-icons";
+import AlertModal from "../common/AlertModal.jsx";
+import {useNavigate} from "react-router-dom";
+import {useSelector} from "react-redux";
+import {deleteFarm} from "../../utils/farmUtil.js";
+import UserAddModal from "../user/UserAddModal.jsx";
+
+export default function FarmKebabMenu({farmId}) {
+    const navigate = useNavigate();
+    const userInfo = useSelector((state) => state.auth.userInfo);
+    const isAdmin = userInfo?.authLvel === "ADMIN";
+    const [show, setShow] = useState(false);
+    const [showAddModal, setShowAddModal] = useState(false);
+
+    const handleDelete = () => {
+        deleteFarm(farmId).then(() => navigate("/farm-management"));
+    }
+
+    const handlePatch = () => {
+        navigate(`/farm/${farmId}/edit`);
+    }
+
+    return (
+        <>
+            <Dropdown align="end">
+                <Dropdown.Toggle
+                    variant="light"
+                    id="dropdown-kebab"
+                    bsPrefix="p-0 border-0 bg-transparent"
+                >
+                    <ThreeDotsVertical size={20}/>
+                </Dropdown.Toggle>
+
+                <Dropdown.Menu>
+                    <Dropdown.Item onClick={() => setShowAddModal(true)}>사용자 등록</Dropdown.Item>
+                    <DropdownDivider/>
+                    <Dropdown.Item onClick={handlePatch}>수정</Dropdown.Item>
+                    {isAdmin && (
+                        <Dropdown.Item onClick={() => setShow(true)}>삭제</Dropdown.Item>
+                    )}
+                </Dropdown.Menu>
+            </Dropdown>
+            {isAdmin && (
+                <AlertModal
+                    show={show}
+                    hideModalFunc={() => setShow(false)}
+                    onClickFunc={() => handleDelete()}
+                    title="정말 삭제하시겠습니까?"
+                    body="삭제 후 복구가 불가능할 수 있습니다."
+                    variant="danger"
+                    buttonMsg="삭제"
+                />
+            )}
+            <UserAddModal
+                show={showAddModal}
+                hideModalFunc={() => setShowAddModal(false)}
+                farmId={farmId}
+            />
+        </>
+    )
+}

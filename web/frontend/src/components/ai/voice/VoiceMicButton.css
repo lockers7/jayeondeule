@@ -1,0 +1,60 @@
+.voice-mic-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    padding: 0;
+    flex-shrink: 0;
+}
+
+.voice-mic-idle {
+    background-color: #6c757d;
+    color: #fff;
+}
+
+.voice-mic-idle:hover {
+    background-color: #5a6268;
+}
+
+.voice-mic-recording {
+    background-color: #dc3545;
+    color: #fff;
+    animation: mic-pulse 1s ease-in-out infinite;
+}
+
+.voice-mic-processing {
+    background-color: #ffc107;
+    color: #333;
+    cursor: wait;
+}
+
+/* 중지 버튼: 마이크와 동일한 회색 원, 내부에 빨간 사각형 */
+.voice-mic-stop {
+    background-color: #6c757d;
+    color: #fff;
+}
+
+.voice-mic-stop:hover {
+    background-color: #5a6268;
+}
+
+/* 중지 아이콘: 원 안에 꽉 찬 빨간 사각형 */
+.stop-square {
+    display: block;
+    width: 16px;
+    height: 16px;
+    background-color: #dc3545;
+    border-radius: 2px;
+}
+
+@keyframes mic-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.5); }
+    70%  { box-shadow: 0 0 0 10px rgba(220, 53, 69, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0); }
+}
+

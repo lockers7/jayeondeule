@@ -1,3 +1,9 @@
+*.db
+assets/external/
+.web
+.states
+.ollama/
+.backup/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -152,9 +158,34 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
+# ChromaDB database files (large files)
+chromadb/database/
+chromadb/cache/
+chromadb/backup_*/
+*.sqlite3
+
+# Virtual environment
+.workspace/
+
 # PyCharm
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#.idea/
+#.idea/upload/
+download/
+
+# Large backup/dump files (GitHub 100MB limit)
+setup/system-configs/data/*.sql
+setup/system-configs/data/*.tar.gz
+docs/bak/
+shop/uploads/board/**/*.mp4
+shop/uploads/board/**/*.mov
+shop/uploads/board/**/*.webm
+
+# 런타임 생성 파일 (소스코드 아님)
+logs/
+upload/
+shop/uploads/
+shop/frontend/dist/
+shop/frontend/public/images/efficacy/

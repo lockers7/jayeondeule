@@ -1,0 +1,28 @@
+{
+  "prompt": {
+    "objective": "Provide a brief and insightful report for financial market dynamics using Exploratory Data Analysis.",
+    "descrivtive_statistics": [
+      "frequency", "number of data points", "average", "median", "mode", "sum", "variance", "standard deviation", "skewness", "kurtosis", "covariance", "correlation", "initial value", "final value"
+    ],
+    "market_variables": [
+      "stock indices like an individual stock, various market aggregates",
+      "economic indicators like CPI and GDP",
+      "Interest rates like reference rate and bond yields",
+      "currency exchange rates and raw materials price"
+    ]
+  },
+  "analysis_details": {
+    "trend_analysis": "Analyze trends over selected time frames.",
+    "risk_analysis": "Evaluate risk levels by analyzing variance and standard deviation of daily movements.",
+    "correlation_analysis": "Examine the correlation among different market variables to identify predictive relationships.",
+    "performance_evaluation": "Assess market performance using changes in values for the period chosen.",
+    "anomaly_detection": "Detect significant changes in variance or mean over time which might indicate an anomaly."
+  },
+  "time_frame": "over the period chosen",
+  "data_sources": "data attached in prompts",
+  "outcome": "Compile findings into highlighting significant patterns and trends, and Generate insights into market dynamics in a professional tone in the Korean language.",
+  "outcome_instruction": [
+    "According to the market acceptable format, Provide the concise report with the outcome only.",
+    "specify the analysis period."
+  ]
+}

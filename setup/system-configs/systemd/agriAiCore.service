@@ -1,0 +1,27 @@
+[Unit]
+Description=AgriAI Core Services (All Services)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# agriAiCore로 전체 서비스 시작/종료
+ExecStart=/workspace/jayeondeule/agriAiCore start 0
+ExecStop=/workspace/jayeondeule/agriAiCore stop 0
+
+# 환경 변수 로드
+EnvironmentFile=/workspace/jayeondeule/.env
+
+# 타임아웃 (전체 서비스 시작에 시간 소요)
+TimeoutStartSec=180
+TimeoutStopSec=60
+
+# 로그 출력
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agriAiCore
+
+[Install]
+WantedBy=multi-user.target

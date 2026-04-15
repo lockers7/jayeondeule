@@ -1,0 +1,37 @@
+# ════════════════════════════════════════════════════
+# ChromaDB 컬렉션 관리: 컬렉션 이름 반환 함수들.
+# --->
+# farm_knowledge_collection: farm knowledge collection
+# document_collection: document collection
+# conversation_collection: conversation collection
+# web_knowledge_collection: web knowledge collection
+# ════════════════════════════════════════════════════
+from agri_ai_core.config import settings
+
+
+# ═══════════════════════
+# 컬렉션 이름 반환 함수들
+# ═══════════════════════
+def farm_knowledge_collection():
+    return settings.collections.farm_knowledge or ''
+
+
+# ════════════════════════
+# 업로드된 문서 RAG 컬렉션
+# ════════════════════════
+def document_collection():
+    return settings.collections.document or ''
+
+
+# ═════════════════════════════════════════
+# 대화 요약 RAG 컬렉션 (농장주별 관심/패턴)
+# ═════════════════════════════════════════
+def conversation_collection():
+    return settings.collections.conversation or ''
+
+
+# ═══════════════════════════════════
+# 웹 검색 누적 + LLM 지식 캐시 컬렉션
+# ═══════════════════════════════════
+def web_knowledge_collection():
+    return settings.collections.web_knowledge or ''

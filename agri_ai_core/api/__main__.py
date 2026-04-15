@@ -1,0 +1,26 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# REST API 서버 실행 진입점
+# python -m agri_ai_core.api 명령으로 Uvicorn 기반 FastAPI 서버를 시작합니다.
+# --->
+# main: main
+# ═══════════════════════════════════════════════════════════════════════════
+import os
+import uvicorn
+
+
+def main():
+    host = os.getenv("API_HOST", "0.0.0.0")
+    port = int(os.getenv("API_PORT", "8002"))
+    log_level = os.getenv("API_LOG_LEVEL", "info")
+
+    uvicorn.run(
+        "agri_ai_core.api.app:app",
+        host=host,
+        port=port,
+        log_level=log_level,
+        reload=False,
+    )
+
+
+if __name__ == "__main__":
+    main()
