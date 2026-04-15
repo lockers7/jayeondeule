@@ -1,0 +1,29 @@
+# 빌드 산출물
+target/
+build/
+out/
+*.class
+*.original
+
+# 프론트엔드
+node_modules/
+dist/
+dist_old/
+.vite/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.settings/
+.project
+.classpath
+
+# 로그/임시
+*.log
+*.tmp
+*.swp
+.DS_Store
+
+# 프론트엔드 빌드 산출물 (다양한 이름)
+frontend/dist*/
