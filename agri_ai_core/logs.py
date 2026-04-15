@@ -1,19 +1,20 @@
 # ════════════════════════════════════════════════════════════════
-# 로그 모듈 - 로거 생성, 일별 로테이션 핸들러, 로그 정리 유틸리티.
+# 로그 모듈 — 공용 로거 생성 + 일별 로테이션 + 오래된 로그 자동 정리
+# 모든 설정값(레벨/포맷/보관기간)은 settings.logging 에서 로드한다.
 # --->
-# _setup_logger_impl: setup logger impl
-# setup_logger: setup logger
-# setup_web_logger: setup web logger
-# setup_api_logger: setup api logger
-# _write_temp_and_replace: write temp and replace
-# delete_old_daily_logs: delete old daily logs
-# trim_old_log_entries: trim old log entries
-# trim_large_plain_logs: trim large plain logs
-# cleanup_all_logs: cleanup all logs
-# __init__: init
-# _get_log_filename: get log filename
-# _open: open
-# emit: emit
+# _setup_logger_impl: 실제 로거 설정 구현 (일반/web/api 공통)
+# setup_logger: 일반 모듈용 로거 (ai_YYYY-MM-DD.log)
+# setup_web_logger: 웹 요청 로거 (web_YYYY-MM-DD.log)
+# setup_api_logger: API 호출 로거 (api.log, 별도 로테이션)
+# _write_temp_and_replace: 파일 트리밍 시 원자적 교체 (임시파일 → rename)
+# delete_old_daily_logs: N일 이전 일별 로그 파일 삭제
+# trim_old_log_entries: 큰 로그의 오래된 entry 제거 (날짜 기준)
+# trim_large_plain_logs: 크기 초과 평범 로그 파일 앞부분 제거
+# cleanup_all_logs: 모든 로그 정리 (스케줄러에서 매일 호출)
+# DailyRotatingFileHandler.__init__: 핸들러 초기화
+# DailyRotatingFileHandler._get_log_filename: 현재 날짜 기준 파일명
+# DailyRotatingFileHandler._open: 파일 오픈 (권한 설정 포함)
+# DailyRotatingFileHandler.emit: 로그 기록 (날짜 변경 시 파일 전환)
 # ════════════════════════════════════════════════════════════════
 import os
 import re

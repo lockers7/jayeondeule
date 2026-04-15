@@ -1,16 +1,17 @@
 # ════════════════════════════════════════════════════════════════
-# ChromaDB 데이터 작업: 문서 CRUD, 벡터 검색, 임베딩 upsert.
+# ChromaDB 데이터 작업 계층
+# 문서 저장/조회/삭제/업서트 + 벡터 유사도 검색.
+# 임베딩은 필요 시 자동 생성되며, ID/문서/메타데이터는 JSON-safe로 정제한다.
 # --->
-# _http_post: http post
-# _build_embedding_from_text: build embedding from text
-# add_document: add document
-# get_documents: get documents
-# delete_document: delete document
-# upsert_collection_data: upsert collection data
-# upsert_documents_with_embedding: upsert documents with embedding
-# query_documents: query documents
-# flatten: flatten
-# _flatten: flatten
+# _http_post: ChromaDB POST 통신 래퍼 (MCP 경유)
+# _build_embedding_from_text: 텍스트 → 임베딩 벡터 (embedder 호출)
+# add_document: 단일 문서 추가 (임베딩 자동 생성)
+# get_documents: ID 또는 where 조건으로 문서 조회
+# delete_document: ID 리스트로 문서 삭제
+# upsert_collection_data: 저수준 컬렉션 데이터 업서트 (여러 문서 일괄)
+# upsert_documents_with_embedding: 텍스트→임베딩→업서트 통합
+# query_documents: 벡터 유사도 기반 Top-K 검색
+# flatten, _flatten: 중첩 리스트/dict 평탄화 유틸
 # ════════════════════════════════════════════════════════════════
 import os
 import time

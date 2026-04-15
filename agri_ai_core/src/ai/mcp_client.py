@@ -43,6 +43,7 @@ from urllib import request as urlrequest
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.utils.validators import is_true
+from agri_ai_core.src.utils.json_utils import safe_json_load
 
 logger = setup_logger(__name__)
 
@@ -181,46 +182,14 @@ def _load_mcp_servers() -> Dict[str, Dict[str, Any]]:
         return {}
 
 
-def _jsonrpc(id_value: int, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    payload = {"jsonrpc": "2.0", "id": id_value, "method": method}
-    if params is not None:
-        payload["params"] = params
-    return payload
-
-
-def _find_response(stdout: str, response_id: int) -> Optional[Dict[str, Any]]:
-    for line in stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            message = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if message.get("id") == response_id:
-            return message
-    return None
-
-
-def _extract_text_blocks(result: Dict[str, Any]) -> List[str]:
-    contents = result.get("content")
-    if not isinstance(contents, list):
-        return []
-
-    texts: List[str] = []
-    for item in contents:
-        if not isinstance(item, dict):
-            continue
-        if item.get("type") == "text":
-            text = item.get("text")
-            if isinstance(text, str) and text.strip():
-                texts.append(text)
-    return texts
-
-
-def _format_search_result(title: str, snippet: str, url: str, source: str = "web_search") -> Dict[str, Any]:
-    """검색 결과 항목을 표준 dict 형태로 생성."""
-    return {"title": title, "snippet": snippet, "url": url, "source": source}
+# 순수 유틸 함수들은 mcp_utils.py로 분리됨 (하위 호환 alias 유지)
+from agri_ai_core.src.ai.mcp_utils import (
+    build_jsonrpc as _jsonrpc,
+    find_response_line as _find_response,
+    extract_text_blocks as _extract_text_blocks,
+    format_search_result as _format_search_result,
+    parse_markdown_table as _parse_markdown_table,
+)
 
 
 def _check_error_with_dns_diag(error_text: str, context: str = "") -> None:
@@ -234,10 +203,7 @@ def _try_parse_json(text: str) -> Optional[Any]:
     stripped = text.strip()
     if not stripped:
         return None
-    try:
-        return json.loads(stripped)
-    except json.JSONDecodeError:
-        return None
+    return safe_json_load(stripped)
 
 
 def call_mcp_server_tool(
@@ -364,12 +330,9 @@ def _coerce_json_and_text(value: Any) -> Tuple[Optional[Any], str]:
     if value is None:
         return None, ""
     text = str(value)
-    try:
-        parsed = json.loads(text)
-        if isinstance(parsed, (dict, list)):
-            return parsed, text
-    except Exception:
-        pass
+    parsed = safe_json_load(text)
+    if isinstance(parsed, (dict, list)):
+        return parsed, text
     return None, text
 
 
@@ -628,9 +591,8 @@ def mcp_fetch_json(
     data = result.get("json")
     if data is None:
         raw_text = result.get("text", "")
-        try:
-            data = json.loads(raw_text)
-        except Exception:
+        data = safe_json_load(raw_text)
+        if data is None:
             return {
                 "success": False,
                 "status_code": result.get("status_code", 500),
@@ -703,26 +665,6 @@ def mcp_http_request(
         return mcp_status_code, None, combined_error
 
     return direct_status, None, direct_text
-
-
-def _parse_markdown_table(text: str) -> List[Dict[str, Any]]:
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    table_lines = [line for line in lines if line.startswith("|") and line.endswith("|")]
-    if len(table_lines) < 2:
-        return []
-
-    header = [h.strip() for h in table_lines[0].strip("|").split("|")]
-    data_start_idx = 1
-    if set(table_lines[1].replace("|", "").replace("-", "").replace(" ", "")) == {""}:
-        data_start_idx = 2
-
-    rows: List[Dict[str, Any]] = []
-    for line in table_lines[data_start_idx:]:
-        cols = [c.strip() for c in line.strip("|").split("|")]
-        if len(cols) != len(header):
-            continue
-        rows.append(dict(zip(header, cols)))
-    return rows
 
 
 _POSTGRES_TOOL_NAME = os.getenv("MCP_POSTGRES_TOOL_NAME", "query")

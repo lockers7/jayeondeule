@@ -70,6 +70,7 @@ except Exception:
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.config import NUM_PREDICT, NUM_CTX, NUM_PREDICT_TOOL_CALL, get_ollama_url, get_model_name
 from agri_ai_core.src.utils.validators import is_true
+from agri_ai_core.src.utils.json_utils import safe_json_load
 from agri_ai_core.src.ai.utils import GREETING_RE as _GREETING_RE
 from agri_ai_core.src.ai.llm_response import (
     clean_llm_response,
@@ -448,18 +449,15 @@ def _mcp_ollama_chat(
 
 
 
-def _serialize_for_log(obj):
-    if obj is None or isinstance(obj, (str, int, float, bool)):
-        return obj
-    if isinstance(obj, dict):
-        return {k: _serialize_for_log(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_serialize_for_log(item) for item in obj]
-    if hasattr(obj, "model_dump"):
-        return obj.model_dump()
-    if hasattr(obj, "__dict__"):
-        return {k: _serialize_for_log(v) for k, v in obj.__dict__.items() if not k.startswith("_")}
-    return str(obj)
+# 순수 메시지 유틸은 llm_message_utils.py로 분리됨 (하위 호환 alias 유지)
+from agri_ai_core.src.ai.llm_message_utils import (
+    serialize_for_log as _serialize_for_log,
+    extract_message_content as _extract_message_content,
+    normalize_assistant_message as _normalize_assistant_message,
+    extract_tool_name as _extract_tool_name,
+    extract_tool_arguments as _extract_tool_arguments,
+    coerce_numeric_id as _coerce_numeric_id,
+)
 
 
 def _log_llm_request_json(model, messages, options, tools, keep_alive):
@@ -582,54 +580,6 @@ def _ollama_chat(
 
 
 
-def _extract_message_content(response: Any) -> str:
-    if hasattr(response, "message"):
-        message = getattr(response, "message")
-        if hasattr(message, "content"):
-            content = getattr(message, "content", "")
-            if isinstance(content, str):
-                return content
-        if isinstance(message, dict):
-            content = message.get("content")
-            if isinstance(content, str):
-                return content
-
-    if isinstance(response, dict):
-        message = response.get("message")
-        if isinstance(message, dict):
-            content = message.get("content")
-            if isinstance(content, str):
-                return content
-        response_text = response.get("response")
-        if isinstance(response_text, str):
-            return response_text
-    return ""
-
-
-def _normalize_assistant_message(assistant_message: Any) -> Dict[str, Any]:
-    if isinstance(assistant_message, dict):
-        normalized: Dict[str, Any] = {
-            "role": assistant_message.get("role") or "assistant",
-            "content": assistant_message.get("content") or "",
-        }
-        tool_calls = assistant_message.get("tool_calls")
-        if isinstance(tool_calls, list) and tool_calls:
-            normalized["tool_calls"] = tool_calls
-        return normalized
-
-    normalized = {
-        "role": getattr(assistant_message, "role", "assistant"),
-        "content": getattr(assistant_message, "content", "") or "",
-    }
-    tool_calls = getattr(assistant_message, "tool_calls", None)
-    if tool_calls:
-        try:
-            normalized["tool_calls"] = list(tool_calls)
-        except Exception:
-            normalized["tool_calls"] = tool_calls
-    return normalized
-
-
 # LLM 응답에서 도구 호출 추출 (tool_calls 필드 우선, content에 JSON 도구 호출이 텍스트로 출력된 경우도 파싱)
 def _extract_tool_calls(assistant_message: Dict[str, Any]) -> List[Any]:
     tool_calls = assistant_message.get("tool_calls")
@@ -640,83 +590,23 @@ def _extract_tool_calls(assistant_message: Dict[str, Any]) -> List[Any]:
     # 예: {"name": "search_farm_knowledge", "arguments": {...}}
     content = assistant_message.get("content", "").strip()
     if content.startswith("{") and content.endswith("}"):
-        try:
-            parsed = json.loads(content)
-            if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
-                # 도구 호출 JSON을 정규 tool_call 형식으로 변환
-                tool_call = {"function": {"name": parsed["name"], "arguments": parsed["arguments"]}}
-                # content를 비워서 최종답변으로 사용되지 않도록 함
-                assistant_message["content"] = ""
-                assistant_message["tool_calls"] = [tool_call]
-                logger.warning(
-                    f"[Tool Use] content에서 도구호출 JSON 감지 → tool_calls로 변환: {parsed['name']}"
-                )
-                return [tool_call]
-        except (json.JSONDecodeError, KeyError, TypeError):
-            pass
+        parsed = safe_json_load(content)
+        if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
+            # 도구 호출 JSON을 정규 tool_call 형식으로 변환
+            tool_call = {"function": {"name": parsed["name"], "arguments": parsed["arguments"]}}
+            # content를 비워서 최종답변으로 사용되지 않도록 함
+            assistant_message["content"] = ""
+            assistant_message["tool_calls"] = [tool_call]
+            logger.warning(
+                f"[Tool Use] content에서 도구호출 JSON 감지 → tool_calls로 변환: {parsed['name']}"
+            )
+            return [tool_call]
 
     return []
 
 
-def _extract_tool_name(tool_call: Any) -> Optional[str]:
-    if isinstance(tool_call, dict):
-        function = tool_call.get("function")
-        if isinstance(function, dict):
-            name = function.get("name")
-            if isinstance(name, str) and name.strip():
-                return name.strip()
-        name = tool_call.get("name")
-        if isinstance(name, str) and name.strip():
-            return name.strip()
-        return None
-
-    function = getattr(tool_call, "function", None)
-    if function is not None:
-        name = getattr(function, "name", None)
-        if isinstance(name, str) and name.strip():
-            return name.strip()
-    name = getattr(tool_call, "name", None)
-    if isinstance(name, str) and name.strip():
-        return name.strip()
-    return None
-
-
-def _extract_tool_arguments(tool_call: Any) -> Dict[str, Any]:
-    raw_args: Any = None
-    if isinstance(tool_call, dict):
-        function = tool_call.get("function")
-        if isinstance(function, dict):
-            raw_args = function.get("arguments")
-        if raw_args is None:
-            raw_args = tool_call.get("arguments")
-    else:
-        function = getattr(tool_call, "function", None)
-        if function is not None:
-            raw_args = getattr(function, "arguments", None)
-        if raw_args is None:
-            raw_args = getattr(tool_call, "arguments", None)
-
-    if isinstance(raw_args, dict):
-        return raw_args
-    if isinstance(raw_args, str):
-        try:
-            parsed = json.loads(raw_args)
-            if isinstance(parsed, dict):
-                return parsed
-        except Exception:
-            return {}
-    return {}
-
-
-def _coerce_numeric_id(provided_id, default_id):
-    """LLM이 비정수 값을 ID로 넣는 경우 기본값(정수)으로 교정한다."""
-    if provided_id in (None, "") or default_id in (None, ""):
-        return provided_id
-    provided_text = str(provided_id).strip()
-    default_text = str(default_id).strip()
-    if default_text.isdigit() and not provided_text.isdigit():
-        return default_text
-    return provided_id
+# _extract_tool_name, _extract_tool_arguments, _coerce_numeric_id은 llm_message_utils로 이동됨
+# (상단 import에서 alias로 재노출)
 
 
 

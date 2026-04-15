@@ -23,6 +23,7 @@ import traceback
 from urllib.parse import quote, urlparse, urlunparse, parse_qs, urlencode
 
 from agri_ai_core.logs import setup_logger
+from agri_ai_core.src.utils.json_utils import safe_json_load
 
 logger = setup_logger(__name__)
 
@@ -235,17 +236,15 @@ class DataCollector:
         for item in self.collected_data:
             if item.get("tool") != "search_web":
                 continue
-            try:
-                raw = item.get("raw", "")
-                data = json.loads(raw) if isinstance(raw, str) else raw
-                results_list = data.get("results", []) if isinstance(data, dict) else []
-                for r in results_list[:5]:
-                    title = r.get("title", "")
-                    url = r.get("url", "")
-                    if url and title:
-                        urls.append(f"- {title}: {url}")
-            except Exception:
-                pass
+            raw = item.get("raw", "")
+            data = safe_json_load(raw) if isinstance(raw, str) else raw
+            if not isinstance(data, dict):
+                continue
+            for r in data.get("results", [])[:5]:
+                title = r.get("title", "")
+                url = r.get("url", "")
+                if url and title:
+                    urls.append(f"- {title}: {url}")
         return "\n".join(urls) if urls else ""
 
     # ════════════════════════════════════════════════════════════
@@ -259,20 +258,18 @@ class DataCollector:
 
     def _extract_all_search_sources(self, raw_result):
         """search_web 결과의 모든 출처를 수집 (최대 5건)"""
-        try:
-            data = json.loads(raw_result) if isinstance(raw_result, str) else raw_result
-            results_list = data.get("results", []) if isinstance(data, dict) else []
-            added = 0
-            for item in results_list:
-                if added >= 5:
-                    break
-                title = item.get("title", "")
-                url = item.get("url", "")
-                if url and title and not any(s.get("url") == url for s in self.collected_sources):
-                    self.collected_sources.append({"title": title, "url": url})
-                    added += 1
-        except Exception as e:
-            logger.debug(f"[2단계] 출처 추출 오류: {e}")
+        data = safe_json_load(raw_result) if isinstance(raw_result, str) else raw_result
+        if not isinstance(data, dict):
+            return
+        added = 0
+        for item in data.get("results", []):
+            if added >= 5:
+                break
+            title = item.get("title", "")
+            url = item.get("url", "")
+            if url and title and not any(s.get("url") == url for s in self.collected_sources):
+                self.collected_sources.append({"title": title, "url": url})
+                added += 1
 
     def _add_fetch_source(self, url):
         """fetch_url 출처 추가"""

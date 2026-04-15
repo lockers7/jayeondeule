@@ -65,20 +65,8 @@ def _classify_topic(query: str) -> str:
     return "general"
 
 
-# ═══════════════════
-# 공통 중복 제거 헬퍼
-# ═══════════════════
-def _dedupe_list(items, type_check, key_fn, value_fn=None):
-    deduped, seen = [], set()
-    for item in items or []:
-        if not isinstance(item, type_check):
-            continue
-        key = key_fn(item)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        deduped.append(value_fn(item) if value_fn else item)
-    return deduped
+# _dedupe_list는 query_utils.py로 이동됨 (하위 호환 alias)
+from agri_ai_core.src.ai.query_utils import dedupe_list as _dedupe_list
 
 
 # ═════════════════════
@@ -742,28 +730,8 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
 # SSE 스트리밍 질의 처리
 # ══════════════════════
 
-def _split_for_streaming(text, target_size=30):
-    if not text:
-        return
-    i = 0
-    text_len = len(text)
-    while i < text_len:
-        if i + target_size >= text_len:
-            yield text[i:]
-            break
-        end = i + target_size
-        best = -1
-        for delim in ['\n', '. ', '? ', '! ', ', ', ' ']:
-            pos = text.rfind(delim, i + 5, end + 10)
-            if pos > i:
-                best = pos + len(delim)
-                break
-        if best > i:
-            yield text[i:best]
-            i = best
-        else:
-            yield text[i:end]
-            i = end
+# _split_for_streaming은 query_utils.py로 이동됨 (하위 호환 alias)
+from agri_ai_core.src.ai.query_utils import split_for_streaming as _split_for_streaming
 
 
 async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,

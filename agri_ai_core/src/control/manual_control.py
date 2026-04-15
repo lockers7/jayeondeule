@@ -668,7 +668,107 @@ def control_manual_environment(farm_id, house_id, growth_stage='생육기', orde
 # ════════════════════
 # 전체 재배사 환경제어
 # ════════════════════
+def _mode_short_of(h):
+    """재배사 레코드에서 짧은 모드명 추출 (control_all_manual 내부 헬퍼)."""
+    if not h.get("mnul_ctrl_flag"):
+        return "수동제어"
+    elif h.get("ctrl_type") == "ai":
+        return "인공지능"
+    else:
+        return "알고리즘"
+
+
+def _log_house_order_prefix(ordered_houses):
+    """재배사 순서 + 모드 접두사 로그 출력."""
+    mode_set = set(_mode_short_of(h) for h in ordered_houses if h.get("hous_id") is not None)
+    if len(mode_set) == 1:
+        all_mode_prefix = mode_set.pop()
+        house_order = ", ".join(
+            str(h.get("hous_id")) for h in ordered_houses if h.get("hous_id") is not None
+        )
+    else:
+        all_mode_prefix = ""
+        house_order = ", ".join(
+            f"{h.get('hous_id')}({_mode_short_of(h)})"
+            for h in ordered_houses if h.get("hous_id") is not None
+        )
+    if house_order:
+        logger.info(f"{all_mode_prefix} 환경제어 대상 순서: {house_order}")
+
+
+def _run_schedules_for_house(farm_id, house_id, order_label):
+    """재배사별 조명/관수 스케줄 제어 실행 + 로그 출력."""
+    logger.info("-")
+    light_result = control_lighting_schedule(farm_id, house_id)
+    irrigation_result = control_irrigation_schedule(farm_id, house_id)
+    sched_parts = [
+        f"조명 {light_result.get('status', '-')}",
+        f"관수 {irrigation_result.get('status', '-')}",
+    ]
+    sched_schedules = list(light_result.get("schedules", [])) + list(irrigation_result.get("schedules", []))
+    sched_info = f" (스케줄: {', '.join(sched_schedules)})" if sched_schedules else ""
+    logger.info(
+        f"{order_label} 농장 {farm_id}, 재배사 {house_id}: "
+        f"{' / '.join(sched_parts)}{sched_info}"
+    )
+
+
+def _determine_mode_label(house, growth_stage):
+    """재배사 설정 + 생육단계로부터 모드 라벨/단축명 결정.
+    Returns: (mode_label, mode_short)
+    """
+    mnul_ctrl_flag = house.get("mnul_ctrl_flag")
+    ctrl_type = house.get("ctrl_type", "algorithm")
+    if not mnul_ctrl_flag:
+        return "사용자 직접입력 모드", "수동제어"
+    if ctrl_type == 'ai':
+        return "AI 제어 모드", "인공지능"
+    if growth_stage == '휴지기':
+        return "휴지기", "휴지기"
+    return "알고리즘 수동제어", "알고리즘"
+
+
+def _process_ai_mode_house(farm_id, house_id, growth_stage, order_label):
+    """AI 제어 모드 재배사 처리 (비상제어 + 모니터링).
+    Returns: (result_dict_or_None, success_delta, fail_delta)
+    """
+    try:
+        import importlib
+        _ai_mod = importlib.import_module('agri_ai_core.src.control.ai_control')
+        monitor_ai_emergency = _ai_mod.monitor_ai_emergency
+        control_ai_environment = _ai_mod.control_ai_environment
+
+        # 1. 비상제어 (하드 리밋 — AI보다 우선)
+        result, handled = _handle_ai_emergency(farm_id, house_id, growth_stage, order_label)
+        if handled:
+            return result, (1 if result.get("success") else 0), (0 if result.get("success") else 1)
+
+        # 2. AI 모니터링 (소프트 긴급: 임계치 근접 / 트렌드 급변)
+        needs_intervention = monitor_ai_emergency(farm_id, house_id, order_label)
+        if needs_intervention:
+            result = control_ai_environment(farm_id, house_id, growth_stage, order_label)
+            return result, (1 if result.get("success") else 0), (0 if result.get("success") else 1)
+        scope = _house_prefix(order_label, farm_id, house_id)
+        logger.info(f"{scope}: 정상 - [AI] 판단: 대기 (LLM 미호출 주기)")
+        return None, 0, 0
+    except Exception as e:
+        logger.error(f"{order_label} AI 제어 예외: {e}")
+        return None, 0, 0
+
+
+def _log_completion_summary(mode_counts, total, success_count, fail_count):
+    """전체 환경제어 완료 요약 로그."""
+    if len(mode_counts) == 1:
+        done_prefix = list(mode_counts.keys())[0]
+        logger.info(f"{done_prefix} 환경제어 완료: 총 {total}개 재배사 (성공: {success_count}, 실패: {fail_count})")
+    else:
+        mode_str = ", ".join(f"{k} {v}" for k, v in mode_counts.items())
+        logger.info(f"환경제어 완료: {mode_str} (총 {total}개, 성공: {success_count}, 실패: {fail_count})")
+    logger.info("-")
+
+
 def control_all_manual():
+    """전체 재배사 수동/알고리즘/AI 환경제어 실행 (스케줄러 10초 주기)."""
     try:
         with db_session() as database:
             houses = database.fetch_all(
@@ -682,30 +782,7 @@ def control_all_manual():
                 return {"success": True, "total": 0, "results": []}
 
             ordered_houses = _sort_houses(houses)
-
-            # 재배사별 모드 접두사 결정
-            def _mode_short(h):
-                if not h.get("mnul_ctrl_flag"):
-                    return "수동제어"
-                elif h.get("ctrl_type") == "ai":
-                    return "인공지능"
-                else:
-                    return "알고리즘"
-
-            mode_set = set(_mode_short(h) for h in ordered_houses if h.get("hous_id") is not None)
-            if len(mode_set) == 1:
-                all_mode_prefix = mode_set.pop()
-                house_order = ", ".join(
-                    str(h.get("hous_id")) for h in ordered_houses if h.get("hous_id") is not None
-                )
-            else:
-                all_mode_prefix = ""
-                house_order = ", ".join(
-                    f"{h.get('hous_id')}({_mode_short(h)})"
-                    for h in ordered_houses if h.get("hous_id") is not None
-                )
-            if house_order:
-                logger.info(f"{all_mode_prefix} 환경제어 대상 순서: {house_order}")
+            _log_house_order_prefix(ordered_houses)
 
             results = []
             success_count = 0
@@ -721,44 +798,16 @@ def control_all_manual():
 
                 order_label = f"[{index}/{len(ordered_houses)}]"
 
-                # ── 스케줄 제어 (조명/관수) — 재배사별 로그 순서 보장 ──
-                logger.info("-")
-                light_result = control_lighting_schedule(farm_id, house_id)
-                irrigation_result = control_irrigation_schedule(farm_id, house_id)
-                sched_parts = []
-                sched_schedules = []
-                sched_parts.append(f"조명 {light_result.get('status', '-')}")
-                sched_schedules.extend(light_result.get("schedules", []))
-                sched_parts.append(f"관수 {irrigation_result.get('status', '-')}")
-                sched_schedules.extend(irrigation_result.get("schedules", []))
-                sched_info = f" (스케줄: {', '.join(sched_schedules)})" if sched_schedules else ""
-                logger.info(
-                    f"{order_label} 농장 {farm_id}, 재배사 {house_id}: "
-                    f"{' / '.join(sched_parts)}{sched_info}"
-                )
+                # 조명/관수 스케줄 제어
+                _run_schedules_for_house(farm_id, house_id, order_label)
 
                 # 생육단계 조회 (모든 재배사 공통)
                 growth_stage = read_current_growth_stage(farm_id, house_id)
                 if not growth_stage:
                     growth_stage = '생육기'
 
-                # 제어 모드 확인
-                mnul_ctrl_flag = house.get("mnul_ctrl_flag")
-                ctrl_type = house.get("ctrl_type", "algorithm")
-
-                # 운용 모드 라벨 결정
-                if not mnul_ctrl_flag:
-                    mode_label = "사용자 직접입력 모드"
-                    mode_short = "수동제어"
-                elif ctrl_type == 'ai':
-                    mode_label = "AI 제어 모드"
-                    mode_short = "인공지능"
-                elif growth_stage == '휴지기':
-                    mode_label = "휴지기"
-                    mode_short = "휴지기"
-                else:
-                    mode_label = "알고리즘 수동제어"
-                    mode_short = "알고리즘"
+                # 운용 모드 결정
+                mode_label, mode_short = _determine_mode_label(house, growth_stage)
                 mode_counts[mode_short] = mode_counts.get(mode_short, 0) + 1
 
                 logger.info(
@@ -767,47 +816,20 @@ def control_all_manual():
                 )
 
                 # AI 제어 모드 (10초 주기: 비상제어 + 모니터링만)
-                # LLM 정기 호출은 별도 5분 주기 작업(control_all_ai)에서 수행
                 if mode_label == "AI 제어 모드":
-                    try:
-                        import importlib
-                        _ai_mod = importlib.import_module('agri_ai_core.src.control.ai_control')
-                        monitor_ai_emergency = _ai_mod.monitor_ai_emergency
-                        control_ai_environment = _ai_mod.control_ai_environment
-
-                        # 1. 비상제어 (하드 리밋 — AI보다 우선)
-                        result, handled = _handle_ai_emergency(farm_id, house_id, growth_stage, order_label)
-                        if handled:
-                            results.append({"farm_id": farm_id, "house_id": house_id, "result": result})
-                            if result.get("success"):
-                                success_count += 1
-                            else:
-                                fail_count += 1
-                            continue
-
-                        # 2. AI 모니터링 (소프트 긴급: 임계치 근접 / 트렌드 급변)
-                        needs_intervention = monitor_ai_emergency(farm_id, house_id, order_label)
-                        if needs_intervention:
-                            result = control_ai_environment(farm_id, house_id, growth_stage, order_label)
-                            results.append({"farm_id": farm_id, "house_id": house_id, "result": result})
-                            if result.get("success"):
-                                success_count += 1
-                            else:
-                                fail_count += 1
-                        else:
-                            scope = _house_prefix(order_label, farm_id, house_id)
-                            logger.info(f"{scope}: 정상 - [AI] 판단: 대기 (LLM 미호출 주기)")
-                        continue
-                    except Exception as e:
-                        logger.error(f"{order_label} AI 제어 예외: {e}")
-                        continue
+                    ai_result, s, f = _process_ai_mode_house(farm_id, house_id, growth_stage, order_label)
+                    if ai_result is not None:
+                        results.append({"farm_id": farm_id, "house_id": house_id, "result": ai_result})
+                    success_count += s
+                    fail_count += f
+                    continue
 
                 # 나머지 모드 (사용자 직접입력, 휴지기) → 센서/릴레이 현황만 로깅 후 스킵
                 if mode_label != "알고리즘 수동제어":
                     _log_house_status(farm_id, house_id, order_label)
                     continue
 
-                # LLM 제어 잠금 체크 (LLM이 릴레이를 제어한 후 일정 시간 동안 자동제어 억제)
+                # LLM 제어 잠금 체크
                 if is_llm_relay_locked(farm_id, house_id):
                     scope = _house_prefix(order_label, farm_id, house_id)
                     logger.info(f"{scope}: LLM 제어 잠금 활성 → 자동제어 스킵")
@@ -815,10 +837,7 @@ def control_all_manual():
                     continue
 
                 result = control_manual_environment(
-                    farm_id,
-                    house_id,
-                    growth_stage,
-                    order_label=order_label,
+                    farm_id, house_id, growth_stage, order_label=order_label,
                 )
 
                 if result.get("success"):
@@ -832,13 +851,7 @@ def control_all_manual():
                     "result": result
                 })
 
-            if len(mode_counts) == 1:
-                done_prefix = list(mode_counts.keys())[0]
-                logger.info(f"{done_prefix} 환경제어 완료: 총 {len(results)}개 재배사 (성공: {success_count}, 실패: {fail_count})")
-            else:
-                mode_str = ", ".join(f"{k} {v}" for k, v in mode_counts.items())
-                logger.info(f"환경제어 완료: {mode_str} (총 {len(results)}개, 성공: {success_count}, 실패: {fail_count})")
-            logger.info("-")
+            _log_completion_summary(mode_counts, len(results), success_count, fail_count)
 
             return {
                 "success": fail_count == 0,

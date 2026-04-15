@@ -33,6 +33,7 @@ from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.postgresql.connection import db_session
 from agri_ai_core.src.postgresql import queries as dbQry
 from agri_ai_core.src.utils.conversion import safe_float, safe_int
+from agri_ai_core.src.utils.error_utils import log_and_return
 
 logger = setup_logger(__name__)
 
@@ -149,17 +150,14 @@ def _get_moving_averages(farm_id, house_id, start_dt: str, end_dt: str) -> List[
 # ═════════════════════════════════════
 # 당일 생육 입력이 존재하는지 확인한다.
 # ═════════════════════════════════════
+@log_and_return(default=False, logger=logger, message="[생육RAG] 당일 생육 확인")
 def _check_today_crops(farm_id, house_id) -> bool:
-    try:
-        with db_session() as database:
-            row = database.fetch_one(
-                dbQry.CHECK_TODAY_CROPS_EXISTS,
-                (farm_id, house_id),
-            )
-            return (row.get("cnt", 0) or 0) > 0 if row else False
-    except Exception as e:
-        logger.warning(f"[생육RAG] 당일 생육 확인 실패: {e}")
-        return False
+    with db_session() as database:
+        row = database.fetch_one(
+            dbQry.CHECK_TODAY_CROPS_EXISTS,
+            (farm_id, house_id),
+        )
+        return (row.get("cnt", 0) or 0) > 0 if row else False
 
 
 # ═════════════════════════════════

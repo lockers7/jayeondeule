@@ -13,6 +13,7 @@ from typing import Any, Dict, List
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.config import get_ollama_url, get_model_name
+from agri_ai_core.src.utils.json_utils import safe_json_load
 
 logger = setup_logger(__name__)
 
@@ -67,12 +68,12 @@ def _parse_scores(response_text: str, expected_count: int) -> List[int]:
     # JSON 배열 패턴 매칭
     array_match = re.search(r'\[[\d\s,]+\]', response_text)
     if array_match:
-        try:
-            scores = json.loads(array_match.group())
-            if isinstance(scores, list) and len(scores) == expected_count:
+        scores = safe_json_load(array_match.group())
+        if isinstance(scores, list) and len(scores) == expected_count:
+            try:
                 return [max(1, min(10, int(s))) for s in scores]
-        except (json.JSONDecodeError, ValueError):
-            pass
+            except (ValueError, TypeError):
+                pass
 
     # 쉼표/공백 구분 숫자 파싱
     numbers = re.findall(r'\b(\d{1,2})\b', response_text)

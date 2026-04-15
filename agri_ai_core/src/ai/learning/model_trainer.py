@@ -14,6 +14,7 @@ from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.chroma.collections import farm_knowledge_collection
 from agri_ai_core.src.utils.date_utils import parse_datetime
 from agri_ai_core.src.utils.conversion import convert_sensor_relay_data
+from agri_ai_core.src.utils.error_utils import log_and_return
 from agri_ai_core.src.chroma.client import heartbeat
 from agri_ai_core.src.chroma.operations import (
     get_documents,
@@ -36,17 +37,13 @@ logger = setup_logger(__name__)
 # ═══════════════════════
 # ChromaDB 연결 상태 확인
 # ═══════════════════════
+@log_and_return(default=False, logger=logger, message="ChromaDB 연결 확인")
 def verify_chroma_connection():
-    try:
-        status = heartbeat()
-        if "error" in status:
-            logger.error(f"ChromaDB 연결 실패: {status['error']}")
-            return False
-        else:
-            return True
-    except Exception as e:
-        logger.error(f"ChromaDB 연결 확인 중 오류: {e}")
+    status = heartbeat()
+    if "error" in status:
+        logger.error(f"ChromaDB 연결 실패: {status['error']}")
         return False
+    return True
 
 
 # ═════════════════════════

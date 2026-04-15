@@ -13,6 +13,8 @@ import time
 import traceback
 from datetime import datetime
 
+from agri_ai_core.src.utils.json_utils import safe_json_load
+
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.ai.pipeline.prompts import ANALYZER_SYSTEM_PROMPT
 
@@ -74,11 +76,10 @@ def _parse_analysis_json(response_text):
             depth -= 1
             if depth == 0:
                 json_str = text[brace_start:i + 1]
-                try:
-                    return json.loads(json_str)
-                except json.JSONDecodeError:
+                result = safe_json_load(json_str)
+                if result is None:
                     logger.warning(f"[1단계] JSON 파싱 실패: {json_str[:200]}")
-                    return None
+                return result
     return None
 
 
