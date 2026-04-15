@@ -15,7 +15,6 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/shop/auth")
 @RequiredArgsConstructor
-@SuppressWarnings("null")
 public class AuthController {
     private final AuthService authService;
     private final ShopUserRepository userRepo;

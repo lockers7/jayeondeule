@@ -16,7 +16,6 @@ import java.util.Set;
 @RestController
 @RequestMapping("/api/shop/board")
 @RequiredArgsConstructor
-@SuppressWarnings("null")
 public class BoardController {
     private final BoardService boardService;
     private final JwtUtil jwtUtil;

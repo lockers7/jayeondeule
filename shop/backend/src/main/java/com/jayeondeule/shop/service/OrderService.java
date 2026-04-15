@@ -15,7 +15,6 @@ import java.util.*;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-@SuppressWarnings("null")
 public class OrderService {
     private final ShopOrderRepository orderRepo;
     private final BoardPostRepository boardPostRepo;

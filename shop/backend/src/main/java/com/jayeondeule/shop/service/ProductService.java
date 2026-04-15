@@ -23,7 +23,6 @@ import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
-@SuppressWarnings("null")
 @Slf4j
 public class ProductService {
     private final ShopProductRepository productRepo;

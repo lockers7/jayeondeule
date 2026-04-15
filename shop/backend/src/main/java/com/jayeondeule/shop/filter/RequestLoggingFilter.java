@@ -7,7 +7,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
-import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.util.ContentCachingRequestWrapper;
@@ -22,10 +21,11 @@ import java.nio.charset.StandardCharsets;
 public class RequestLoggingFilter extends OncePerRequestFilter {
 
     @Override
-    protected void doFilterInternal(@NonNull HttpServletRequest request, @NonNull HttpServletResponse response, @NonNull FilterChain chain)
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
+            FilterChain chain)
             throws ServletException, IOException {
 
-        ContentCachingRequestWrapper reqWrapper = new ContentCachingRequestWrapper(request);
+        ContentCachingRequestWrapper reqWrapper = new ContentCachingRequestWrapper(request, 1024 * 1024);
         ContentCachingResponseWrapper resWrapper = new ContentCachingResponseWrapper(response);
 
         long startTime = System.currentTimeMillis();
@@ -46,23 +46,27 @@ public class RequestLoggingFilter extends OncePerRequestFilter {
             if ("POST".equals(method) || "PUT".equals(method) || "PATCH".equals(method)) {
                 reqBody = new String(reqWrapper.getContentAsByteArray(), StandardCharsets.UTF_8);
                 reqBody = maskSensitive(reqBody);
-                if (reqBody.length() > 500) reqBody = reqBody.substring(0, 500) + "...(truncated)";
+                if (reqBody.length() > 500)
+                    reqBody = reqBody.substring(0, 500) + "...(truncated)";
             }
 
             // 응답 본문 (오류 시만)
             String resBody = "";
             if (status >= 400) {
                 resBody = new String(resWrapper.getContentAsByteArray(), StandardCharsets.UTF_8);
-                if (resBody.length() > 500) resBody = resBody.substring(0, 500) + "...(truncated)";
+                if (resBody.length() > 500)
+                    resBody = resBody.substring(0, 500) + "...(truncated)";
             }
 
             // 로그 출력
             if (status >= 500) {
                 log.error("[{}] {} {} {} -> {} ({}ms) IP:{} Body:{} Response:{}",
-                        userId, method, uri, query != null ? "?" + query : "", status, elapsed, clientIp, reqBody, resBody);
+                        userId, method, uri, query != null ? "?" + query : "", status, elapsed, clientIp, reqBody,
+                        resBody);
             } else if (status >= 400) {
                 log.warn("[{}] {} {} {} -> {} ({}ms) IP:{} Body:{} Response:{}",
-                        userId, method, uri, query != null ? "?" + query : "", status, elapsed, clientIp, reqBody, resBody);
+                        userId, method, uri, query != null ? "?" + query : "", status, elapsed, clientIp, reqBody,
+                        resBody);
             } else {
                 log.info("[{}] {} {} {} -> {} ({}ms) IP:{}{}",
                         userId, method, uri, query != null ? "?" + query : "", status, elapsed, clientIp,
@@ -75,14 +79,17 @@ public class RequestLoggingFilter extends OncePerRequestFilter {
 
     private String getClientIp(HttpServletRequest request) {
         String ip = request.getHeader("X-Forwarded-For");
-        if (ip == null || ip.isEmpty()) ip = request.getHeader("X-Real-IP");
-        if (ip == null || ip.isEmpty()) ip = request.getRemoteAddr();
-        if (ip != null && ip.contains(",")) ip = ip.split(",")[0].trim();
+        if (ip == null || ip.isEmpty())
+            ip = request.getHeader("X-Real-IP");
+        if (ip == null || ip.isEmpty())
+            ip = request.getRemoteAddr();
+        if (ip != null && ip.contains(","))
+            ip = ip.split(",")[0].trim();
         return ip;
     }
 
     private String maskSensitive(String body) {
         return body.replaceAll("\"passwd\"\\s*:\\s*\"[^\"]*\"", "\"passwd\":\"****\"")
-                   .replaceAll("\"password\"\\s*:\\s*\"[^\"]*\"", "\"password\":\"****\"");
+                .replaceAll("\"password\"\\s*:\\s*\"[^\"]*\"", "\"password\":\"****\"");
     }
 }
