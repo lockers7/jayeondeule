@@ -60,22 +60,12 @@ def _get_farm_name(farm_id: str) -> str:
     return _farm_name_cache.get(farm_id, farm_id)
 
 
-def _normalize_id(value):
-    """LLM이 전달한 ID에서 숫자만 추출. 숫자가 없으면 None 반환.
-    예: '자연들에 농장' → None, '1' → '1', '상황버섯1호재배사' → '1'
-    """
-    if value is None:
-        return None
-    s = str(value).strip()
-    # 이미 순수 숫자면 그대로
-    try:
-        int(s)
-        return s
-    except (ValueError, TypeError):
-        pass
-    # 한글 등이 섞여 있으면 숫자만 추출
-    digits = re.findall(r'\d+', s)
-    return digits[0] if digits else None
+# _normalize_id는 tools_utils.py로 이동됨 (하위 호환 alias)
+from agri_ai_core.src.ai.tools_utils import (
+    normalize_id as _normalize_id,
+    json_default as _json_default,
+    build_ai_conflict as _build_ai_conflict,
+)
 
 
 def _resolve_relay_ids(house_id, farm_id):
@@ -103,19 +93,7 @@ def _resolve_relay_ids(house_id, farm_id):
 
 
 
-# ══════════════════════════════════════════════════
-# json.dumps 기본 직렬화로 처리할 수 없는 타입 변환.
-# ══════════════════════════════════════════════════
-def _json_default(value: Any) -> Any:
-    if isinstance(value, Decimal):
-        if value.is_nan() or value.is_infinite():
-            return str(value)
-        if value == value.to_integral_value():
-            return int(value)
-        return float(value)
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    return str(value)
+# _json_default는 tools_utils.py로 이동됨 (상단 import에서 alias)
 
 
 # ══════════════════
@@ -859,28 +837,7 @@ def _get_ai_judgment_safe(farm_id, house_id):
         return None
 
 
-def _build_ai_conflict(ai_judgment, user_relay_settings):
-    """사용자 수동 제어와 AI 권장 사이의 차이점을 비교하여 반환"""
-    if not ai_judgment or not user_relay_settings:
-        return None
-    ai_devices = ai_judgment.get("devices") or {}
-    if not ai_devices:
-        return None
-
-    from agri_ai_core.src.control.control_common import SEMANTIC_LABELS
-    conflicts = []
-    for device_name, user_value in user_relay_settings.items():
-        if device_name in ai_devices:
-            ai_value = ai_devices[device_name]
-            if bool(user_value) != bool(ai_value):
-                label = SEMANTIC_LABELS.get(device_name, device_name)
-                user_str = "ON" if user_value else "OFF"
-                ai_str = "ON" if ai_value else "OFF"
-                conflicts.append(f"{label}: 수동={user_str}, AI권장={ai_str}")
-
-    if not conflicts:
-        return None
-    return conflicts
+# _build_ai_conflict는 tools_utils.py로 이동됨 (상단 import에서 alias)
 
 
 def _control_relay_all_houses(device_name: str = None, action: str = None, farm_id: str = None,
@@ -1044,8 +1001,79 @@ def control_relay(house_id: str, device_name: str = None, action: str = None,
 # 릴레이 다중 일괄 제어
 # 여러 장치를 한 번에 제어한다 (LLM의 반복 tool call 횟수 절감).
 # ══════════════════════════════════════════════════════════════
+def _batch_build_by_mode(target_farm_id, target_house_id, mode, valid_devices, SEMANTIC_LABELS, reverse_pin_map):
+    """mode 기반(reverse_all/all_on/all_off) 릴레이 일괄 설정 계산.
+    Returns: (relay_settings dict, results_detail list, error_response or None)
+    """
+    from agri_ai_core.src.postgresql.reader import read_latest_relay_info
+
+    current = read_latest_relay_info(target_farm_id, target_house_id)
+    if not current:
+        return {}, [], {"success": False, "error": "현재 릴레이 상태를 조회할 수 없습니다."}
+
+    relay_settings = {}
+    results_detail = []
+    rev_map = reverse_pin_map(target_house_id)
+    for pin_key, semantic_name in rev_map.items():
+        if semantic_name not in valid_devices:
+            continue
+        current_value = bool(current.get(pin_key, False))
+        label = SEMANTIC_LABELS.get(semantic_name, semantic_name)
+
+        if mode == "reverse_all":
+            new_value = not current_value
+        elif mode == "all_on":
+            new_value = True
+        else:  # all_off
+            new_value = False
+
+        relay_settings[semantic_name] = new_value
+        prev_status = "ON(작동중)" if current_value else "OFF(미작동)"
+        new_status = "ON(작동중)" if new_value else "OFF(미작동)"
+        action_label = "켜기(ON)" if new_value else "끄기(OFF)"
+        results_detail.append({
+            "device": semantic_name,
+            "label": label,
+            "pin": pin_key,
+            "action": action_label,
+            "prev_status": prev_status,
+            "new_status": new_status,
+            "success": True,
+        })
+    logger.info(f"[릴레이일괄제어] mode={mode} → {len(relay_settings)}개 장치 설정 생성")
+    return relay_settings, results_detail, None
+
+
+def _batch_build_by_devices(devices, valid_devices, SEMANTIC_LABELS):
+    """devices 배열 기반 개별 릴레이 설정 계산.
+    Returns: (relay_settings dict, results_detail list)
+    """
+    relay_settings = {}
+    results_detail = []
+    for item in devices:
+        device_name = item.get("device_name", "")
+        action = item.get("action", "")
+
+        if device_name not in valid_devices:
+            results_detail.append({"device": device_name, "success": False, "error": "잘못된 device_name"})
+            continue
+        if action not in ("on", "off"):
+            results_detail.append({"device": device_name, "success": False, "error": "잘못된 action"})
+            continue
+
+        relay_settings[device_name] = (action == "on")
+        label = SEMANTIC_LABELS.get(device_name, device_name)
+        action_label = "켜기(ON)" if action == "on" else "끄기(OFF)"
+        results_detail.append({"device": device_name, "label": label, "action": action_label, "success": True})
+    return relay_settings, results_detail
+
+
 def control_relays_batch(house_id: str, devices: List[Dict[str, str]] = None,
                          farm_id: str = None, mode: str = None) -> Dict[str, Any]:
+    """재배사의 여러 릴레이 장치를 일괄 제어한다.
+    mode 우선 (reverse_all/all_on/all_off) → mode 없으면 devices 배열 사용.
+    제어 후 LLM 잠금을 설정하여 자동제어가 일정시간 억제된다.
+    """
     t_start = time.time()
     logger.info(f"[릴레이일괄제어] 시작 farm_id={farm_id} house_id={house_id} mode={mode} devices={len(devices or [])}건")
     try:
@@ -1053,7 +1081,6 @@ def control_relays_batch(house_id: str, devices: List[Dict[str, str]] = None,
         from agri_ai_core.src.control.control_common import (
             SEMANTIC_LABELS, set_llm_relay_lock, reverse_pin_map,
         )
-        from agri_ai_core.src.postgresql.reader import read_latest_relay_info
 
         ids = _resolve_relay_ids(house_id, farm_id)
         if isinstance(ids, dict):
@@ -1061,61 +1088,16 @@ def control_relays_batch(house_id: str, devices: List[Dict[str, str]] = None,
         target_house_id, target_farm_id = ids
 
         valid_devices = set(SEMANTIC_LABELS.keys())
-        relay_settings = {}
-        results_detail = []
 
-        # mode 기반 자동 제어 (reverse_all / all_on / all_off)
+        # mode 기반 또는 devices 기반 분기 → 공통 입력(relay_settings, results_detail) 생성
         if mode in ("reverse_all", "all_on", "all_off"):
-            current = read_latest_relay_info(target_farm_id, target_house_id)
-            if not current:
-                return {"success": False, "error": "현재 릴레이 상태를 조회할 수 없습니다."}
-
-            rev_map = reverse_pin_map(target_house_id)
-            for pin_key, semantic_name in rev_map.items():
-                if semantic_name not in valid_devices:
-                    continue
-                current_value = bool(current.get(pin_key, False))
-                label = SEMANTIC_LABELS.get(semantic_name, semantic_name)
-
-                if mode == "reverse_all":
-                    new_value = not current_value
-                elif mode == "all_on":
-                    new_value = True
-                else:  # all_off
-                    new_value = False
-
-                relay_settings[semantic_name] = new_value
-                prev_status = "ON(작동중)" if current_value else "OFF(미작동)"
-                new_status = "ON(작동중)" if new_value else "OFF(미작동)"
-                action_label = "켜기(ON)" if new_value else "끄기(OFF)"
-                results_detail.append({
-                    "device": semantic_name,
-                    "label": label,
-                    "pin": pin_key,
-                    "action": action_label,
-                    "prev_status": prev_status,
-                    "new_status": new_status,
-                    "success": True,
-                })
-            logger.info(f"[릴레이일괄제어] mode={mode} → {len(relay_settings)}개 장치 설정 생성")
-
-        # devices 배열 기반 개별 제어
+            relay_settings, results_detail, err = _batch_build_by_mode(
+                target_farm_id, target_house_id, mode, valid_devices, SEMANTIC_LABELS, reverse_pin_map
+            )
+            if err is not None:
+                return err
         elif devices and isinstance(devices, list):
-            for item in devices:
-                device_name = item.get("device_name", "")
-                action = item.get("action", "")
-
-                if device_name not in valid_devices:
-                    results_detail.append({"device": device_name, "success": False, "error": "잘못된 device_name"})
-                    continue
-                if action not in ("on", "off"):
-                    results_detail.append({"device": device_name, "success": False, "error": "잘못된 action"})
-                    continue
-
-                relay_settings[device_name] = (action == "on")
-                label = SEMANTIC_LABELS.get(device_name, device_name)
-                action_label = "켜기(ON)" if action == "on" else "끄기(OFF)"
-                results_detail.append({"device": device_name, "label": label, "action": action_label, "success": True})
+            relay_settings, results_detail = _batch_build_by_devices(devices, valid_devices, SEMANTIC_LABELS)
         else:
             return {"success": False, "error": "mode 또는 devices 파라미터가 필요합니다."}
 

@@ -1,27 +1,29 @@
 # ════════════════════════════════════════════════════════════════════════════
-# 데이터 분석: 센서/릴레이 통계 분석 및 최적 환경 조건 도출.
+# 데이터 분석 — 센서/릴레이 이력 통계 분석 + 최적 환경 조건 도출
+# 수집된 센서값을 작물/생육단계/주야별로 집계하여 평균·분산·분포를 산출.
+# 릴레이 이력은 시간대별 가동 패턴을 도출하여 AI 제어 규칙의 근거로 활용.
 # --->
-# get_growth_status_rank: get growth status rank
-# is_positive_remark: is positive remark
-# initialize_optimal_conditions: initialize optimal conditions
-# initialize_time_patterns: initialize time patterns
-# select_top_crops: select top crops
-# collect_optimal_data: collect optimal data
-# _apply_stats: apply stats
-# _collect_sensor_values: collect sensor values
-# _collect_day_night_values: collect day night values
-# analyze_temperature_conditions: analyze temperature conditions
-# analyze_humidity_conditions: analyze humidity conditions
-# analyze_co2_conditions: analyze co2 conditions
-# analyze_water_temperature_conditions: analyze water temperature conditions
-# analyze_light_level_conditions: analyze light level conditions
-# analyze_optimal_conditions: analyze optimal conditions
-# analyze_farm_optimal_conditions: analyze farm optimal conditions
-# collect_sensor_data: collect sensor data
-# update_time_patterns_with_sensor_data: update time patterns with sensor data
-# analyze_relay_data_for_time_patterns: analyze relay data for time patterns
-# analyze_farm_time_patterns: analyze farm time patterns
-# update_learning_timestamp: update learning timestamp
+# get_growth_status_rank: 생육상태 문자열 → 수치 랭크 (상위/중간/하위)
+# is_positive_remark: 비고(remark) 텍스트의 긍정/부정 판정
+# initialize_optimal_conditions: 최적조건 누적 구조 초기화
+# initialize_time_patterns: 시간대별 릴레이 패턴 누적 구조 초기화
+# select_top_crops: 생육상태 상위 작물만 선별 (분석 대상 축소)
+# collect_optimal_data: 작물/생육단계별 최적 조건 후보 데이터 수집
+# _apply_stats: 수집된 값에 평균/표준편차 적용
+# _collect_sensor_values: 센서 타입별 값 수집 헬퍼
+# _collect_day_night_values: 주간/야간 분리 값 수집 헬퍼
+# analyze_temperature_conditions: 온도 최적 범위 도출
+# analyze_humidity_conditions: 습도 최적 범위 도출
+# analyze_co2_conditions: CO₂ 최적 범위 도출
+# analyze_water_temperature_conditions: 수온 최적 범위 도출
+# analyze_light_level_conditions: 조도 최적 범위 도출
+# analyze_optimal_conditions: 모든 환경요소 통합 분석 (메인 진입점)
+# analyze_farm_optimal_conditions: 전체 농장 최적조건 배치 분석
+# collect_sensor_data: 시간대별 센서 데이터 수집
+# update_time_patterns_with_sensor_data: 센서 이력을 시간 패턴에 반영
+# analyze_relay_data_for_time_patterns: 릴레이 이력으로 시간 패턴 도출
+# analyze_farm_time_patterns: 전체 농장 시간 패턴 배치 분석
+# update_learning_timestamp: 학습 완료 타임스탬프 갱신 (재학습 간격 제어)
 # ════════════════════════════════════════════════════════════════════════════
 import numpy as np
 from datetime import datetime

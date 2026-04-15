@@ -20,8 +20,12 @@ from agri_ai_core.src.ai.rag.chunker import store_document_with_chunks
 
 logger = setup_logger(__name__)
 
-# 문서 유형 한글 라벨
-from agri_ai_core.src.ai.rag.constants import DOC_TYPE_LABELS
+# 문서 유형 한글 라벨 (RAG 모듈 공용 상수)
+DOC_TYPE_LABELS = {
+    "crop_info": "작물 정보",
+    "disease_info": "병해충 정보",
+    "general": "일반 문서",
+}
 
 # 작물 키워드 사전 (문서 유형 자동 감지용)
 _CROP_KEYWORDS = {

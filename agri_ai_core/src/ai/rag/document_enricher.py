@@ -27,6 +27,7 @@ ENRICHMENT_MAX_INPUT_CHARS = int(os.getenv("ENRICHMENT_MAX_INPUT_CHARS", "5000")
 ENRICHMENT_MAX_QA_PAIRS = int(os.getenv("ENRICHMENT_MAX_QA_PAIRS", "5"))
 
 from agri_ai_core.src.ai.rag.constants import DOC_TYPE_LABELS as _DOC_TYPE_LABELS
+from agri_ai_core.src.utils.json_utils import safe_json_load
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -118,25 +119,22 @@ def _parse_qa_response(response_text: str) -> List[Dict[str, str]]:
     # JSON 배열 패턴 매칭
     array_match = re.search(r'\[.*\]', response_text, re.DOTALL)
     if array_match:
-        try:
-            qa_list = json.loads(array_match.group())
-            if isinstance(qa_list, list):
-                valid = []
-                for item in qa_list:
-                    if (
-                        isinstance(item, dict)
-                        and "question" in item
-                        and "answer" in item
-                        and str(item["question"]).strip()
-                        and str(item["answer"]).strip()
-                    ):
-                        valid.append({
-                            "question": str(item["question"]).strip(),
-                            "answer": str(item["answer"]).strip(),
-                        })
-                return valid[:ENRICHMENT_MAX_QA_PAIRS]
-        except (json.JSONDecodeError, ValueError):
-            pass
+        qa_list = safe_json_load(array_match.group())
+        if isinstance(qa_list, list):
+            valid = []
+            for item in qa_list:
+                if (
+                    isinstance(item, dict)
+                    and "question" in item
+                    and "answer" in item
+                    and str(item["question"]).strip()
+                    and str(item["answer"]).strip()
+                ):
+                    valid.append({
+                        "question": str(item["question"]).strip(),
+                        "answer": str(item["answer"]).strip(),
+                    })
+            return valid[:ENRICHMENT_MAX_QA_PAIRS]
 
     logger.warning(f"[Enrichment] QA 파싱 실패: 응답={response_text[:200]}")
     return []

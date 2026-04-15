@@ -27,6 +27,8 @@ from datetime import datetime
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.config import get_ollama_url, get_model_name
+from agri_ai_core.src.utils.json_utils import safe_json_load
+from agri_ai_core.src.utils.error_utils import log_and_return
 from agri_ai_core.src.postgresql.reader import (
     read_current_sensor_info,
     read_latest_relay_info,
@@ -393,48 +395,44 @@ def _build_user_prompt(sensor_data, current_relay, growth_stage, optimal, trend_
 # LLM 호출
 # Ollama /api/generate 호출 → 응답 텍스트 반환
 # ════════════════════════════════════════════
+@log_and_return(default=None, logger=logger, message="[AI제어] LLM 호출 예외")
 def _call_llm(system_prompt, user_prompt):
-    try:
-        from agri_ai_core.src.ai.mcp_client import mcp_http_request
+    from agri_ai_core.src.ai.mcp_client import mcp_http_request
 
-        ollama_url = get_ollama_url()
-        model_name = get_model_name()
+    ollama_url = get_ollama_url()
+    model_name = get_model_name()
 
-        prompt = system_prompt + "\n\n" + user_prompt
+    prompt = system_prompt + "\n\n" + user_prompt
 
-        payload = {
-            "model": model_name,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "temperature": 0,
-                "num_predict": 200,
-            },
-        }
+    payload = {
+        "model": model_name,
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "temperature": 0,
+            "num_predict": 200,
+        },
+    }
 
-        logger.debug(f"[AI제어] LLM 요청: model={model_name}")
-        t_start = time.time()
+    logger.debug(f"[AI제어] LLM 요청: model={model_name}")
+    t_start = time.time()
 
-        status_code, data, error_text = mcp_http_request(
-            method="POST",
-            url=f"{ollama_url}/api/generate",
-            json_body=payload,
-            timeout=AI_CONTROL_TIMEOUT,
-        )
+    status_code, data, error_text = mcp_http_request(
+        method="POST",
+        url=f"{ollama_url}/api/generate",
+        json_body=payload,
+        timeout=AI_CONTROL_TIMEOUT,
+    )
 
-        elapsed = time.time() - t_start
+    elapsed = time.time() - t_start
 
-        if status_code != 200 or not data:
-            logger.error(f"[AI제어] LLM 호출 실패: status={status_code}, {elapsed:.1f}s")
-            return None
-
-        response_text = data.get("response", "") if isinstance(data, dict) else ""
-        logger.info(f"[AI제어] LLM 응답 ({elapsed:.1f}s): {response_text[:150]}")
-        return response_text
-
-    except Exception as e:
-        logger.error(f"[AI제어] LLM 호출 예외: {e}")
+    if status_code != 200 or not data:
+        logger.error(f"[AI제어] LLM 호출 실패: status={status_code}, {elapsed:.1f}s")
         return None
+
+    response_text = data.get("response", "") if isinstance(data, dict) else ""
+    logger.info(f"[AI제어] LLM 응답 ({elapsed:.1f}s): {response_text[:150]}")
+    return response_text
 
 
 # ══════════════════
@@ -451,10 +449,9 @@ def _parse_relay_response(response_text):
         logger.error(f"[AI제어] JSON 패턴 없음: {response_text[:100]}")
         return None
 
-    try:
-        parsed = json.loads(match.group())
-    except json.JSONDecodeError as e:
-        logger.error(f"[AI제어] JSON 파싱 실패: {e}")
+    parsed = safe_json_load(match.group())
+    if parsed is None:
+        logger.error(f"[AI제어] JSON 파싱 실패: {match.group()[:200]}")
         return None
 
     action = parsed.get("action", "keep")

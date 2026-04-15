@@ -11,6 +11,7 @@ import time
 import traceback
 
 from agri_ai_core.logs import setup_logger
+from agri_ai_core.src.utils.json_utils import safe_json_load
 
 logger = setup_logger(__name__)
 
@@ -112,10 +113,7 @@ def _parse_validator_json(response_text):
         elif text[i] == '}':
             depth -= 1
             if depth == 0:
-                try:
-                    return json.loads(text[brace_start:i + 1])
-                except json.JSONDecodeError:
-                    return None
+                return safe_json_load(text[brace_start:i + 1])
     return None
 
 

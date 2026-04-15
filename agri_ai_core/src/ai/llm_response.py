@@ -19,6 +19,7 @@
 import os
 import re
 import json
+from agri_ai_core.src.utils.json_utils import safe_json_load
 import unicodedata
 from typing import Optional
 
@@ -110,9 +111,8 @@ def _clean_page_content(text: str, max_chars: int) -> str:
 # ═══════════════════════════════════════════════════════════════════════════════════
 def _refine_search_web(tool_result: str, user_query: str) -> tuple:
     empty_sources = []
-    try:
-        data = json.loads(tool_result)
-    except (json.JSONDecodeError, TypeError):
+    data = safe_json_load(tool_result)
+    if data is None:
         return tool_result, empty_sources
 
     results = data.get("results", [])
@@ -172,9 +172,8 @@ def _refine_search_web(tool_result: str, user_query: str) -> tuple:
 # fetch_url_content 결과를 구조적으로 정제한다 (LLM이 관련성 판단).
 # ═════════════════════════════════════════════════════════════════
 def _refine_fetch_url(tool_result: str, user_query: str) -> str:
-    try:
-        data = json.loads(tool_result)
-    except (json.JSONDecodeError, TypeError):
+    data = safe_json_load(tool_result)
+    if data is None:
         return tool_result
 
     content = (data.get("content") or "").strip()
@@ -201,9 +200,8 @@ def _refine_realtime_data(tool_result: str) -> str:
     - environment_thresholds: 환경 제어 임계값 (적정 범위) 보존
     - ai_environment_judgment: AI 알고리즘 권장 릴레이 상태 보존
     """
-    try:
-        data = json.loads(tool_result)
-    except (json.JSONDecodeError, TypeError):
+    data = safe_json_load(tool_result)
+    if data is None:
         return tool_result
 
     if not data.get("success"):
@@ -326,9 +324,8 @@ def _refine_farm_knowledge(tool_result: str) -> str:
     _MAX_TOTAL_REFINED = 4500   # 전체 참조 자료 최대 (3/14 안정화 1500 → RAG 대응 4500)
     _MAX_CONTENT_PER_ITEM = 1500  # 개별 항목 content 최대
 
-    try:
-        data = json.loads(tool_result)
-    except (json.JSONDecodeError, TypeError):
+    data = safe_json_load(tool_result)
+    if data is None:
         return tool_result[:_MAX_TOTAL_REFINED] if len(tool_result or "") > _MAX_TOTAL_REFINED else (tool_result or "")
 
     results = data.get("results")

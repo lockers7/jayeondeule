@@ -1,18 +1,17 @@
 # ═══════════════════════════════════════════════════════════════
-# 작업 스케줄러 모듈.
-# 주기적 작업(학습, 통계, 환경제어, 로그 정리 등)을 관리·실행하는
-# APScheduler 기반 백그라운드 스케줄러를 제공한다.
+# 작업 스케줄러 모듈 (APScheduler 기반)
+# 주기적 작업(학습/통계/환경제어/로그정리/외부수집)을 관리·실행한다.
 # --->
-# setup_scheduler: setup scheduler
-# start_scheduler: start scheduler
-# stop_scheduler: stop scheduler
-# add_job: add job
-# remove_job: remove job
-# _daily_log_cleanup: daily log cleanup
-# _chunk_cleanup_job: chunk cleanup job
-# setup_default_jobs: setup default jobs
-# _opinet_daily_job: opinet daily job
-# _lotto_weekly_job: lotto weekly job
+# setup_scheduler: BackgroundScheduler 인스턴스 생성/설정
+# start_scheduler: 스케줄러 시작 (이미 실행 중이면 무시)
+# stop_scheduler: 스케줄러 정지 (graceful shutdown)
+# add_job: 크론/인터벌 작업 등록
+# remove_job: 등록된 작업 제거
+# _daily_log_cleanup: 매일 자정 로그 정리 (내부 작업)
+# _chunk_cleanup_job: RAG 청크 통합/정리 (내부 작업)
+# setup_default_jobs: 기본 스케줄 작업 일괄 등록
+# _opinet_daily_job: 오피넷 일일 유가 수집 (내부 작업)
+# _lotto_weekly_job: 주간 로또 당첨번호 수집 + 분석 (내부 작업)
 # ═══════════════════════════════════════════════════════════════
 import traceback
 

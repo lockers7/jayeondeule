@@ -15,6 +15,7 @@ import re
 from collections import Counter
 
 from agri_ai_core.logs import setup_logger
+from agri_ai_core.src.utils.json_utils import extract_json_block
 
 logger = setup_logger(__name__)
 
@@ -294,18 +295,10 @@ def _build_llm_prompt(stats, user_prompt):
 
 def _parse_llm_response(text):
     """LLM 응답에서 JSON 객체 추출 + 검증."""
-    if not text:
-        return None
-    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-    text = re.sub(r'```(?:json)?\s*', '', text)
-    text = text.replace('```', '')
-    m = re.search(r'\{.*\}', text, flags=re.DOTALL)
-    if not m:
-        return None
-    try:
-        data = json.loads(m.group(0))
-    except Exception as e:
-        logger.warning(f"[로또추천] JSON 파싱 실패: {e}")
+    data = extract_json_block(text)
+    if data is None:
+        if text:
+            logger.warning(f"[로또추천] JSON 파싱 실패 (응답 길이 {len(text)}자)")
         return None
 
     nums = data.get("numbers")

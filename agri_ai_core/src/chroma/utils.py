@@ -15,6 +15,7 @@ from datetime import datetime
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.config import settings
+from agri_ai_core.src.utils.json_utils import safe_json_load
 
 logger = setup_logger(__name__)
 
@@ -120,11 +121,13 @@ def restore_metadata_from_chroma(metadata: dict) -> dict:
         if key.endswith('_is_json'):
             continue
         if key in json_flags:
-            try:
-                restored_metadata[key] = json.loads(value)
-            except Exception as e:
-                logger.warning(f"메타데이터 '{key}' 역직렬화 실패: {e}")
+            # 역직렬화 실패 시 원본 값 유지 (safe_json_load가 None 반환하면 fallback)
+            parsed = safe_json_load(value, default=None)
+            if parsed is None and value:
+                logger.warning(f"메타데이터 '{key}' 역직렬화 실패, 원본 유지")
                 restored_metadata[key] = value
+            else:
+                restored_metadata[key] = parsed if parsed is not None else value
         else:
             restored_metadata[key] = value
 

@@ -1,18 +1,20 @@
 # ═════════════════════════════════════════════════════════════════════════════════
-# LLM Tool — 웹 검색 및 URL 본문 가져오기 모듈.
+# LLM Tool — 웹 검색 및 URL 본문 가져오기 모듈
+# 다중 검색 엔진(Naver/Brave/SearXNG)을 병렬 호출 후 인터리브 병합.
+# 검색 결과는 ChromaDB(web_knowledge)에 캐시되어 재검색 시 빠르게 재사용된다.
 # --->
-# _search_via_naver_api: search via naver api
-# _search_via_brave_api: search via brave api
-# _search_via_searxng: search via searxng
-# _merge_search_results: primary(Naver) 와 secondary(SearXNG) 를 인터리브 병합
-# _search_via_api: search via api
-# _is_location: 지역명 여부 판별 (3글자 이상 + 행정구역 접미사, 또는 광역시도 약칭)
-# _filter_relevant_results: filter relevant results
-# _build_retry_query: build retry query
-# search_web: search web
-# _cache_web_results_to_vectordb: cache web results to vectordb
-# _strip_html: strip html
-# _direct_fetch_url: direct fetch url
+# _search_via_naver_api: Naver 검색 API 호출 (client_id/secret 필요)
+# _search_via_brave_api: Brave Search API 호출 (api key 필요)
+# _search_via_searxng: 자체 호스팅 SearXNG 메타검색 엔진 호출
+# _merge_search_results: primary(Naver) + secondary(SearXNG) 인터리브 병합
+# _search_via_api: 3개 엔진 중 사용 가능한 것 자동 선택 호출
+# _is_location: 지역명 여부 판별 (행정구역 접미사 + 광역시도 약칭)
+# _filter_relevant_results: 쿼리와의 유사도 기반 결과 필터링
+# _build_retry_query: 검색 실패 시 재시도용 쿼리 재구성
+# search_web: 메인 진입점 — 캐시 조회→검색→캐시 저장
+# _cache_web_results_to_vectordb: 검색 결과를 web_knowledge 컬렉션에 저장
+# _strip_html: HTML 태그/엔티티 제거 유틸
+# _direct_fetch_url: URL 직접 HTTP 가져오기 (timeout/encoding 처리)
 # _auto_fetch_urls: auto fetch urls
 # fetch_url_content: fetch url content
 # _fetch_one: fetch one
