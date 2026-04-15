@@ -25,7 +25,6 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 @Slf4j
-@SuppressWarnings("null")
 public class BoardService {
     private final BoardPostRepository postRepo;
     private final BoardCommentRepository commentRepo;
