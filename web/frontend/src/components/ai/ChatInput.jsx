@@ -42,7 +42,7 @@ export default function ChatInput({value, onChange, onSend, isLoading, farmName,
                     <Button
                         variant="success"
                         onClick={onSend}
-                        disabled={isLoading || !value.trim()}
+                        disabled={!value.trim()}
                         style={{width: "70px", height: "36px", padding: "4px 8px"}}
                     >
                         {isLoading ? <Spinner animation="border" size="sm"/> : "전송"}
