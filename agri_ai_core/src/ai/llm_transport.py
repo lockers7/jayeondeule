@@ -190,10 +190,21 @@ def _pkg_ollama_list_models() -> List[str]:
     return _extract_model_names(models or [])
 
 
+_LLM_TIMEOUT_SEC = 300  # 최장 5분 — hang 방지
+
 def _pkg_ollama_chat(model, messages, options=None, tools=None, keep_alive=None, think=None) -> Any:
+    """ollama 패키지 chat 호출 (timeout 300초). hang 시 자동 RuntimeError."""
     if not _use_ollama_package():
         raise RuntimeError("ollama package unavailable")
-    return ollama.chat(**_build_chat_payload(model, messages, options, tools, keep_alive, think))
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+    payload = _build_chat_payload(model, messages, options, tools, keep_alive, think)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(ollama.chat, **payload)
+        try:
+            return future.result(timeout=_LLM_TIMEOUT_SEC)
+        except FuturesTimeout:
+            logger.error(f"[Ollama] ollama.chat timeout ({_LLM_TIMEOUT_SEC}s) — model={model}")
+            raise RuntimeError(f"Ollama chat timeout ({_LLM_TIMEOUT_SEC}s)")
 
 
 def _build_ollama_url(path: str) -> str:
