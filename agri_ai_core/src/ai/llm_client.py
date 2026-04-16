@@ -158,14 +158,17 @@ _warmup_lock = threading.Lock()
 _warmup_started = False
 _llm_warmed = False
 
-# 모델 캐싱
-_cached_model_name = None
-_model_cache_lock = threading.Lock()
-_direct_ollama_disabled_reason: Optional[str] = None
-
-# GPU 비율 캐시: {model_name: (gpu_ratio, cached_at)}
-_gpu_ratio_cache: Dict[str, tuple] = {}
-_GPU_RATIO_CACHE_TTL = 60  # 초: 60초마다 재조회 (VRAM 변동 반영)
+# 전송 계층은 llm_transport.py로 분리됨 (하위 호환 alias)
+from agri_ai_core.src.ai.llm_transport import (
+    _get_model_gpu_ratio, _get_free_vram_mib, _get_model_ctx_options,
+    _use_mcp_fetch, _use_ollama_package, _use_direct_ollama_http,
+    _is_direct_ollama_enabled, _disable_direct_ollama_http,
+    _is_connection_related_error, _extract_model_names,
+    _pkg_ollama_list_models, _build_chat_payload, _pkg_ollama_chat,
+    _build_ollama_url, _direct_ollama_json, _direct_ollama_list_models,
+    _direct_ollama_chat, _mcp_ollama_list_models, _mcp_ollama_chat,
+    _get_available_models, _get_model_name,
+)
 
 def _get_model_gpu_ratio(model_name: str) -> float:
     """Ollama /api/ps 에서 모델의 실제 GPU 탑재 비율을 조회 후 1.2배 적용.
@@ -646,10 +649,8 @@ def _normalize_tool_arguments(
             return _llm_fid  # LLM이 숫자 farm_id 전달 (정상)
         # 농장명(문자열) → farm_id 역조회
         try:
-            from agri_ai_core.src.ai.tools_executor import _get_farm_name, _farm_name_cache, _farm_name_cache_loaded
-            if not _farm_name_cache_loaded:
-                _get_farm_name("0")  # 캐시 로드 트리거
-            for fid, fname in _farm_name_cache.items():
+            from agri_ai_core.src.ai.farm_cache import get_all_farm_names
+            for fid, fname in get_all_farm_names().items():
                 if fname == _llm_fid or _llm_fid in fname:
                     logger.info(f"[farm_id해석] 농장명 '{_llm_fid}' → farm_id={fid}")
                     return fid
