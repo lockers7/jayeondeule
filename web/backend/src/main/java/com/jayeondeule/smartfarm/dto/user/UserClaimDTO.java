@@ -15,5 +15,6 @@ import lombok.NoArgsConstructor;
 public class UserClaimDTO {
     //JWT에 저장될 사용자 정보 객체
     private String userId; // 아이디
-    private AuthLvel authLvel; // 권한 (ADMIN, USER 등)
+    private AuthLvel authLvel; // 권한 (ADMIN, FARM_ADMIN 등)
+    private Long farmId; // 소속 농장 ID (RAG 권한 결정에 사용)
 }

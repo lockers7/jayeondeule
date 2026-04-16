@@ -47,9 +47,16 @@ public class JwtUtil {
     public UserClaimDTO getUserInfo(String token) {
         Claims claims = getClaims(token);
 
-        return UserClaimDTO.builder()
+        UserClaimDTO.UserClaimDTOBuilder builder = UserClaimDTO.builder()
                 .userId(claims.get("userId").toString())
-                .authLvel(AuthLvel.valueOf(claims.get("authLvel").toString()))
-                .build();
+                .authLvel(AuthLvel.valueOf(claims.get("authLvel").toString()));
+
+        // farmId가 JWT에 존재하면 복원
+        Object farmIdClaim = claims.get("farmId");
+        if (farmIdClaim != null) {
+            builder.farmId(Long.valueOf(farmIdClaim.toString()));
+        }
+
+        return builder.build();
     }
 }
