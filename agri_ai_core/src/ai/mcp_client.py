@@ -445,7 +445,7 @@ def _parse_mcp_fetch_result(result: Dict[str, Any]) -> Dict[str, Any]:
 
 def _parse_fetch_tool_names() -> List[str]:
     # fetch 서버 기본 도구 집합. request는 일부 구현체에서 미지원이라 기본에서 제외.
-    default_tools = "fetch,http_fetch"
+    default_tools = "fetch"  # http_fetch는 일부 서버 미지원 — 불필요 시도 방지
     raw = os.getenv("MCP_FETCH_TOOL_NAMES", default_tools)
     candidates = [name.strip() for name in raw.split(",") if name and name.strip()]
 
