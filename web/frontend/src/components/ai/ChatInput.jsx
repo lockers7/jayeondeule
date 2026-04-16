@@ -41,7 +41,7 @@ export default function ChatInput({value, onChange, onSend, isLoading, farmName,
                 <div style={{display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", gap: "4px"}}>
                     <Button
                         variant="success"
-                        onClick={onSend}
+                        onClick={() => onSend()}
                         disabled={!value.trim()}
                         style={{width: "70px", height: "36px", padding: "4px 8px"}}
                     >

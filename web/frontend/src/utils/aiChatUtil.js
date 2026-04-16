@@ -45,6 +45,7 @@ export function streamQuery(query, farmId, houseId, farmName, houseName, session
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let buffer = "";
+            let doneEventReceived = false;
 
             function processLines() {
                 const lines = buffer.split("\n");
@@ -59,7 +60,7 @@ export function streamQuery(query, farmId, houseId, farmName, houseName, session
                         switch (event.type) {
                             case "status":  onStatus?.(event.content); break;
                             case "token":   onToken?.(event.content);  break;
-                            case "done":    onDone?.(event);           break;
+                            case "done":    doneEventReceived = true; onDone?.(event); break;
                             case "error":   onError?.(event.content);  break;
                         }
                     } catch { /* non-JSON line, skip */ }
@@ -70,6 +71,10 @@ export function streamQuery(query, farmId, houseId, farmName, houseName, session
                 reader.read().then(({done, value}) => {
                     if (done) {
                         if (buffer.trim()) processLines();
+                        // 서버가 done 이벤트 없이 스트림을 종료한 경우 강제 완료 처리
+                        if (!doneEventReceived) {
+                            onDone?.({type: "done"});
+                        }
                         return;
                     }
                     buffer += decoder.decode(value, {stream: true});

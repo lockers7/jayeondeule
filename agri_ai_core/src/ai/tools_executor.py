@@ -321,7 +321,10 @@ def search_farm_knowledge(
                 source_where_candidates.append(chroma_int)
 
             # 일반 농장 사용자: 시스템 농장(farm_id=0) 학습 데이터도 함께 검색
-            if farm_id is not None:
+            # 단, 파일 목록 질문(메타 쿼리)은 자기 농장 데이터만 사용 — 시스템 농장 파일이 노출되지 않도록
+            _pre_meta_keywords = ("파일", "학습", "목록", "리스트", "자료", "문서", "업로드", "RAG", "데이터")
+            _pre_is_meta_query = any(kw in (query or "") for kw in _pre_meta_keywords) or bool(_meta_hint)
+            if farm_id is not None and not (auth_farm_id is not None and _pre_is_meta_query):
                 sys_where_str = _to_chroma_where({"farm_id": _SYSTEM_FARM_ID})
                 if sys_where_str not in source_where_candidates:
                     source_where_candidates.append(sys_where_str)
@@ -331,6 +334,8 @@ def search_farm_knowledge(
                     if sys_where_int not in source_where_candidates:
                         source_where_candidates.append(sys_where_int)
                 logger.info(f"[VectorDB검색] 일반 농장 모드: farm_id={farm_id} + 시스템 농장 데이터 검색")
+            elif farm_id is not None:
+                logger.info(f"[VectorDB검색] 파일목록 질문 — 자기 농장만 검색 (farm_id={farm_id}, 시스템 농장 제외)")
 
             if not source_where_candidates:
                 source_where_candidates = [None]
@@ -581,6 +586,9 @@ def search_farm_knowledge(
                                 continue
                             _fn = _meta.get("file_name") or _meta.get("file_name_stored") or ""
                             _raw_fid = str(_meta.get("farm_id", "")) if _meta.get("farm_id") is not None else ""
+                            # 비관리자: 시스템 농장(farm_id=0 또는 미설정) 파일 명시적 제외
+                            if not _is_admin_list and _raw_fid in ("0", "", _SYSTEM_FARM_ID):
+                                continue
                             # 동일 파일이 여러 농장에 학습된 경우 각각 표시 (파일명+farm_id로 중복 판정)
                             _dedup_key = f"{_fn}|{_raw_fid}"
                             if _fn and _dedup_key not in _seen_files:
@@ -608,8 +616,11 @@ def search_farm_knowledge(
                 for item in formatted_results:
                     _meta = item.get("metadata") or {}
                     _fn = _meta.get("file_name") or _meta.get("file_name_stored") or ""
-                    if not _is_admin_list and str(_meta.get("farm_id", "")) != str(farm_id):
-                        continue
+                    # 비관리자: 자기 농장만 (시스템 농장 포함 모든 타농장 제외)
+                    if not _is_admin_list:
+                        _file_fid = str(_meta.get("farm_id", ""))
+                        if _file_fid != str(farm_id):
+                            continue
                     _raw_fid = str(_meta.get("farm_id", "")) if _meta.get("farm_id") is not None else ""
                     _dedup_key = f"{_fn}|{_raw_fid}"
                     if _fn and _dedup_key not in _seen_files:
@@ -637,6 +648,11 @@ def search_farm_knowledge(
             result_data["file_count"] = len(_file_list or [])
             if not _file_list:
                 result_data["file_list_message"] = "선택된 농장에 학습된 파일이 없습니다."
+                # 비관리자 파일목록 질문에서 file_list=[]이면 results도 비워 LLM 혼동 방지
+                # (results에 시스템 농장 문서가 남아있으면 LLM이 파일명을 추출해 잘못 답변)
+                if auth_farm_id is not None:
+                    result_data["results"] = []
+                    result_data["count"] = 0
         elif _file_list:
             result_data["file_list"] = _file_list
             result_data["file_count"] = len(_file_list)
