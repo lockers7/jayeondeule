@@ -23,7 +23,7 @@ def _perform_llm_warmup():
         return
     try:
         from agri_ai_core.src.ai.llm_transport import _get_model_name
-        from agri_ai_core.src.ai.llm_client import _ollama_chat
+        from agri_ai_core.src.ai.llm_transport import _ollama_chat
 
         model_name = _get_model_name()
         _ollama_chat(

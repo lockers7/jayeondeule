@@ -147,3 +147,25 @@ def coerce_numeric_id(provided_id, default_id):
     if default_text.isdigit() and not provided_text.isdigit():
         return default_text
     return provided_id
+
+
+def extract_tool_calls(assistant_message: dict, logger=None) -> list:
+    """tool_calls 필드 우선, content에 JSON 도구 호출이 텍스트로 출력된 경우도 파싱."""
+    tool_calls = assistant_message.get("tool_calls")
+    if isinstance(tool_calls, list) and tool_calls:
+        return tool_calls
+
+    content = assistant_message.get("content", "").strip()
+    if content.startswith("{") and content.endswith("}"):
+        parsed = safe_json_load(content)
+        if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
+            tool_call = {"function": {"name": parsed["name"], "arguments": parsed["arguments"]}}
+            assistant_message["content"] = ""
+            assistant_message["tool_calls"] = [tool_call]
+            if logger:
+                logger.warning(
+                    f"[Tool Use] content에서 도구호출 JSON 감지 → tool_calls로 변환: {parsed['name']}"
+                )
+            return [tool_call]
+
+    return []
