@@ -190,17 +190,18 @@ def analyze_question(user_query, conversation_context=None, farm_id=None, house_
 
         messages = [{"role": "system", "content": ANALYZER_SYSTEM_PROMPT}]
 
-        # 직전 대화 컨텍스트 (최소한으로)
+        # 직전 대화 컨텍스트 — 1단계는 질문유형 분류만 하므로 직전 1턴(user+assistant)만 포함
+        # prompt_eval 토큰 최소화로 LLM 응답 속도 향상
         if conversation_context:
             ctx_text = ""
             if isinstance(conversation_context, list):
-                for turn in conversation_context[-4:]:
+                for turn in conversation_context[-2:]:  # 4턴 → 최근 1턴(2개 메시지)
                     role = turn.get("role", "")
-                    content = turn.get("content", "")[:200]
+                    content = turn.get("content", "")[:150]  # 200자 → 150자
                     if role in ("user", "assistant"):
                         ctx_text += f"{role}: {content}\n"
             elif isinstance(conversation_context, str):
-                ctx_text = conversation_context[:400]
+                ctx_text = conversation_context[:300]  # 400자 → 300자
 
             if ctx_text.strip():
                 messages.append({"role": "system", "content": f"[직전 대화 맥락]\n{ctx_text}"})

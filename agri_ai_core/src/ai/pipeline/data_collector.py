@@ -27,7 +27,8 @@ from agri_ai_core.src.utils.json_utils import safe_json_load
 
 logger = setup_logger(__name__)
 
-_MAX_SUPPLEMENT_ROUNDS = 2  # LLM 보충 판단 최대 횟수
+_MAX_SUPPLEMENT_ROUNDS = 1   # 보충 수집은 1라운드만: 보충 후 무조건 3단계 진행
+_RULE_SUFFICIENT_BYTES = 6000  # 수집 데이터 총 길이 이상이면 LLM 검증 없이 통과
 
 
 class DataCollector:
@@ -85,6 +86,15 @@ class DataCollector:
         for round_num in range(_MAX_SUPPLEMENT_ROUNDS):
             if not self.collected_data:
                 logger.warning("[2단계] 수집된 데이터 없음, LLM 검증 건너뜀")
+                break
+
+            # Rule-based 사전 통과: 수집 데이터가 충분히 많으면 LLM 검증 생략
+            _total_bytes = sum(len(d.get("result", "")) for d in self.collected_data)
+            if _total_bytes >= _RULE_SUFFICIENT_BYTES:
+                logger.info(
+                    f"[2단계] Rule-based 통과: 수집 총량={_total_bytes}자 >= {_RULE_SUFFICIENT_BYTES}자 "
+                    f"→ LLM 검증 스킵"
+                )
                 break
 
             self._report_progress("수집된 데이터를 검증하고 있습니다...", "validating")

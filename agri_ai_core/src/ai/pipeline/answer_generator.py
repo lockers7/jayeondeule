@@ -85,9 +85,21 @@ def generate_answer(user_query, analysis_result, collected_result,
         messages.append({"role": "user", "content": user_query})
 
         # LLM 호출 (도구 미제공 → 순수 답변만 생성)
-        # 실행형 유형(제어/삭제)은 간결 보고로 토큰 절약
-        answer_num_predict = 1024 if is_concise else NUM_PREDICT
-        answer_num_ctx = 4096 if is_concise else NUM_CTX
+        # 실행형 유형(제어/삭제)은 간결 보고, 나머지는 유형별 상한으로 토큰 절약
+        _TYPE_MAX_PREDICT = {
+            "farm_control": 1024,
+            "farm_knowledge_delete": 512,
+            "sensor": 1024,
+            "general": 2048,
+            "web_search": 3000,      # 실제 답변 ~1000자, 2배 여유
+            "farm_knowledge": 4096,  # RAG 분석 답변
+        }
+        if is_concise:
+            answer_num_predict = 1024
+            answer_num_ctx = 4096
+        else:
+            answer_num_predict = _TYPE_MAX_PREDICT.get(question_type, NUM_PREDICT)
+            answer_num_ctx = 8192 if answer_num_predict <= 3000 else NUM_CTX
 
         t_llm = time.time()
         response = _ollama_chat(
