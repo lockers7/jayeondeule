@@ -175,6 +175,7 @@ from agri_ai_core.src.ai.llm_transport import (
     _build_ollama_url, _direct_ollama_json, _direct_ollama_list_models,
     _direct_ollama_chat, _mcp_ollama_list_models, _mcp_ollama_chat,
     _get_available_models, _get_model_name,
+    _ollama_chat, _log_llm_request_json, _log_llm_response_json,
 )
 
 
@@ -193,153 +194,10 @@ from agri_ai_core.src.ai.llm_message_utils import (
     normalize_assistant_message as _normalize_assistant_message,
     extract_tool_name as _extract_tool_name,
     extract_tool_arguments as _extract_tool_arguments,
+    extract_tool_calls as _extract_tool_calls,
     coerce_numeric_id as _coerce_numeric_id,
 )
 
-
-def _log_llm_request_json(model, messages, options, tools, keep_alive):
-    try:
-        payload = _build_chat_payload(model, _serialize_for_log(messages),
-                                       _serialize_for_log(options) if options else None,
-                                       _serialize_for_log(tools) if tools else None,
-                                       keep_alive)
-        logger.info(
-            "[LLM 호출 JSON 요청]\n%s",
-            json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-        )
-    except Exception as log_err:
-        logger.warning(f"[LLM 요청 JSON 로깅 실패] {log_err}")
-
-
-def _log_llm_response_json(result, transport, elapsed):
-    try:
-        if isinstance(result, dict):
-            response_json = result
-        elif hasattr(result, "model_dump"):
-            response_json = result.model_dump()
-        elif hasattr(result, "__dict__"):
-            response_json = {k: v for k, v in result.__dict__.items() if not k.startswith("_")}
-        else:
-            response_json = str(result)
-        logger.info(
-            "[LLM 호출 JSON 응답] transport=%s (%.1fs)\n%s",
-            transport,
-            elapsed,
-            json.dumps(response_json, ensure_ascii=False, indent=2, default=str),
-        )
-
-        # [PERF:대화] Ollama 응답 시간 분해 (나노초→초)
-        if isinstance(response_json, dict):
-            _total_ns = response_json.get("total_duration", 0)
-            _load_ns = response_json.get("load_duration", 0)
-            _prompt_ns = response_json.get("prompt_eval_duration", 0)
-            _eval_ns = response_json.get("eval_duration", 0)
-            _prompt_cnt = response_json.get("prompt_eval_count", 0)
-            _eval_cnt = response_json.get("eval_count", 0)
-            if _total_ns > 0:
-                _eval_tok_per_s = (_eval_cnt / (_eval_ns / 1e9)) if _eval_ns > 0 else 0
-                logger.debug(
-                    f"[PERF:대화] Ollama내부시간: "
-                    f"모델로드={_load_ns / 1e9:.1f}s, "
-                    f"프롬프트처리={_prompt_ns / 1e9:.1f}s({_prompt_cnt}tok), "
-                    f"답변생성={_eval_ns / 1e9:.1f}s({_eval_cnt}tok, {_eval_tok_per_s:.1f}tok/s), "
-                    f"총={_total_ns / 1e9:.1f}s"
-                )
-    except Exception as log_err:
-        logger.warning(f"[LLM 응답 JSON 로깅 실패] {log_err}")
-
-
-def _ollama_chat(
-    model: str,
-    messages: List[Dict[str, Any]],
-    options: Optional[Dict[str, Any]] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    keep_alive: Optional[str] = None,
-):
-    # options 안의 "think" 키를 최상위 레벨로 승격 (Ollama API 요구사항)
-    think_value = None
-    if options and "think" in options:
-        think_value = options.pop("think")
-
-    errors: List[str] = []
-    msg_count = len(messages or [])
-    tool_count = len(tools or [])
-    t_start = time.time()
-
-    logger.info(
-        f"[Ollama요청] model={model} messages={msg_count} tools={tool_count} "
-        f"options={{{', '.join(f'{k}={v}' for k, v in (options or {}).items())}}}"
-    )
-
-    # LLM 호출 전체 JSON 로깅 (system prompt, user prompt, tools, options 포함)
-    _log_llm_request_json(model, messages, options, tools, keep_alive)
-
-    _TRANSPORTS = [
-        ("package", _use_ollama_package, _pkg_ollama_chat),
-        ("MCP",     _use_mcp_fetch,      _mcp_ollama_chat),
-        ("direct",  _is_direct_ollama_enabled, _direct_ollama_chat),
-    ]
-
-    for label, check_fn, call_fn in _TRANSPORTS:
-        if not check_fn():
-            continue
-        try:
-            result = call_fn(
-                model=model, messages=messages, options=options,
-                tools=tools, keep_alive=keep_alive, think=think_value,
-            )
-            elapsed = time.time() - t_start
-            _log_llm_response_json(result, label, elapsed)
-            resp_content = _extract_message_content(result)
-            log_msg = (
-                f"[Ollama응답] transport={label} ({elapsed:.1f}s) "
-                f"답변길이={len(resp_content)}자"
-            )
-            if label == "package":
-                resp_tool_calls = _extract_tool_calls(
-                    _normalize_assistant_message(
-                        result.message if hasattr(result, 'message')
-                        else (result.get('message', {}) if isinstance(result, dict) else {})
-                    )
-                )
-                log_msg += f" tool_calls={len(resp_tool_calls)}개"
-            logger.info(log_msg)
-            return result
-        except Exception as err:
-            errors.append(str(err))
-            if label == "direct":
-                raise
-            logger.warning(f"Ollama chat 호출 실패({label}) -> fallback: {err}")
-
-    error_tail = errors[-1] if errors else "all transports unavailable"
-    raise RuntimeError(f"No available Ollama transport: {error_tail}")
-
-
-
-
-# LLM 응답에서 도구 호출 추출 (tool_calls 필드 우선, content에 JSON 도구 호출이 텍스트로 출력된 경우도 파싱)
-def _extract_tool_calls(assistant_message: Dict[str, Any]) -> List[Any]:
-    tool_calls = assistant_message.get("tool_calls")
-    if isinstance(tool_calls, list) and tool_calls:
-        return tool_calls
-
-    # content에 도구 호출 JSON이 텍스트로 출력된 경우 파싱 시도
-    # 예: {"name": "search_farm_knowledge", "arguments": {...}}
-    content = assistant_message.get("content", "").strip()
-    if content.startswith("{") and content.endswith("}"):
-        parsed = safe_json_load(content)
-        if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:
-            # 도구 호출 JSON을 정규 tool_call 형식으로 변환
-            tool_call = {"function": {"name": parsed["name"], "arguments": parsed["arguments"]}}
-            # content를 비워서 최종답변으로 사용되지 않도록 함
-            assistant_message["content"] = ""
-            assistant_message["tool_calls"] = [tool_call]
-            logger.warning(
-                f"[Tool Use] content에서 도구호출 JSON 감지 → tool_calls로 변환: {parsed['name']}"
-            )
-            return [tool_call]
-
-    return []
 
 
 # _extract_tool_name, _extract_tool_arguments, _coerce_numeric_id은 llm_message_utils로 이동됨

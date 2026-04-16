@@ -339,3 +339,131 @@ def _get_model_name() -> str:
         _cached_model_name = fallback
     logger.warning(f"[모델선택] 폴백 '{fallback}' 사용")
     return fallback
+
+
+# ═══════════════════════════════════
+# LLM 로깅 + Ollama Chat 실행기
+# ═══════════════════════════════════
+from agri_ai_core.src.ai.llm_message_utils import (
+    serialize_for_log as _serialize_for_log,
+    extract_message_content as _extract_message_content,
+    normalize_assistant_message as _normalize_assistant_message,
+    extract_tool_calls as _extract_tool_calls_fn,
+)
+
+
+def _log_llm_request_json(model, messages, options, tools, keep_alive):
+    """LLM 호출 전 요청 payload JSON 로그."""
+    try:
+        payload = _build_chat_payload(model, _serialize_for_log(messages),
+                                       _serialize_for_log(options) if options else None,
+                                       _serialize_for_log(tools) if tools else None,
+                                       keep_alive)
+        logger.info(
+            "[LLM 호출 JSON 요청]\n%s",
+            json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+        )
+    except Exception as log_err:
+        logger.warning(f"[LLM 요청 JSON 로깅 실패] {log_err}")
+
+
+def _log_llm_response_json(result, transport, elapsed):
+    """LLM 응답 JSON 로그 + 성능 메트릭."""
+    try:
+        if isinstance(result, dict):
+            response_json = result
+        elif hasattr(result, "model_dump"):
+            response_json = result.model_dump()
+        elif hasattr(result, "__dict__"):
+            response_json = {k: v for k, v in result.__dict__.items() if not k.startswith("_")}
+        else:
+            response_json = str(result)
+        logger.info(
+            "[LLM 호출 JSON 응답] transport=%s (%.1fs)\n%s",
+            transport, elapsed,
+            json.dumps(response_json, ensure_ascii=False, indent=2, default=str),
+        )
+        if isinstance(response_json, dict):
+            _total_ns = response_json.get("total_duration", 0)
+            _load_ns = response_json.get("load_duration", 0)
+            _prompt_ns = response_json.get("prompt_eval_duration", 0)
+            _eval_ns = response_json.get("eval_duration", 0)
+            _prompt_cnt = response_json.get("prompt_eval_count", 0)
+            _eval_cnt = response_json.get("eval_count", 0)
+            if _total_ns > 0:
+                _eval_tok_per_s = (_eval_cnt / (_eval_ns / 1e9)) if _eval_ns > 0 else 0
+                logger.debug(
+                    f"[PERF:대화] Ollama내부시간: "
+                    f"모델로드={_load_ns / 1e9:.1f}s, "
+                    f"프롬프트처리={_prompt_ns / 1e9:.1f}s({_prompt_cnt}tok), "
+                    f"답변생성={_eval_ns / 1e9:.1f}s({_eval_cnt}tok, {_eval_tok_per_s:.1f}tok/s), "
+                    f"총={_total_ns / 1e9:.1f}s"
+                )
+    except Exception as log_err:
+        logger.warning(f"[LLM 응답 JSON 로깅 실패] {log_err}")
+
+
+def _ollama_chat(
+    model: str,
+    messages: list,
+    options: dict = None,
+    tools: list = None,
+    keep_alive: str = None,
+):
+    """3가지 전송(package/MCP/direct) 중 가용한 것으로 Ollama chat 호출.
+    전송 실패 시 다음 전송으로 폴백. 모두 실패 시 RuntimeError."""
+    think_value = None
+    if options and "think" in options:
+        think_value = options.pop("think")
+
+    errors = []
+    msg_count = len(messages or [])
+    tool_count = len(tools or [])
+    t_start = time.time()
+
+    logger.info(
+        f"[Ollama요청] model={model} messages={msg_count} tools={tool_count} "
+        f"options={{{', '.join(f'{k}={v}' for k, v in (options or {}).items())}}}"
+    )
+    _log_llm_request_json(model, messages, options, tools, keep_alive)
+
+    _TRANSPORTS = [
+        ("package", _use_ollama_package, _pkg_ollama_chat),
+        ("MCP",     _use_mcp_fetch,      _mcp_ollama_chat),
+        ("direct",  _is_direct_ollama_enabled, _direct_ollama_chat),
+    ]
+
+    for label, check_fn, call_fn in _TRANSPORTS:
+        if not check_fn():
+            continue
+        try:
+            result = call_fn(
+                model=model, messages=messages, options=options,
+                tools=tools, keep_alive=keep_alive, think=think_value,
+            )
+            elapsed = time.time() - t_start
+            _log_llm_response_json(result, label, elapsed)
+            resp_content = _extract_message_content(result)
+            log_msg = (
+                f"[Ollama응답] transport={label} ({elapsed:.1f}s) "
+                f"답변길이={len(resp_content)}자"
+            )
+            if label == "package":
+                resp_tool_calls = _extract_tool_calls_fn(
+                    _normalize_assistant_message(
+                        result.message if hasattr(result, 'message')
+                        else (result.get('message', {}) if isinstance(result, dict) else {})
+                    ),
+                    logger=logger,
+                )
+                log_msg += f" tool_calls={len(resp_tool_calls)}개"
+            logger.info(log_msg)
+            return result
+        except Exception as err:
+            errors.append(str(err))
+            if label == "direct":
+                raise
+            logger.warning(f"Ollama chat 호출 실패({label}) -> fallback: {err}")
+
+    error_tail = errors[-1] if errors else "all transports unavailable"
+    raise RuntimeError(f"No available Ollama transport: {error_tail}")
