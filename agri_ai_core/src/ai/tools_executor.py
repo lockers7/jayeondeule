@@ -39,25 +39,12 @@ logger = setup_logger(__name__)
 # 시스템/가상 농장 ID (관리자 선택 시 전체 데이터 검색, 일반 사용자는 자기 농장 + 시스템 농장 데이터 검색)
 _SYSTEM_FARM_ID = "0"
 
-# farm_id → farm_name 매핑 캐시 (프로세스 내 1회 조회 후 재사용)
-_farm_name_cache: Dict[str, str] = {}
-_farm_name_cache_loaded = False
-
-
-def _get_farm_name(farm_id: str) -> str:
-    """farm_id에 해당하는 farm_name을 반환. DB 조회 실패 시 farm_id 그대로 반환."""
-    global _farm_name_cache, _farm_name_cache_loaded
-    if not _farm_name_cache_loaded:
-        try:
-            from agri_ai_core.src.postgresql.connection import db_session
-            from agri_ai_core.src.postgresql.queries import GET_LIST_FARM
-            with db_session() as database:
-                rows = database.fetch_all(query=GET_LIST_FARM, vals=(), as_dict=True)
-            _farm_name_cache = {str(r["farm_id"]): r["farm_name"] for r in (rows or [])}
-            _farm_name_cache_loaded = True
-        except Exception as e:
-            logger.warning(f"[farm_name 캐시] DB 조회 실패: {e}")
-    return _farm_name_cache.get(farm_id, farm_id)
+# farm_id → farm_name 캐시는 farm_cache.py로 분리됨 (하위 호환 alias)
+from agri_ai_core.src.ai.farm_cache import (
+    get_farm_name as _get_farm_name,
+    get_all_farm_names,
+    is_cache_loaded as _farm_cache_loaded_check,
+)
 
 
 # _normalize_id는 tools_utils.py로 이동됨 (하위 호환 alias)
