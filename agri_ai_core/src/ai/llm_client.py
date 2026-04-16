@@ -150,13 +150,13 @@ def _report_progress(progress_queue: Optional[ThreadQueue], message: str, phase:
     except Exception:
         pass  # 큐 오류 시 무시 (진행 상태 누락은 치명적이지 않음)
 
+# 워밍업은 llm_warmup.py로 분리됨
+from agri_ai_core.src.ai.llm_warmup import _perform_llm_warmup, initialize_background_warmup
+
 
 # ═════════════════════
 # 워밍업 관련 전역 변수
 # ═════════════════════
-_warmup_lock = threading.Lock()
-_warmup_started = False
-_llm_warmed = False
 
 # 전송 계층은 llm_transport.py로 분리됨 (하위 호환 alias)
 from agri_ai_core.src.ai.llm_transport import (
@@ -450,54 +450,6 @@ def _normalize_tool_arguments(
 
 # ═════════════════════════════════════════
 # Ollama에서 사용 가능한 모델 목록 가져오기
-# --->
-# ═════════════════════════════════════════
-# LLM 워밍업
-# LLM 워밍업 수행
-# ══════════════════
-def _perform_llm_warmup():
-    global _llm_warmed
-    if _llm_warmed:
-        return
-
-    try:
-        model_name = _get_model_name()
-        _ollama_chat(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": "You are a concise assistant. Respond with one word."},
-                {"role": "user", "content": "ping"}
-            ],
-            options={
-                "temperature": 0.0,
-                "top_p": 0.1,
-                "top_k": 1,
-                "num_predict": 4
-            }
-        )
-        _llm_warmed = True
-        logger.debug("LLM warm-up completed.")
-    except Exception as warm_err:
-        logger.warning(f"LLM warm-up failed: {warm_err}")
-
-
-# ════════════════════════
-# 백그라운드 워밍업 초기화
-# 백그라운드 워밍업 초기화
-# ════════════════════════
-def initialize_background_warmup(farm_id=None, house_id=None, farm_name=None, house_name=None):
-    global _warmup_started
-    with _warmup_lock:
-        if _warmup_started:
-            return
-        _warmup_started = True
-
-    def _warmup_runner():
-        _perform_llm_warmup()
-
-    threading.Thread(target=_warmup_runner, daemon=True).start()
-
-
 
 
 def _emit_question_log_once(
