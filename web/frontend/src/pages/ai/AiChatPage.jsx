@@ -267,7 +267,12 @@ export default function AiChatPage() {
 
     const handleSend = (directText) => {
         const query = (directText || currentInput).trim();
-        if (!query || isLoading) return;
+        if (!query) return;
+        // 이전 스트림 진행 중이면 자동 취소 후 새 질문 전송
+        if (isLoading && abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+        }
 
         setMessages((prev) => [...prev, {role: "user", content: query, timestamp: new Date()}]);
         setCurrentInput("");

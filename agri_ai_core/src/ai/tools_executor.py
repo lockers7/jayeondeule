@@ -631,7 +631,13 @@ def search_farm_knowledge(
             "data_retrieved_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "results": deduped_results,
         }
-        if _file_list:
+        if _is_meta_query:
+            # 파일 목록 질문에는 반드시 file_list를 포함 (비어있어도)
+            result_data["file_list"] = _file_list or []
+            result_data["file_count"] = len(_file_list or [])
+            if not _file_list:
+                result_data["file_list_message"] = "선택된 농장에 학습된 파일이 없습니다."
+        elif _file_list:
             result_data["file_list"] = _file_list
             result_data["file_count"] = len(_file_list)
         return result_data

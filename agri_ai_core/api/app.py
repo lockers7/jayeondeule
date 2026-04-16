@@ -439,10 +439,11 @@ async def query_llm_stream(request: QueryRequest, _=Depends(verify_api_key)):
         session_id = str(uuid.uuid4())
 
     api_logger.debug(
-        "[query/stream] session=%s, farm=%s, house=%s, query=%s",
-        session_id, request.farm_id, request.house_id,
+        "[query/stream] session=%s, farm=%s, house=%s, auth_farm=%s, query=%s",
+        session_id, request.farm_id, request.house_id, request.auth_farm_id,
         request.query[:200] if request.query else "",
     )
+    logger.info(f"[query/stream] auth_farm_id={request.auth_farm_id!r} farm_id={request.farm_id!r}")
 
     async def event_generator():
         async for chunk in query_llm_simple_stream(
