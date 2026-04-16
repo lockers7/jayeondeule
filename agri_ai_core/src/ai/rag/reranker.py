@@ -7,18 +7,16 @@
 # ═════════════════════════════════════════════════════════
 import os
 import re
-import json
 import time
 from typing import Any, Dict, List
 
 from agri_ai_core.logs import setup_logger
-from agri_ai_core.config import get_ollama_url, get_model_name
+from agri_ai_core.config import get_model_name
 from agri_ai_core.src.utils.json_utils import safe_json_load
 
 logger = setup_logger(__name__)
 
 # Reranker 설정
-RERANK_TIMEOUT = int(os.getenv("RERANK_TIMEOUT", "30"))
 RERANK_MAX_CANDIDATES = int(os.getenv("RERANK_MAX_CANDIDATES", "10"))
 RERANK_MIN_SCORE = int(os.getenv("RERANK_MIN_SCORE", "4"))
 RERANK_MAX_RETRIES = int(os.getenv("RERANK_MAX_RETRIES", "1"))
@@ -105,40 +103,26 @@ def rerank_results(
 
     for attempt in range(1 + RERANK_MAX_RETRIES):
         try:
-            from agri_ai_core.src.ai.mcp_client import mcp_http_request
+            from agri_ai_core.src.ai.llm_transport import _ollama_chat
+            from agri_ai_core.src.ai.llm_message_utils import extract_message_content
 
-            ollama_url = get_ollama_url()
             model_name = get_model_name()
             prompt = _build_rerank_prompt(query, candidates)
-
-            payload = {
-                "model": model_name,
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "temperature": 0,
-                    "num_predict": 60,
-                    "think": False,
-                },
+            options = {
+                "temperature": 0 if attempt == 0 else 0.3,
+                "num_predict": 60,
+                "think": False,
             }
 
-            status_code, data, error_text = mcp_http_request(
-                method="POST",
-                url=f"{ollama_url}/api/generate",
-                json_body=payload,
-                timeout=RERANK_TIMEOUT,
+            result = _ollama_chat(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                options=options,
+                keep_alive="1h",
             )
 
             elapsed = time.time() - t_start
-
-            if status_code != 200 or not data:
-                last_error = f"status={status_code}, elapsed={elapsed:.1f}s"
-                logger.warning(
-                    f"[Reranker] LLM 호출 실패 (시도 {attempt + 1}/{1 + RERANK_MAX_RETRIES}, {last_error})"
-                )
-                continue
-
-            response_text = data.get("response", "") if isinstance(data, dict) else ""
+            response_text = extract_message_content(result) if result else ""
             scores = _parse_scores(response_text, len(candidates))
 
             if not scores or len(scores) != len(candidates):
@@ -148,8 +132,6 @@ def rerank_results(
                     f"{elapsed:.1f}s, {last_error})"
                 )
                 scores = []
-                if attempt < RERANK_MAX_RETRIES:
-                    payload["options"]["temperature"] = 0.3
                 continue
 
             break  # 성공
@@ -165,12 +147,19 @@ def rerank_results(
 
     elapsed = time.time() - t_start
 
-    # 모든 시도 실패 → 거리 기반 상위 결과를 폴백으로 반환
+    # 모든 시도 실패 → farm 컬렉션 우선 + 거리 기반 폴백
     if not scores:
-        fallback = candidates[:top_k]
+        _FARM_COLLECTIONS = {"document", "farm_knowledge"}
+        fallback = sorted(
+            candidates,
+            key=lambda r: (
+                0 if r.get("collection") in _FARM_COLLECTIONS else 1,
+                r.get("distance") if r.get("distance") is not None else float("inf"),
+            ),
+        )[:top_k]
         logger.warning(
             f"[Reranker] 모든 시도 실패 ({elapsed:.1f}s, 마지막: {last_error}) "
-            f"→ 거리 기반 상위 {len(fallback)}건 폴백 반환"
+            f"→ farm 컬렉션 우선 + 거리 기반 상위 {len(fallback)}건 폴백 반환"
         )
         return fallback
 

@@ -49,6 +49,7 @@ class DataCollector:
         self.collected_sources = []
         self.tools_used = []
         self._last_merged_args = {}
+        self._executed_tool_keys = set()  # (tool_name, query_key) 중복 실행 방지
 
     def collect(self, analysis_result):
         """메인 수집 + LLM 검증 루프"""
@@ -145,6 +146,14 @@ class DataCollector:
             tool_args = task.get("args", {})
             if not tool_name:
                 continue
+
+            # 동일 (도구+쿼리) 조합 중복 실행 방지
+            _query_key = str(tool_args.get("query", tool_args.get("url", "")))
+            _exec_key = (tool_name, _query_key)
+            if _exec_key in self._executed_tool_keys:
+                logger.info(f"[2단계] {tool_name}(query={_query_key!r}) 이미 실행됨, 건너뜀")
+                continue
+            self._executed_tool_keys.add(_exec_key)
 
             self._report_progress(f"{self._tool_display(tool_name)} 중...", "data_collecting", tool_name)
             raw_result, refined_result = self._execute_single_tool(tool_name, tool_args, user_query)
