@@ -157,11 +157,20 @@ class DataCollector:
             if not tool_name:
                 continue
 
-            # 동일 (도구+쿼리) 조합 중복 실행 방지
-            _query_key = str(tool_args.get("query", tool_args.get("url", "")))
-            _exec_key = (tool_name, _query_key)
+            # 동일 (도구+식별자) 조합 중복 실행 방지
+            # 도구별 식별자: 검색은 query, URL 수집은 url,
+            # 농장 데이터는 farm_id+house_id+data_type (multi_house fan-out 호환)
+            _ident_parts = [
+                str(tool_args.get("query", "")),
+                str(tool_args.get("url", "")),
+                str(tool_args.get("farm_id", "")),
+                str(tool_args.get("house_id", "")),
+                str(tool_args.get("data_type", "")),
+                str(tool_args.get("file_name", "")),
+            ]
+            _exec_key = (tool_name, "|".join(_ident_parts))
             if _exec_key in self._executed_tool_keys:
-                logger.info(f"[2단계] {tool_name}(query={_query_key!r}) 이미 실행됨, 건너뜀")
+                logger.info(f"[2단계] {tool_name}(key={_exec_key[1]!r}) 이미 실행됨, 건너뜀")
                 continue
             self._executed_tool_keys.add(_exec_key)
 
