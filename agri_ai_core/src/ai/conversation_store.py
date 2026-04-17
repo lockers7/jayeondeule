@@ -286,7 +286,7 @@ class ConversationStore:
     # ============================================================
     def _store_summary_to_vectordb(self, session_id: str, summary: str):
         try:
-            from agri_ai_core.src.ai.rag.embedder import embed_text
+            from agri_ai_core.src.ai.embedder import embed_text
             from agri_ai_core.src.chroma.collections import conversation_collection
             from agri_ai_core.src.chroma.operations import upsert_documents_with_embedding
 

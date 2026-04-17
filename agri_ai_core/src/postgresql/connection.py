@@ -38,10 +38,24 @@ except Exception:
 
 from agri_ai_core.config import settings
 from agri_ai_core.logs import setup_logger
-# postgres_query는 함수 내부에서 지연 import (계층 역전 방지)
 from agri_ai_core.src.utils.validators import is_true
 
 logger = setup_logger(__name__)
+
+# MCP postgres 실행기(옵션). 상위 계층(startup.py 등)에서 주입한다.
+# None이면 USE_MCP_POSTGRES=true여도 MCP 경로가 비활성화되고 direct DB만 사용.
+# 시그니처: (sql: str, timeout: int) -> dict({"success": bool, "rows": list, "error": str})
+_mcp_query_fn = None
+
+
+def set_mcp_query_fn(fn) -> None:
+    """상위 계층이 MCP postgres 실행기를 주입한다 (의존성 역전).
+
+    이 훅이 없으면 MCP postgres 경로는 비활성 — postgresql 패키지가 AI 계층을
+    역참조하지 않도록 하기 위함.
+    """
+    global _mcp_query_fn
+    _mcp_query_fn = fn
 
 
 class DatabaseHandler:
@@ -121,9 +135,10 @@ class DatabaseHandler:
         return self._PLACEHOLDER_PATTERN.sub(_replace, query)
 
     def _execute_mcp_query(self, query: str, vals: Optional[Tuple[Any, ...]] = None) -> list:
-        from agri_ai_core.src.ai.mcp_client import postgres_query  # 지연 import (계층 역전 방지)
+        if _mcp_query_fn is None:
+            raise RuntimeError("MCP postgres 실행기가 주입되지 않음 (set_mcp_query_fn 미호출)")
         sql = self._bind_sql(query, vals)
-        result = postgres_query(sql, timeout=self.mcp_timeout_seconds)
+        result = _mcp_query_fn(sql, timeout=self.mcp_timeout_seconds)
         if not result.get("success"):
             raise RuntimeError(str(result.get("error") or "MCP postgres query failed"))
 

@@ -190,7 +190,7 @@ def _store_enriched_data(
     qa_pairs: List[Dict[str, str]],
     metadata: Dict[str, Any],
 ) -> Dict[str, Any]:
-    from agri_ai_core.src.ai.rag.embedder import embed_text
+    from agri_ai_core.src.ai.embedder import embed_text
     from agri_ai_core.src.chroma.collections import farm_knowledge_collection
     from agri_ai_core.src.chroma.operations import upsert_documents_with_embedding
 

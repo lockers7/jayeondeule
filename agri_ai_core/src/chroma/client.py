@@ -19,6 +19,7 @@ from datetime import datetime
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.config import settings
+from agri_ai_core.src.utils.http_client import http_json_request
 from agri_ai_core.src.chroma.config import (
     CHROMA_HOST,
     CHROMA_PORT,
@@ -32,12 +33,10 @@ logger = setup_logger(__name__)
 
 
 def _http_request(method: str, url: str, payload=None, timeout: int = 10):
-    """ChromaDB REST API로 HTTP 요청. MCP 클라이언트를 통해 실제 통신.
-    Returns: (status_code, data, raw_text)."""
-    from agri_ai_core.src.ai.mcp_client import mcp_http_request  # 지연 import (계층 역전 방지)
+    """ChromaDB REST API로 HTTP 요청. Returns: (status_code, data, raw_text)."""
     normalized_method = (method or "GET").upper()
     logger.debug(f"[ChromaDB-{normalized_method}] url={url}, payload={payload}, timeout={timeout}")
-    status_code, data, text = mcp_http_request(
+    status_code, data, text = http_json_request(
         method=normalized_method,
         url=url,
         json_body=payload,

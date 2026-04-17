@@ -28,6 +28,7 @@ from datetime import datetime
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.config import get_ollama_url, get_model_name
 from agri_ai_core.src.utils.json_utils import safe_json_load
+from agri_ai_core.src.utils.http_client import http_json_request
 from agri_ai_core.src.utils.error_utils import log_and_return
 from agri_ai_core.src.postgresql.reader import (
     read_current_sensor_info,
@@ -397,8 +398,6 @@ def _build_user_prompt(sensor_data, current_relay, growth_stage, optimal, trend_
 # ════════════════════════════════════════════
 @log_and_return(default=None, logger=logger, message="[AI제어] LLM 호출 예외")
 def _call_llm(system_prompt, user_prompt):
-    from agri_ai_core.src.ai.mcp_client import mcp_http_request
-
     ollama_url = get_ollama_url()
     model_name = get_model_name()
 
@@ -417,7 +416,7 @@ def _call_llm(system_prompt, user_prompt):
     logger.debug(f"[AI제어] LLM 요청: model={model_name}")
     t_start = time.time()
 
-    status_code, data, error_text = mcp_http_request(
+    status_code, data, error_text = http_json_request(
         method="POST",
         url=f"{ollama_url}/api/generate",
         json_body=payload,
