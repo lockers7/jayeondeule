@@ -18,10 +18,6 @@
 # search_gas_price: Opinet 유가정보 조회 — 실시간 API 우선, 실패 시 DB 폴백
 # execute_tool: execute tool
 # _collect_ids_for_file: 특정 파일명에 대한 삭제 대상 ID 수집 (공백↔밑줄 자동 변환 검색)
-# _parse_positive_int: parse positive int
-# _parse_positive_float: parse positive float
-# _parse_optional_int: parse optional int
-# _to_chroma_where: to chroma where
 # ══════════════════════════════════════════════════════════════════════════════════════════
 import json
 import os
@@ -47,11 +43,15 @@ from agri_ai_core.src.ai.farm_cache import (
 )
 
 
-# _normalize_id는 tools_utils.py로 이동됨 (하위 호환 alias)
+# 공용 유틸은 tools_utils.py로 이동됨 (하위 호환 alias)
 from agri_ai_core.src.ai.tools_utils import (
     normalize_id as _normalize_id,
     json_default as _json_default,
     build_ai_conflict as _build_ai_conflict,
+    parse_positive_int as _parse_positive_int,
+    parse_positive_float as _parse_positive_float,
+    parse_optional_int as _parse_optional_int,
+    to_chroma_where as _to_chroma_where,
 )
 
 
@@ -142,16 +142,12 @@ def delete_farm_knowledge(file_name: str, farm_id: str = None, auth_farm_id: str
             else:
                 farm_id_wheres.append(None)  # 폴백
 
-            for name in name_variants:
-                for field in ("file_name", "file_name_stored"):
-                    for fw in farm_id_wheres:
-                        if fw is None:
-                            w = {field: {"$eq": name}}
-                        else:
-                            w = {"$and": [{field: {"$eq": name}}, fw]}
-                        res = get_documents(coll, where=w, include=["metadatas"], limit=10000)
-                        for doc_id in (res.get("ids") or []):
-                            ids.add(doc_id)
+            from itertools import product
+            for name, field, fw in product(name_variants, ("file_name", "file_name_stored"), farm_id_wheres):
+                file_cond = {field: {"$eq": name}}
+                w = file_cond if fw is None else {"$and": [file_cond, fw]}
+                res = get_documents(coll, where=w, include=["metadatas"], limit=10000)
+                ids.update(res.get("ids") or [])
             return ids
 
         for coll in collections:
@@ -251,48 +247,10 @@ def search_farm_knowledge(
         from agri_ai_core.src.chroma.collections import document_collection, farm_knowledge_collection, web_knowledge_collection
         from agri_ai_core.src.chroma.operations import query_documents
 
-        def _parse_positive_int(value, default):
-            try:
-                parsed = int(value)
-                return parsed if parsed > 0 else default
-            except Exception:
-                return default
-
-        def _parse_positive_float(value, default):
-            try:
-                parsed = float(value)
-                return parsed if parsed > 0 else default
-            except Exception:
-                return default
-
         max_results = _parse_positive_int(n_results, 5)
         # 파일명이 지정된 경우: 해당 파일의 청크를 최대한 많이 가져옴 (상세 답변 지원)
         if file_name:
             max_results = max(max_results, 30)
-        def _parse_optional_int(value):
-            if value in (None, ""):
-                return None
-            try:
-                return int(str(value))
-            except Exception:
-                return None
-
-        # ============================================================
-        # 다중 키 where 딕셔너리를 ChromaDB $and 형식으로 변환
-        # ============================================================
-        def _to_chroma_where(where_dict):
-            if not where_dict:
-                return None
-            if len(where_dict) == 1:
-                k, v = next(iter(where_dict.items()))
-                return {k: {"$eq": v}} if not isinstance(v, dict) else where_dict
-            conditions = []
-            for k, v in where_dict.items():
-                if isinstance(v, dict):
-                    conditions.append({k: v})
-                else:
-                    conditions.append({k: {"$eq": v}})
-            return {"$and": conditions}
 
         source_where_candidates = []
 

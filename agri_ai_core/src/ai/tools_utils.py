@@ -5,6 +5,10 @@
 # normalize_id: LLM이 준 ID 문자열에서 순수 숫자만 추출
 # json_default: Decimal/datetime 등 json.dumps 미지원 타입 변환
 # build_ai_conflict: AI 권장 릴레이 vs 사용자 수동 설정 차이 비교
+# parse_positive_int: 양의 정수 파싱 (실패 시 default)
+# parse_positive_float: 양의 실수 파싱 (실패 시 default)
+# parse_optional_int: 빈 값/None 허용 정수 파싱
+# to_chroma_where: 다중 키 dict → ChromaDB $and 형식 변환
 # ════════════════════════════════════════════════════════════════
 import re
 from datetime import date, datetime
@@ -66,3 +70,47 @@ def build_ai_conflict(ai_judgment: Optional[Dict[str, Any]],
                 conflicts.append(f"{label}: 수동={user_str}, AI권장={ai_str}")
 
     return conflicts or None
+
+
+def parse_positive_int(value: Any, default: int) -> int:
+    """양의 정수 파싱. 실패하거나 0 이하면 default 반환."""
+    try:
+        parsed = int(value)
+        return parsed if parsed > 0 else default
+    except (ValueError, TypeError):
+        return default
+
+
+def parse_positive_float(value: Any, default: float) -> float:
+    """양의 실수 파싱. 실패하거나 0 이하면 default 반환."""
+    try:
+        parsed = float(value)
+        return parsed if parsed > 0 else default
+    except (ValueError, TypeError):
+        return default
+
+
+def parse_optional_int(value: Any) -> Optional[int]:
+    """빈 값/None 허용 정수 파싱. 실패/빈값 시 None."""
+    if value in (None, ""):
+        return None
+    try:
+        return int(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
+def to_chroma_where(where_dict: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """다중 키 where 딕셔너리를 ChromaDB $and 형식으로 변환."""
+    if not where_dict:
+        return None
+    if len(where_dict) == 1:
+        k, v = next(iter(where_dict.items()))
+        return {k: {"$eq": v}} if not isinstance(v, dict) else where_dict
+    conditions = []
+    for k, v in where_dict.items():
+        if isinstance(v, dict):
+            conditions.append({k: v})
+        else:
+            conditions.append({k: {"$eq": v}})
+    return {"$and": conditions}
