@@ -155,7 +155,7 @@ def detect_document_type(document_content, filename=None):
 # farm_id/house_id 기반 검색에서도 작물 관련 문서가 검색되도록 함
 # ════════════════════════════════════════════════════════════════════
 def _store_crop_chunks_to_farm_knowledge(document_content, metadata, document_type, crop_name, filename, farm_id):
-    from agri_ai_core.src.ai.rag.embedder import embed_text
+    from agri_ai_core.src.ai.embedder import embed_text
     from agri_ai_core.src.ai.rag.chunker import chunk_document
     from agri_ai_core.src.chroma.operations import upsert_documents_with_embedding
 

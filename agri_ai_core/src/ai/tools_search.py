@@ -646,7 +646,7 @@ def search_web(
 # ═══════════════════════════════════════════════════════════════════════════
 def _cache_web_results_to_vectordb(query: str, results: list) -> None:
     import hashlib
-    from agri_ai_core.src.ai.rag.embedder import embed_text
+    from agri_ai_core.src.ai.embedder import embed_text
     from agri_ai_core.src.chroma.collections import web_knowledge_collection
     from agri_ai_core.src.chroma.operations import upsert_documents_with_embedding
 

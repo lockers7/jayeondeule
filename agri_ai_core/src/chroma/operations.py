@@ -19,6 +19,7 @@ import traceback
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.utils.validators import is_true
+from agri_ai_core.src.utils.http_client import http_json_request
 from agri_ai_core.src.chroma.config import CHROMA_API_BASE
 from agri_ai_core.src.chroma.client import (
     get_collection_id_from_name,
@@ -36,9 +37,8 @@ logger = setup_logger(__name__)
 
 
 def _http_post(url: str, payload: dict, timeout: int = 30):
-    from agri_ai_core.src.ai.mcp_client import mcp_http_request  # 지연 import (계층 역전 방지)
     logger.debug(f"[ChromaDB-POST] url={url}, payload_keys={list(payload.keys()) if isinstance(payload, dict) else type(payload)}, timeout={timeout}")
-    status_code, data, text = mcp_http_request(
+    status_code, data, text = http_json_request(
         method="POST",
         url=url,
         json_body=payload,
@@ -50,15 +50,23 @@ def _http_post(url: str, payload: dict, timeout: int = 30):
 
 _AUTO_EMBED_ON_UPSERT = is_true(os.getenv("AUTO_EMBED_ON_UPSERT", "true"))
 
+# 임베딩 함수(옵션). 상위 계층(startup.py)에서 주입.
+# None이면 자동 임베딩은 비활성 — chroma 패키지가 AI 계층을 역참조하지 않도록.
+# 시그니처: (text: str) -> list[float] | None
+_embed_fn = None
+
+
+def set_embed_fn(fn) -> None:
+    """상위 계층이 임베딩 함수를 주입한다 (의존성 역전)."""
+    global _embed_fn
+    _embed_fn = fn
+
 
 def _build_embedding_from_text(text):
-    if not _AUTO_EMBED_ON_UPSERT:
-        return None
-    if not text:
+    if not _AUTO_EMBED_ON_UPSERT or not text or _embed_fn is None:
         return None
     try:
-        from agri_ai_core.src.ai.rag.embedder import embed_text
-        embedding = embed_text(str(text))
+        embedding = _embed_fn(str(text))
         if isinstance(embedding, list) and len(embedding) == _embedding_dim():
             return embedding
     except Exception as e:

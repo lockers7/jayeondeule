@@ -243,7 +243,7 @@ def search_farm_knowledge(
         f"n_results={n_results} file_name={file_name} farm_id={farm_id} house_id={house_id}"
     )
     try:
-        from agri_ai_core.src.ai.rag.embedder import embed_text
+        from agri_ai_core.src.ai.embedder import embed_text
         from agri_ai_core.src.chroma.collections import document_collection, farm_knowledge_collection, web_knowledge_collection
         from agri_ai_core.src.chroma.operations import query_documents
 
@@ -474,7 +474,7 @@ def search_farm_knowledge(
                 logger.info(f"[VectorDB검색] document 결과 없음, 전체 {len(deduped_results)}건 폴백")
         else:
             try:
-                from agri_ai_core.src.ai.rag.reranker import rerank_results
+                from agri_ai_core.src.ai.reranker import rerank_results
                 deduped_results = rerank_results(query, deduped_results, top_k=max_results)
             except Exception as e:
                 logger.warning(f"[VectorDB검색] Reranker 예외: {e} → 거리 기반 상위 {max_results}건 폴백")

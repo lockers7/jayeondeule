@@ -249,7 +249,8 @@ def _chunk_cleanup_job():
 
 
 def setup_default_jobs(learning_func=None, stats_func=None,
-                       manual_control_func=None, growth_rag_func=None):
+                       manual_control_func=None, growth_rag_func=None,
+                       opinet_collect_func=None, lotto_collect_func=None):
     try:
         # 학습 작업 (매일 지정 시간)
         if learning_func:
@@ -322,38 +323,38 @@ def setup_default_jobs(learning_func=None, stats_func=None,
             minute=0
         )
 
-        # Opinet 유가정보 수집 (매일 10:00)
-        def _opinet_daily_job():
-            try:
-                from agri_ai_core.src.opinet.opinet_collector import collect_all
-                collect_all()
-            except Exception as oe:
-                logger.error(f"[Opinet] 일일 수집 실패: {oe}")
+        # Opinet 유가정보 수집 (매일 10:00) — 상위 계층이 주입
+        if opinet_collect_func:
+            def _opinet_daily_job():
+                try:
+                    opinet_collect_func()
+                except Exception as oe:
+                    logger.error(f"[Opinet] 일일 수집 실패: {oe}")
 
-        add_job(
-            job_id="opinet_daily_job",
-            func=_opinet_daily_job,
-            trigger_type="cron",
-            hour=10,
-            minute=0
-        )
+            add_job(
+                job_id="opinet_daily_job",
+                func=_opinet_daily_job,
+                trigger_type="cron",
+                hour=10,
+                minute=0
+            )
 
-        # 로또 당첨번호 수집 (매주 토요일 22:00)
-        def _lotto_weekly_job():
-            try:
-                from agri_ai_core.src.lotto.lotto_collector import update_lotto_db
-                update_lotto_db()
-            except Exception as le:
-                logger.error(f"[로또수집] 주간 수집 실패: {le}")
+        # 로또 당첨번호 수집 (매주 토요일 22:00) — 상위 계층이 주입
+        if lotto_collect_func:
+            def _lotto_weekly_job():
+                try:
+                    lotto_collect_func()
+                except Exception as le:
+                    logger.error(f"[로또수집] 주간 수집 실패: {le}")
 
-        add_job(
-            job_id="lotto_weekly_job",
-            func=_lotto_weekly_job,
-            trigger_type="cron",
-            day_of_week="sat",
-            hour=22,
-            minute=0
-        )
+            add_job(
+                job_id="lotto_weekly_job",
+                func=_lotto_weekly_job,
+                trigger_type="cron",
+                day_of_week="sat",
+                hour=22,
+                minute=0
+            )
 
         logger.info("기본 스케줄 작업 설정 완료")
         return True

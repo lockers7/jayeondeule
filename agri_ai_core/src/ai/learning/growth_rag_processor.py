@@ -447,7 +447,7 @@ def _build_rag_metadata(
 # ════════════════════════════════════════════
 def _store_growth_rag(document: str, metadata: Dict[str, Any]) -> bool:
     try:
-        from agri_ai_core.src.ai.rag.embedder import embed_text
+        from agri_ai_core.src.ai.embedder import embed_text
         from agri_ai_core.src.chroma.collections import farm_knowledge_collection
         from agri_ai_core.src.chroma.operations import upsert_documents_with_embedding
 

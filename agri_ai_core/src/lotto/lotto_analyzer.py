@@ -40,7 +40,8 @@ def _load_results_until(draw_no):
 def _request_llm_pick(stats, draw_no):
     """LLM에게 N회차 추천 번호를 요청한다 (1개)."""
     from agri_ai_core.src.lotto.lotto_recommender import _build_llm_prompt, _parse_llm_response
-    from agri_ai_core.src.ai.llm_client import _ollama_chat, _get_model_name, _extract_message_content
+    from agri_ai_core.src.ai.llm_transport import _ollama_chat, _get_model_name
+    from agri_ai_core.src.ai.llm_message_utils import extract_message_content as _extract_message_content
 
     prompt = _build_llm_prompt(stats, "")
     model = _get_model_name()
@@ -112,7 +113,8 @@ def _summarize_stats_for_llm(stats):
 
 def _request_llm_analysis(draw_no, rec, actual, comparison, stats):
     """LLM에게 추천 vs 실제 차이 분석을 요청한다."""
-    from agri_ai_core.src.ai.llm_client import _ollama_chat, _get_model_name, _extract_message_content
+    from agri_ai_core.src.ai.llm_transport import _ollama_chat, _get_model_name
+    from agri_ai_core.src.ai.llm_message_utils import extract_message_content as _extract_message_content
 
     actual_sorted = sorted([actual['num1'], actual['num2'], actual['num3'],
                             actual['num4'], actual['num5'], actual['num6']])

@@ -33,6 +33,23 @@ def initialize_app():
 
     total_start = time.time()
 
+    # ───────────────────────────────────────────────────────────────
+    # 의존성 주입: 하위 계층(postgresql, chroma)이 AI 계층을 역참조하지
+    # 않도록, AI 측 실행기를 상위 계층(startup)에서 주입한다.
+    # ───────────────────────────────────────────────────────────────
+    try:
+        from agri_ai_core.src.postgresql.connection import set_mcp_query_fn
+        from agri_ai_core.src.ai.mcp_client import postgres_query
+        set_mcp_query_fn(postgres_query)
+    except Exception as e:
+        logger.warning(f"[초기화] MCP postgres 훅 주입 실패: {e}")
+    try:
+        from agri_ai_core.src.chroma.operations import set_embed_fn
+        from agri_ai_core.src.ai.embedder import embed_text
+        set_embed_fn(embed_text)
+    except Exception as e:
+        logger.warning(f"[초기화] 임베딩 훅 주입 실패: {e}")
+
     try:
         for _ in range(20):
             logger.info(" " * 50)
@@ -149,14 +166,18 @@ def initialize_app():
         t0 = time.time()
         try:
             from agri_ai_core.src.ai.learning.growth_rag_processor import run_growth_rag
+            from agri_ai_core.src.opinet.opinet_collector import collect_all as opinet_collect_all
+            from agri_ai_core.src.lotto.lotto_collector import update_lotto_db
 
             setup_scheduler()
             setup_default_jobs(
                 manual_control_func=control_all_manual,
                 growth_rag_func=run_growth_rag,
+                opinet_collect_func=opinet_collect_all,
+                lotto_collect_func=update_lotto_db,
             )
             start_scheduler()
-            logger.info("[4/4] 스케줄러 시작됨 (%.1fs) - 수동/알고리즘 (10초) + 생육RAG (12:00/00:00)", time.time() - t0)
+            logger.info("[4/4] 스케줄러 시작됨 (%.1fs) - 수동/알고리즘 (10초) + 생육RAG + Opinet/로또", time.time() - t0)
 
             # AI 순환 제어 루프 시작 (재배사 순환 + 30초 delay)
             start_ai_control_loop()

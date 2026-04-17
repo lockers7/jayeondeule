@@ -208,7 +208,7 @@ def _load_hybrid_context(session_id, user_query, farm_id, label=""):
 # ══════════════════════════════════════════════════════════
 def _search_related_conversations(user_query, farm_id):
     try:
-        from agri_ai_core.src.ai.rag.embedder import embed_text
+        from agri_ai_core.src.ai.embedder import embed_text
         from agri_ai_core.src.chroma.collections import conversation_collection
         from agri_ai_core.src.chroma.operations import query_documents
 
@@ -358,7 +358,7 @@ def _save_conversation_turn_hybrid(session_id, user_query, response_text, farm_i
 # ═══════════════════════════════════════════════════════
 def _async_vectordb_save(session_id, user_query, response_text, farm_id):
     try:
-        from agri_ai_core.src.ai.rag.embedder import embed_text
+        from agri_ai_core.src.ai.embedder import embed_text
         from agri_ai_core.src.chroma.collections import conversation_collection
         from agri_ai_core.src.chroma.operations import upsert_documents_with_embedding
 

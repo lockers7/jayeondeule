@@ -11,7 +11,7 @@ from datetime import datetime
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.chroma.collections import document_collection
 from agri_ai_core.src.chroma.operations import upsert_documents_with_embedding, get_documents, delete_document
-from agri_ai_core.src.ai.rag.embedder import embed_text
+from agri_ai_core.src.ai.embedder import embed_text
 
 logger = setup_logger(__name__)
 

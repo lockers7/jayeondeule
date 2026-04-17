@@ -324,65 +324,12 @@ def call_mcp_server_tool(
         return {"error": error_msg}
 
 
-def _coerce_json_and_text(value: Any) -> Tuple[Optional[Any], str]:
-    if isinstance(value, (dict, list)):
-        return value, json.dumps(value, ensure_ascii=False)
-    if value is None:
-        return None, ""
-    text = str(value)
-    parsed = safe_json_load(text)
-    if isinstance(parsed, (dict, list)):
-        return parsed, text
-    return None, text
-
-
-def _direct_http_json_request(
-    method: str,
-    url: str,
-    json_body: Optional[Any] = None,
-    timeout: int = 20,
-    headers: Optional[Dict[str, str]] = None,
-) -> Tuple[int, Optional[Any], str]:
-    normalized_method = (method or "GET").upper()
-    normalized_headers: Dict[str, str] = dict(headers or {})
-    body_bytes = None
-
-    if json_body is not None:
-        try:
-            body_text = json.dumps(json_body, ensure_ascii=False)
-        except Exception:
-            body_text = str(json_body)
-        body_bytes = body_text.encode("utf-8")
-        if not any(key.lower() == "content-type" for key in normalized_headers):
-            normalized_headers["Content-Type"] = "application/json"
-
-    request = urlrequest.Request(
-        url=url,
-        data=body_bytes,
-        method=normalized_method,
-        headers=normalized_headers,
-    )
-
-    try:
-        with urlrequest.urlopen(request, timeout=timeout) as response:
-            raw_text = response.read().decode("utf-8", errors="replace")
-            status_code = int(getattr(response, "status", 200) or 200)
-    except urlerror.HTTPError as http_err:
-        body = ""
-        try:
-            body = http_err.read().decode("utf-8", errors="replace")
-        except Exception:
-            body = str(http_err)
-        status_code = int(getattr(http_err, "code", 500) or 500)
-        parsed_json, _ = _coerce_json_and_text(body)
-        return status_code, parsed_json, body
-    except urlerror.URLError as url_err:
-        return 503, None, f"Direct HTTP connection error: {url_err.reason}"
-    except Exception as err:
-        return 500, None, f"Direct HTTP request failed: {err}"
-
-    parsed_json, parsed_text = _coerce_json_and_text(raw_text)
-    return status_code, parsed_json, parsed_text
+# HTTP/JSON 유틸은 src/utils/http_client.py로 이관됨 (하위 계층에서도 사용 가능)
+# 하위 호환 alias (기존 내부 호출 유지용).
+from agri_ai_core.src.utils.http_client import (
+    coerce_json_and_text as _coerce_json_and_text,
+    http_json_request as _direct_http_json_request,
+)
 
 
 def _parse_mcp_fetch_result(result: Dict[str, Any]) -> Dict[str, Any]:

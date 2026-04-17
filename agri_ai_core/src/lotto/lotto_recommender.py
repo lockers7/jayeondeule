@@ -336,7 +336,8 @@ def generate_recommendation(user_prompt=""):
     stats = _compute_stats(rows)
 
     # ═══ LLM 호출 ═══
-    from agri_ai_core.src.ai.llm_client import _ollama_chat, _get_model_name, _extract_message_content
+    from agri_ai_core.src.ai.llm_transport import _ollama_chat, _get_model_name
+    from agri_ai_core.src.ai.llm_message_utils import extract_message_content as _extract_message_content
     model = _get_model_name()
     prompt = _build_llm_prompt(stats, user_prompt)
     messages = [
