@@ -1,28 +1,17 @@
 # ════════════════════════════════════════════════════════════════════════════
 # LLM 쿼리 핸들러 — Tool Use 방식으로 사용자 질문 처리 및 SSE 스트리밍.
+# 대화 컨텍스트는 conversation_context.py, 3단계 파이프라인은 pipeline/runner.py에 분리됨.
 # --->
-# _classify_topic: 사용자 질문을 주제별로 분류한다 (규칙 기반)
-# _dedupe_list: dedupe list
-# _build_default_tool_args: build default tool args
-# _load_hybrid_context: load hybrid context
-# _search_related_conversations: search related conversations
-# _save_conversation_turn_hybrid: save conversation turn hybrid
-# _async_vectordb_save: async vectordb save
-# _prune_old_conversations: prune old conversations
-# _call_llm_with_timeout: call llm with timeout
-# _unpack_llm_result: unpack llm result
-# _run_3stage_pipeline_sync: 3단계 분리형 파이프라인 실행 (동기 함수 — asyncio
-# query_llm_simple: query llm simple
-# _split_for_streaming: split for streaming
-# query_llm_simple_stream: query llm simple stream
-# _progress: progress
+# _build_default_tool_args: 도구별 기본 인자 생성 (파일명 감지 포함)
+# _call_llm_with_timeout: LLM 호출 + 타임아웃 처리
+# _unpack_llm_result: LLM 결과를 튜플로 언패킹
+# query_llm_simple: 비동기 LLM 질의 공개 API
+# query_llm_simple_stream: SSE 스트리밍 질의 공개 API
 # ════════════════════════════════════════════════════════════════════════════
-import hashlib
 import json
 import os
 import re
 import asyncio
-import threading
 import time
 import traceback
 from datetime import datetime
@@ -30,43 +19,26 @@ from datetime import datetime
 from agri_ai_core.logs import setup_logger, setup_web_logger
 from agri_ai_core.src.ai.llm_client import get_llm_response_with_tools
 from agri_ai_core.src.ai.file_processor import process_uploaded_files
-from agri_ai_core.src.ai.conversation_store import get_conversation_store
-from agri_ai_core.src.ai.utils import GREETING_RE as _GREETING_RE_HYBRID
+from agri_ai_core.src.ai.conversation_context import (
+    load_hybrid_context,
+    save_conversation_turn_hybrid,
+)
 
 logger = setup_logger(__name__)
 web_logger = setup_web_logger("chat")
 
-# 시스템/가상 농장 ID (관리자 선택 시 전체 대화 검색, 일반 사용자는 자기 농장 + 시스템 농장 대화 검색)
-_SYSTEM_FARM_ID = "0"
-
 _LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT_SECONDS", "600"))
 _STREAM_HEARTBEAT_SECONDS = max(1, int(os.getenv("STREAM_HEARTBEAT_SECONDS", "3")))
 
-
-# ═════════════════════════════════════════════════════════════
-# 대화 주제 분류 (규칙 기반, LLM 호출 불필요)
-# VectorDB 저장 시 topic 메타데이터로 추가하여 검색 정확도 향상
-# ═════════════════════════════════════════════════════════════
-_TOPIC_PATTERNS = [
-    (re.compile(r'센서|온도|습도|CO2|수온|릴레이|재배사|생육|균사'), "farm_data"),
-    (re.compile(r'날씨|기온|비|바람|강수|예보|기상'), "weather"),
-    (re.compile(r'제어|켜|끄|가동|중지|작동|히터|팬|밸브'), "control"),
-    (re.compile(r'검색|찾아|알려|추천|알아|맛집|관광|주유'), "search"),
-]
-
-
-def _classify_topic(query: str) -> str:
-    """사용자 질문을 주제별로 분류한다 (규칙 기반). LLM 호출 없음."""
-    if not query:
-        return "general"
-    for pattern, topic in _TOPIC_PATTERNS:
-        if pattern.search(query):
-            return topic
-    return "general"
+# 3단계 파이프라인 모드 설정
+_USE_3STAGE_PIPELINE = os.getenv("USE_3STAGE_PIPELINE", "false").lower() == "true"
 
 
 # _dedupe_list는 query_utils.py로 이동됨 (하위 호환 alias)
 from agri_ai_core.src.ai.query_utils import dedupe_list as _dedupe_list
+
+# _split_for_streaming은 query_utils.py로 이동됨 (하위 호환 alias)
+from agri_ai_core.src.ai.query_utils import split_for_streaming as _split_for_streaming
 
 
 # ═════════════════════
@@ -93,373 +65,40 @@ def _build_default_tool_args(user_query, farm_id, house_id, auth_farm_id=None):
     if match:
         detected_file_name = match.group(1)
         # UUID 접두사(8자리hex_) 제거하여 원본 파일명으로 정규화
-        _fn_m = re.match(r'^[0-9a-f]{8}_(.+)$', detected_file_name)
-        if _fn_m:
-            detected_file_name = _fn_m.group(1)
-        logger.info(f"[기본인자] 파일명 감지: {detected_file_name}")
+        _uuid_match = re.match(r'^[a-f0-9]{8}_(.+)$', detected_file_name)
+        if _uuid_match:
+            detected_file_name = _uuid_match.group(1)
 
-    # auth_farm_id: RAG 파일 검색/목록 권한 결정용
-    # 시스템관리자(auth_farm_id=None) → 전체 농장 접근, 농장사용자 → 자기 농장만
-    _auth_fid = str(auth_farm_id) if auth_farm_id is not None else None
-    # session_farm_id: 현재 UI에서 선택된 농장 (삭제 시 기준)
-    # 시스템관리자도 선택된 농장 기준으로 삭제 (전체 삭제 방지)
-    _session_fid = str(farm_id) if farm_id is not None else _auth_fid
-
-    return {
-        "search_web": {"query": user_query},
+    args = {
         "search_farm_knowledge": {
-            "query": user_query,
-            "n_results": 5,
-            "file_name": detected_file_name,
-            "farm_id": _session_fid,
-            "house_id": str(house_id) if house_id is not None else None,
-            "auth_farm_id": _auth_fid,
-        },
-        "delete_farm_knowledge": {
-            "farm_id": _session_fid,
-            "auth_farm_id": _auth_fid,
+            "farm_id": str(farm_id) if farm_id else None,
+            "house_id": str(house_id) if house_id else None,
         },
         "get_farm_realtime_data": {
-            "farm_id": str(farm_id) if farm_id is not None else None,
-            "house_id": str(house_id) if house_id is not None else None,
-            "data_type": "all",
+            "farm_id": str(farm_id) if farm_id else None,
+            "house_id": str(house_id) if house_id else None,
+        },
+        "control_relay": {
+            "farm_id": str(farm_id) if farm_id else None,
+            "house_id": str(house_id) if house_id else None,
+        },
+        "delete_farm_knowledge": {
+            "farm_id": str(farm_id) if farm_id else None,
         },
     }
 
+    # auth_farm_id: RAG 파일 권한 체크용 (시스템관리자=None, 농장사용자=자기농장ID)
+    if auth_farm_id is not None:
+        args["search_farm_knowledge"]["auth_farm_id"] = str(auth_farm_id)
+        args["delete_farm_knowledge"]["auth_farm_id"] = str(auth_farm_id)
 
-# ═════════════════════════════════════════════
-# 하이브리드 대화 컨텍스트 (VectorDB + 최근 턴)
-# ═════════════════════════════════════════════
-_HYBRID_RECENT_TURNS = int(os.getenv("HYBRID_RECENT_TURNS", "2"))
-_HYBRID_RELATED_RESULTS = int(os.getenv("HYBRID_RELATED_RESULTS", "5"))
-_HYBRID_MAX_RECORDS_PER_FARM = int(os.getenv("HYBRID_MAX_RECORDS", "30"))
-# VectorDB 관련 대화 검색 거리 임계값 (기존 16.0 → 3.0: 무관한 과거 대화 컨텍스트 유입 방지)
-_CONVERSATION_MAX_DISTANCE = float(os.getenv("CONV_VECTOR_MAX_DISTANCE", "3.0"))
+    # 감지된 파일명은 search/delete에 기본값으로 제공
+    if detected_file_name:
+        args["search_farm_knowledge"]["file_name"] = detected_file_name
+        args["delete_farm_knowledge"]["file_name"] = detected_file_name
+        logger.info(f"[기본인자] 파일명 감지: '{detected_file_name}'")
 
-
-# ════════════════════════════════════════════════════════════
-# 하이브리드 대화 컨텍스트: 직전 N턴 + VectorDB 관련 대화 검색
-# ════════════════════════════════════════════════════════════
-def _load_hybrid_context(session_id, user_query, farm_id, label=""):
-    if not session_id:
-        return None
-
-    store = get_conversation_store()
-
-    # [1] 직전 2턴 (즉시 맥락: "이거", "아까 그거" 참조 보장)
-    recent_turns = store.get_recent_turns(session_id, n_turns=_HYBRID_RECENT_TURNS)
-
-    # [2] VectorDB에서 관련 과거 대화 검색
-    related_context = _search_related_conversations(user_query, farm_id)
-
-    # [3] 하이브리드 컨텍스트 조합
-    # [FIX] VectorDB 주제와 직전 대화 교차 중복 제거: 직전 대화에 이미 있는 질문은 VectorDB 주제에서 제외
-    if related_context and recent_turns:
-        _recent_user_queries = set()
-        for t in recent_turns:
-            if t.get("role") == "user":
-                _recent_user_queries.add(t.get("content", "").strip()[:60])
-        if _recent_user_queries:
-            _filtered_lines = []
-            for line in related_context.split("\n"):
-                # "- (2026-03-12) 질문: ..." 형식에서 질문 부분 추출
-                _q_start = line.find("질문: ")
-                if _q_start >= 0:
-                    _q_text = line[_q_start + 4:].strip()[:60]
-                    # 직전 대화의 user 질문과 유사한지 비교
-                    _is_dup = False
-                    for _rq in _recent_user_queries:
-                        if _q_text and _rq:
-                            _common = sum(1 for a, b in zip(_q_text, _rq) if a == b)
-                            _max_len = max(len(_q_text), len(_rq))
-                            if _max_len > 0 and _common / _max_len > 0.7:
-                                _is_dup = True
-                                break
-                    if _is_dup:
-                        continue
-                _filtered_lines.append(line)
-            _dedup_removed = related_context.count("\n") + 1 - len(_filtered_lines)
-            if _dedup_removed > 0:
-                logger.info(f"[{label}하이브리드] VectorDB↔직전대화 교차 중복 {_dedup_removed}건 제거")
-            related_context = "\n".join(_filtered_lines) if _filtered_lines else None
-
-    history = []
-    if related_context:
-        history.append({
-            "role": "system",
-            "content": (
-                f"[관련 과거 대화 주제 (참고만 하세요. 반드시 도구를 사용하여 최신 데이터를 확인한 후 답변하세요.)]\n"
-                f"{related_context}"
-            ),
-        })
-    if recent_turns:
-        history.extend(recent_turns)
-
-    if history:
-        logger.info(
-            f"[{label}하이브리드] session={session_id[:12]}... "
-            f"최근={len(recent_turns)}턴, 관련대화={'있음' if related_context else '없음'}"
-        )
-    return history if history else None
-
-
-# ══════════════════════════════════════════════════════════
-# VectorDB conversation_collection에서 관련 과거 대화를 검색
-# ══════════════════════════════════════════════════════════
-def _search_related_conversations(user_query, farm_id):
-    try:
-        from agri_ai_core.src.ai.embedder import embed_text
-        from agri_ai_core.src.chroma.collections import conversation_collection
-        from agri_ai_core.src.chroma.operations import query_documents
-
-        _t0 = time.time()
-        collection_name = conversation_collection()
-        if not collection_name:
-            return None
-
-        _t1 = time.time()
-        query_embedding = embed_text(user_query)
-        _embed_ms = (time.time() - _t1) * 1000
-        logger.debug(f"[PERF:대화] 관련대화-임베딩={_embed_ms:.0f}ms")
-        if not query_embedding:
-            return None
-
-        # farm_id 기반 필터: 시스템 농장(0)은 전체 검색, 일반 농장은 자기 농장 + 시스템 농장 대화 검색
-        if farm_id and str(farm_id) == _SYSTEM_FARM_ID:
-            # 시스템 농장 선택 (관리자): 모든 농장 대화 검색
-            where_filter = {"data_kind": {"$eq": "conversation_turn"}}
-        elif farm_id:
-            # 일반 농장: 자기 농장 + 시스템 농장 대화 검색
-            where_filter = {
-                "$and": [
-                    {"$or": [
-                        {"farm_id": {"$eq": str(farm_id)}},
-                        {"farm_id": {"$eq": _SYSTEM_FARM_ID}},
-                    ]},
-                    {"data_kind": {"$eq": "conversation_turn"}},
-                ]
-            }
-        else:
-            where_filter = {"data_kind": {"$eq": "conversation_turn"}}
-
-        _t2 = time.time()
-        results = query_documents(
-            collection_name=collection_name,
-            query_embeddings=[query_embedding],
-            n_results=_HYBRID_RELATED_RESULTS,
-            where=where_filter,
-            include=["documents", "metadatas", "distances"],
-        )
-        _query_ms = (time.time() - _t2) * 1000
-        _total_ms = (time.time() - _t0) * 1000
-        logger.debug(f"[PERF:대화] 관련대화-VectorDB검색={_query_ms:.0f}ms, 관련대화-전체={_total_ms:.0f}ms")
-
-        if "error" in results:
-            logger.debug(f"[하이브리드] VectorDB 검색 실패: {results['error']}")
-            return None
-
-        documents = results.get("documents", []) or []
-        metadatas = results.get("metadatas", []) or []
-        distances = results.get("distances", []) or []
-
-        # 거리 임계값 필터 + 포맷 (질문만 추출, 과거 답변은 포함하지 않음)
-        # 동일 질문 중복 제거: query_preview 기준으로 중복 검색 결과 1건만 유지
-        # 동일 주제(topic) 우선 정렬: 현재 질문과 같은 주제의 과거 대화를 먼저 배치
-        current_topic = _classify_topic(user_query)
-        lines_same_topic = []
-        lines_other_topic = []
-        _seen_queries: set = set()
-        for idx, doc in enumerate(documents):
-            dist = distances[idx] if idx < len(distances) else None
-            if dist is not None and dist > _CONVERSATION_MAX_DISTANCE:
-                continue
-            meta = metadatas[idx] if idx < len(metadatas) else {}
-            record_dt = (meta or {}).get("record_datetime", "")[:10]
-            doc_topic = (meta or {}).get("topic", "general")
-            # 과거 답변을 포함하면 LLM이 도구 호출 없이 복사하므로 질문만 추출
-            query_preview = (meta or {}).get("query_preview", "")
-            if not query_preview:
-                raw = (doc or "")
-                if raw.startswith("질문:"):
-                    query_preview = raw.split("\n답변:")[0].replace("질문:", "").strip()[:200]
-                else:
-                    query_preview = raw[:200]
-            if query_preview:
-                # 중복 질문 제거 (100자까지 비교하여 유사 질문도 걸러냄)
-                _preview_key = query_preview.strip()[:100]
-                if _preview_key in _seen_queries:
-                    continue
-                # [FIX] 유사 질문 추가 필터: 기존 질문과 앞 60자 80% 이상 겹치면 중복으로 판정
-                _is_similar = False
-                _key_prefix = _preview_key[:60]
-                for existing in _seen_queries:
-                    _existing_prefix = existing[:60]
-                    if _key_prefix and _existing_prefix:
-                        _common = sum(1 for a, b in zip(_key_prefix, _existing_prefix) if a == b)
-                        _max_len = max(len(_key_prefix), len(_existing_prefix))
-                        if _max_len > 0 and _common / _max_len > 0.8:
-                            _is_similar = True
-                            break
-                if _is_similar:
-                    continue
-                _seen_queries.add(_preview_key)
-                line = f"- ({record_dt}) 질문: {query_preview}"
-                # 동일 주제 우선
-                if doc_topic == current_topic and current_topic != "general":
-                    lines_same_topic.append(line)
-                else:
-                    lines_other_topic.append(line)
-
-        lines = lines_same_topic + lines_other_topic
-        if not lines:
-            return None
-
-        logger.info(f"[하이브리드] 관련 대화 {len(lines)}건 검색됨 (farm={farm_id}, topic={current_topic}, 동일주제={len(lines_same_topic)}건)")
-        return "\n".join(lines[:_HYBRID_RELATED_RESULTS])
-
-    except Exception as e:
-        logger.debug(f"[하이브리드] 관련 대화 검색 실패: {e}")
-        return None
-
-
-# ═════════════════════════════════════════════════
-# 대화 턴 저장: PostgreSQL(동기) + VectorDB(비동기)
-# ═════════════════════════════════════════════════
-def _save_conversation_turn_hybrid(session_id, user_query, response_text, farm_id=None, label=""):
-    if not session_id:
-        return
-
-    # [1] PostgreSQL 저장 (기존 동기 방식)
-    # DB 저장 전 SPECIAL 내부 마커 제거 (오염 방지)
-    import re as _re
-    _clean_response = _re.sub(r'<SPECIAL_\d+>.*?(?=\n|$)', '', response_text or '', flags=_re.DOTALL | _re.IGNORECASE)
-    _clean_response = _re.sub(r'</?SPECIAL[^>]*>', '', _clean_response, flags=_re.IGNORECASE).strip()
-    store = get_conversation_store()
-    store.add_turn(session_id, "user", user_query, farm_id)
-    store.add_turn(session_id, "assistant", _clean_response, farm_id)
-    logger.info(f"[{label}하이브리드] session={session_id[:12]}... PostgreSQL 저장 완료")
-
-    # [2] VectorDB 저장 (기본: 비동기, 환경변수로 동기 전환 가능)
-    # 비동기: 응답 지연 방지, 단 연속 대화 시 최신 데이터 미포함 가능
-    # 동기: 저장 완료 후 반환, 연속 대화에서도 최신 데이터 보장
-    _sync_vectordb = os.getenv("SYNC_VECTORDB_SAVE", "false").lower() == "true"
-    if _sync_vectordb:
-        _async_vectordb_save(session_id, user_query, response_text, farm_id)
-    else:
-        threading.Thread(
-            target=_async_vectordb_save,
-            args=(session_id, user_query, response_text, farm_id),
-            daemon=True,
-        ).start()
-
-
-# ═══════════════════════════════════════════════════════
-# 백그라운드: Q+A 쌍을 VectorDB에 임베딩 저장 + 수명 관리
-# ═══════════════════════════════════════════════════════
-def _async_vectordb_save(session_id, user_query, response_text, farm_id):
-    try:
-        from agri_ai_core.src.ai.embedder import embed_text
-        from agri_ai_core.src.chroma.collections import conversation_collection
-        from agri_ai_core.src.chroma.operations import upsert_documents_with_embedding
-
-        collection_name = conversation_collection()
-        if not collection_name:
-            return
-
-        # 인사/잡담은 VectorDB에 저장하지 않음
-        stripped = (user_query or "").strip()
-        if len(stripped) < 10 and _GREETING_RE_HYBRID.search(stripped):
-            return
-
-        # Q+A 결합 문서
-        combined_text = f"질문: {user_query}\n답변: {(response_text or '')[:500]}"
-
-        embedding = embed_text(combined_text)
-        if not embedding:
-            return
-
-        # [FIX] 동일 Q&A 중복 저장 방지: 질문+응답 내용 기반 해시 → 같은 내용이면 같은 doc_id로 upsert
-        _content_hash = hashlib.md5(
-            f"{farm_id}_{user_query[:200]}_{(response_text or '')[:200]}".encode()
-        ).hexdigest()[:16]
-        doc_id_hash = _content_hash
-        doc_id = f"conv_turn_{doc_id_hash}"
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        topic = _classify_topic(user_query)
-        docs = [{
-            "doc_id": doc_id,
-            "text": combined_text,
-            "metadata": {
-                "farm_id": str(farm_id) if farm_id else "",
-                "session_id": session_id,
-                "data_kind": "conversation_turn",
-                "record_datetime": now_str,
-                "query_preview": user_query[:100],
-                "topic": topic,
-            },
-            "embedding": embedding,
-        }]
-
-        result = upsert_documents_with_embedding(collection_name, docs)
-        if result.get("success"):
-            logger.info(f"[하이브리드] VectorDB 대화 저장 완료: {doc_id}")
-        else:
-            logger.warning(f"[하이브리드] VectorDB 저장 실패: {result.get('error', '')}")
-
-        # 수명 관리: farm_id당 최대 30건
-        _prune_old_conversations(collection_name, farm_id)
-
-    except Exception as e:
-        logger.warning(f"[하이브리드] VectorDB 비동기 저장 실패: {e}")
-
-
-# ═══════════════════════════════════════
-# farm_id별 대화 기록을 최대 N건으로 유지
-# LLM 호출 + 타임아웃 처리
-# ═══════════════════════════════════════
-def _prune_old_conversations(collection_name, farm_id):
-    try:
-        from agri_ai_core.src.chroma.operations import get_documents, delete_document
-
-        if not farm_id:
-            return
-
-        where_filter = {
-            "$and": [
-                {"farm_id": {"$eq": str(farm_id)}},
-                {"data_kind": {"$eq": "conversation_turn"}},
-            ]
-        }
-
-        result = get_documents(
-            collection_name,
-            where=where_filter,
-            include=["metadatas"],
-            limit=100,
-        )
-
-        if "error" in result:
-            return
-
-        ids = result.get("ids", []) or []
-        metadatas = result.get("metadatas", []) or []
-
-        if len(ids) <= _HYBRID_MAX_RECORDS_PER_FARM:
-            return
-
-        # record_datetime 기준 정렬, 오래된 것부터
-        paired = list(zip(ids, metadatas))
-        paired.sort(key=lambda p: (p[1] or {}).get("record_datetime", ""))
-
-        to_delete = len(paired) - _HYBRID_MAX_RECORDS_PER_FARM
-        if to_delete > 0:
-            delete_ids = [p[0] for p in paired[:to_delete]]
-            delete_document(collection_name, ids=delete_ids)
-            logger.debug(f"[하이브리드] 오래된 대화 {to_delete}건 삭제 (farm={farm_id})")
-
-    except Exception as e:
-        logger.debug(f"[하이브리드] 대화 수명관리 실패: {e}")
+    return args
 
 
 async def _call_llm_with_timeout(full_query, farm_name, default_tool_args, conversation_history,
@@ -492,117 +131,10 @@ def _unpack_llm_result(result):
     return (str(result), [], [], "general")
 
 
-# ═══════════════════════════════════════════
-# 3단계 파이프라인 모드 설정
-# USE_3STAGE_PIPELINE=true 환경변수로 활성화
-# 기존 Tool Use 루프는 fallback으로 항상 보존
-# ═══════════════════════════════════════════
-_USE_3STAGE_PIPELINE = os.getenv("USE_3STAGE_PIPELINE", "false").lower() == "true"
-
-
-def _run_3stage_pipeline_sync(user_query, full_query, farm_id, house_id, farm_name,
-                              default_tool_args, conversation_history, speech_style,
-                              progress_queue=None):
-    """
-    3단계 분리형 파이프라인 실행 (동기 함수 — asyncio.to_thread()로 호출)
-    1단계: 질문유형분석 → 2단계: 데이터수집+검증 → 3단계: 답변작성
-
-    기존 Tool Use 루프를 대체하며, 실패 시 기존 루프로 fallback.
-    """
-    from agri_ai_core.src.ai.pipeline.question_analyzer import analyze_question
-    from agri_ai_core.src.ai.pipeline.data_collector import DataCollector
-    from agri_ai_core.src.ai.pipeline.answer_generator import generate_answer
-    from agri_ai_core.src.ai.llm_client import _build_farm_info_text, _report_progress
-
-    t0 = time.time()
-
-    # 진행 상태 콜백 (스트리밍용)
-    def _progress(message, phase, tool_name=None):
-        _report_progress(progress_queue, message, phase, tool_name=tool_name)
-
-    try:
-        # [1단계] 질문유형분석
-        _progress("질문을 분석하고 있습니다...", "analyzing")
-        logger.info("[3단계파이프라인] === 1단계: 질문유형분석 시작 ===")
-
-        # 대화 컨텍스트를 텍스트로 변환 (1단계 분석기에 전달)
-        ctx_for_analyzer = conversation_history
-
-        analysis = analyze_question(
-            user_query=full_query,
-            conversation_context=ctx_for_analyzer,
-            farm_id=farm_id,
-            house_id=house_id,
-        )
-
-        question_type = analysis.get("question_type", "general")
-        logger.info(f"[3단계파이프라인] 1단계 완료: type={question_type} 도구={len(analysis.get('required_data', []))}개")
-
-        # greeting/conversation_ref는 도구 불필요 → 2단계 스킵
-        if question_type in ("greeting", "conversation_ref"):
-            logger.info(f"[3단계파이프라인] 2단계 스킵 (type={question_type}, 도구 불필요)")
-            collected = {"data": [], "sources": [], "tools_used": [], "sufficient": True}
-        else:
-            # [2단계] 데이터 수집 + 검증
-            logger.info("[3단계파이프라인] === 2단계: 데이터수집 시작 ===")
-            _progress("필요한 데이터를 수집하고 있습니다...", "data_collecting")
-
-            collector = DataCollector(
-                default_tool_args=default_tool_args,
-                progress_callback=_progress,
-            )
-            collected = collector.collect(analysis)
-
-            logger.info(
-                f"[3단계파이프라인] 2단계 완료: "
-                f"데이터={len(collected.get('data', []))}건 "
-                f"도구={collected.get('tools_used', [])} "
-                f"sufficient={collected.get('sufficient', False)}"
-            )
-
-        # [3단계] 답변 작성
-        logger.info("[3단계파이프라인] === 3단계: 답변작성 시작 ===")
-        _progress("수집된 데이터로 답변을 작성하고 있습니다...", "llm_generating")
-
-        farm_info = _build_farm_info_text()
-
-        result = generate_answer(
-            user_query=full_query,
-            analysis_result=analysis,
-            collected_result=collected,
-            conversation_history=conversation_history,
-            farm_name=farm_name,
-            farm_info=farm_info,
-            speech_style=speech_style,
-            progress_callback=_progress,
-        )
-
-        total_s = time.time() - t0
-        logger.info(f"[3단계파이프라인] 전체 완료: {total_s:.1f}s type={result.get('response_type', '?')}")
-
-        return result
-
-    except Exception as e:
-        logger.error(f"[3단계파이프라인] 파이프라인 오류, 기존 Tool Use fallback: {e}")
-        logger.error(traceback.format_exc())
-        # fallback: 기존 Tool Use 루프로 전환
-        logger.info("[3단계파이프라인] fallback → 기존 Tool Use 루프 실행")
-        return get_llm_response_with_tools(
-            user_query=full_query,
-            farm_name=farm_name,
-            default_tool_args=default_tool_args,
-            conversation_history=conversation_history,
-            speech_style=speech_style,
-            progress_queue=progress_queue,
-        )
-
-
 # ═════════════════════════
 # 질의 처리 (Tool Use 방식)
 # ═════════════════════════
 async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=None,
-
-# (query_llm_simple 파라미터 블록 계속)
                            farm_name=None, house_name=None, session_id=None, speech_style=None,
                            auth_farm_id=None):
     start_time = datetime.now()
@@ -638,7 +170,7 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
 
         # [PERF:대화] 하이브리드 컨텍스트 로드 시간 측정
         _t_ctx = time.time()
-        conversation_history = _load_hybrid_context(session_id, user_query, farm_id)
+        conversation_history = load_hybrid_context(session_id, user_query, farm_id)
         _ctx_ms = (time.time() - _t_ctx) * 1000
         logger.debug(f"[PERF:대화] 하이브리드컨텍스트로드={_ctx_ms:.0f}ms (session={session_id[:12] if session_id else '-'})")
 
@@ -647,10 +179,11 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
         try:
             if _USE_3STAGE_PIPELINE:
                 # 3단계 분리형 파이프라인 (to_thread로 이벤트루프 블로킹 방지)
+                from agri_ai_core.src.ai.pipeline.runner import run_3stage_pipeline_sync
                 logger.info("[LLM시작] 모드=3단계 파이프라인 (질문분석→데이터수집→답변작성)")
                 result = await asyncio.wait_for(
                     asyncio.to_thread(
-                        _run_3stage_pipeline_sync,
+                        run_3stage_pipeline_sync,
                         user_query=user_query, full_query=full_query,
                         farm_id=farm_id, house_id=house_id, farm_name=farm_name,
                         default_tool_args=default_tool_args,
@@ -687,7 +220,7 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
         logger.info(f"[최종답변] len={len(response_text or '')} 총소요={total_elapsed:.1f}s")
         logger.info(f"[답변내용] {answer_preview}")
 
-        _save_conversation_turn_hybrid(session_id, user_query, response_text, farm_id)
+        save_conversation_turn_hybrid(session_id, user_query, response_text, farm_id)
 
         # 웹 로그: 응답 JSON 기록
         response_json = {
@@ -729,11 +262,6 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
 # ══════════════════════
 # SSE 스트리밍 질의 처리
 # ══════════════════════
-
-# _split_for_streaming은 query_utils.py로 이동됨 (하위 호환 alias)
-from agri_ai_core.src.ai.query_utils import split_for_streaming as _split_for_streaming
-
-
 async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
                                    farm_name=None, house_name=None, session_id=None, speech_style=None,
                                    auth_farm_id=None):
@@ -760,7 +288,7 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
 
         # [PERF:대화] 하이브리드 컨텍스트 로드 시간 측정
         _t_ctx = time.time()
-        conversation_history = _load_hybrid_context(session_id, user_query, farm_id, label="스트리밍][")
+        conversation_history = load_hybrid_context(session_id, user_query, farm_id, label="스트리밍][")
         _ctx_ms = (time.time() - _t_ctx) * 1000
         logger.debug(f"[PERF:대화] 스트리밍-하이브리드컨텍스트로드={_ctx_ms:.0f}ms")
 
@@ -772,10 +300,11 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
 
         llm_start = datetime.now()
         if _USE_3STAGE_PIPELINE:
+            from agri_ai_core.src.ai.pipeline.runner import run_3stage_pipeline_sync
             logger.info("[스트리밍] 모드=3단계 파이프라인")
             llm_task = asyncio.create_task(
                 asyncio.to_thread(
-                    _run_3stage_pipeline_sync,
+                    run_3stage_pipeline_sync,
                     user_query=user_query, full_query=full_query,
                     farm_id=farm_id, house_id=house_id, farm_name=farm_name,
                     default_tool_args=default_tool_args,
@@ -881,7 +410,7 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
             "elapsed_sec": round(total_elapsed, 1),
         }
 
-        _save_conversation_turn_hybrid(session_id, user_query, response_text, farm_id, label="스트리밍][")
+        save_conversation_turn_hybrid(session_id, user_query, response_text, farm_id, label="스트리밍][")
 
         # 통계 기록
         from agri_ai_core.src.ai.stats_collector import get_stats_collector
