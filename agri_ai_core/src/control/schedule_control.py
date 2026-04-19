@@ -1,6 +1,6 @@
 # ═══════════════════════════════════════════════════════════
 # 릴레이 스케줄 제어 모듈.
-# 시간대별 자동 제어 스케줄(조명/관수밸브)을 관리·실행하며,
+# 시간대별 자동 제어 스케줄(조명/관수)을 관리·실행하며,
 # 주기/요일 기반 실행 여부를 판단하여 릴레이를 자동 제어한다.
 # --->
 # _format_sensor_status: format sensor status
@@ -212,11 +212,11 @@ def control_lighting_schedule(farm_id, house_id):
 
 
 def control_irrigation_schedule(farm_id, house_id):
-    return _handle_schedule_control(farm_id, house_id, 'water', 'irrigation_flag', '관수밸브', 'irrigation_controlled')
+    return _handle_schedule_control(farm_id, house_id, 'water', 'irrigation_flag', '관수', 'irrigation_controlled')
 
 
 # ═════════════════════════════════════
-# 모든 재배사 조명/관수밸브 스케줄 제어
+# 모든 재배사 조명/관수 스케줄 제어
 # ═════════════════════════════════════
 def control_all_schedules():
     try:
@@ -260,7 +260,7 @@ def control_all_schedules():
                 # 조명 제어
                 light_result = control_lighting_schedule(farm_id, house_id)
 
-                # 관수밸브 제어
+                # 관수 제어
                 irrigation_result = control_irrigation_schedule(farm_id, house_id)
 
                 # 결합 로그 출력

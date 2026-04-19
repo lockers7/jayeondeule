@@ -71,10 +71,26 @@ class DataCollector:
         self._report_progress("필요한 데이터를 수집하고 있습니다...", "data_collecting")
         self._execute_tasks(sorted_tasks, user_query)
 
-        # 실행형 유형(제어/삭제)은 결과가 success/fail로 명확 → LLM 검증 스킵
-        _skip_validation_types = ("farm_control", "farm_knowledge_delete")
-        if question_type in _skip_validation_types:
-            logger.info(f"[2단계] 실행형 유형({question_type}) → LLM 검증 스킵")
+        # LLM 검증 스킵 대상:
+        # 1) 실행형 유형(farm_control/farm_knowledge_delete): success/fail로 결과 명확
+        # 2) 확정 데이터 유형(farm_sensor/gas_price): DB/API 원본 데이터는 자체로 정답
+        #    (검증 LLM이 추가로 판단할 여지가 없음 — 수치가 이미 정확)
+        _skip_validation_types = (
+            "farm_control", "farm_knowledge_delete",
+            "farm_sensor", "gas_price",
+        )
+        # 추가로, required_data의 모든 도구가 확정적 소스(DB/제어)만 사용했다면 스킵
+        _deterministic_tools = {
+            "get_farm_realtime_data", "control_relay",
+            "delete_farm_knowledge", "search_gas_price",
+        }
+        tools_were_deterministic = (
+            bool(self.tools_used)
+            and all(t in _deterministic_tools for t in self.tools_used)
+        )
+        if question_type in _skip_validation_types or tools_were_deterministic:
+            reason = question_type if question_type in _skip_validation_types else "확정 도구만 사용"
+            logger.info(f"[2단계] LLM 검증 스킵 ({reason})")
             total_ms = (time.time() - t0) * 1000
             logger.info(
                 f"[2단계] 수집 완료: {len(self.collected_data)}건 데이터, "
@@ -174,14 +190,28 @@ class DataCollector:
                 continue
             self._executed_tool_keys.add(_exec_key)
 
-            self._report_progress(f"{self._tool_display(tool_name)} 중...", "data_collecting", tool_name)
+            # 도구 시작 메시지 (세부 인자 포함)
+            start_msg = self._build_tool_start_message(tool_name, task.get("args", {}))
+            self._report_progress(start_msg, "data_collecting", tool_name)
+
+            t_start = time.time()
             raw_result, refined_result = self._execute_single_tool(tool_name, tool_args, user_query)
+            elapsed = time.time() - t_start
 
             if refined_result and len(refined_result.strip()) > 10:
                 self._add_result(tool_name, refined_result, raw_result)
                 self._collect_sources(tool_name, raw_result)
+                # 도구 완료 메시지 (결과 요약 + 소요 시간)
+                done_msg = self._build_tool_done_message(
+                    tool_name, task.get("args", {}), raw_result, elapsed, ok=True,
+                )
+                self._report_progress(done_msg, "data_collecting", tool_name)
             else:
                 logger.info(f"[2단계] {tool_name} 결과 없음/부실")
+                done_msg = self._build_tool_done_message(
+                    tool_name, task.get("args", {}), raw_result, elapsed, ok=False,
+                )
+                self._report_progress(done_msg, "data_collecting", tool_name)
 
     def _execute_single_tool(self, tool_name, tool_args, user_query):
         """단일 도구 실행 + 결과 정제"""
@@ -370,3 +400,86 @@ class DataCollector:
             "search_farm_knowledge": "농장 지식 검색", "control_relay": "릴레이 제어",
             "delete_farm_knowledge": "학습 데이터 삭제", "search_gas_price": "주유소 가격 조회",
         }.get(tool_name, tool_name)
+
+    # ════════════════════════════════════════════════════════════
+    # 진행 상태 메시지 빌더 — 단계별 세부 정보 포함
+    # ════════════════════════════════════════════════════════════
+    @staticmethod
+    def _shorten(text, n=28):
+        s = str(text or "").strip()
+        return s if len(s) <= n else s[:n] + "…"
+
+    @staticmethod
+    def _house_label(house_id):
+        """house_id를 사용자 친화적 라벨로 변환. 'all' → '전 재배사', '1' → '1호 재배사'."""
+        s = str(house_id or "").strip()
+        if not s or s == "?":
+            return "재배사"
+        if s.lower() == "all":
+            return "전 재배사"
+        return f"{s}호 재배사"
+
+    @classmethod
+    def _build_tool_start_message(cls, tool_name, args):
+        args = args or {}
+        if tool_name == "search_web":
+            q = cls._shorten(args.get("query", ""), 32)
+            return f"🔍 웹에서 검색 중: \"{q}\""
+        if tool_name == "fetch_url_content":
+            url = cls._shorten(args.get("url", ""), 42)
+            return f"🌐 웹페이지 내용을 가져오는 중: {url}"
+        if tool_name == "get_farm_realtime_data":
+            house = cls._house_label(args.get("house_id"))
+            dt = args.get("data_type", "all")
+            label = {"all": "센서+릴레이", "sensor": "센서", "relay": "릴레이"}.get(dt, dt)
+            return f"🏡 {house} {label} 데이터 조회 중..."
+        if tool_name == "search_farm_knowledge":
+            q = cls._shorten(args.get("query", ""), 30)
+            return f"📚 학습된 농장 자료 검색 중: \"{q}\""
+        if tool_name == "control_relay":
+            house = cls._house_label(args.get("house_id"))
+            if args.get("devices"):
+                n = len(args["devices"])
+                return f"🔌 {house} 릴레이 {n}개 동시 제어 중..."
+            dev = cls._shorten(args.get("device_name", ""), 18)
+            act = args.get("action", "")
+            return f"🔌 {house} '{dev}' {act.upper()} 실행 중..."
+        if tool_name == "delete_farm_knowledge":
+            fn = cls._shorten(args.get("file_name", ""), 32)
+            return f"🗑️ 학습 자료 삭제 중: {fn}"
+        if tool_name == "search_gas_price":
+            qt = args.get("query_type", "")
+            return f"⛽ 주유소 가격 정보 조회 중... ({qt})"
+        return f"{cls._tool_display(tool_name)} 중..."
+
+    @classmethod
+    def _build_tool_done_message(cls, tool_name, args, raw_result, elapsed, ok):
+        args = args or {}
+        size = len(raw_result or "")
+        t = f"{elapsed:.1f}초"
+        if not ok:
+            return f"⚠️ {cls._tool_display(tool_name)} 결과 부족 ({t})"
+        if tool_name == "search_web":
+            # 결과에서 건수 추출 시도 (실패해도 무관)
+            try:
+                import re
+                m = re.search(r"(\d+)\s*건", raw_result or "")
+                hits = f"{m.group(1)}건" if m else f"{size}자"
+            except Exception:
+                hits = f"{size}자"
+            return f"✅ 웹 검색 {hits} 수신 ({t})"
+        if tool_name == "fetch_url_content":
+            url = cls._shorten(args.get("url", ""), 36)
+            return f"✅ 웹페이지 본문 {size:,}자 수집 완료 ({t}) — {url}"
+        if tool_name == "get_farm_realtime_data":
+            house = cls._house_label(args.get("house_id"))
+            return f"✅ {house} 데이터 확인 완료 ({t}, {size:,}자)"
+        if tool_name == "search_farm_knowledge":
+            return f"✅ 농장 자료 검색 완료 ({t}, {size:,}자)"
+        if tool_name == "control_relay":
+            return f"✅ 릴레이 제어 명령 완료 ({t})"
+        if tool_name == "delete_farm_knowledge":
+            return f"✅ 학습 자료 삭제 완료 ({t})"
+        if tool_name == "search_gas_price":
+            return f"✅ 유가 정보 조회 완료 ({t}, {size:,}자)"
+        return f"✅ {cls._tool_display(tool_name)} 완료 ({t})"

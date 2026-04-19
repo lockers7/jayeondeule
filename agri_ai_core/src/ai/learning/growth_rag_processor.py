@@ -323,17 +323,17 @@ def _build_rag_document(
 
         _rp = lambda k: _format_relay_pct(relay_stats, k)
         lines.append(
-            f"- 물가열기: {_rp('heater_ratio')} | "
-            f"분사펌프: {_rp('misting_ratio')} | "
-            f"배기팬: {_rp('exhaust_fan_ratio')} | "
+            f"- 수온히터: {_rp('heater_ratio')} | "
+            f"포그생성: {_rp('misting_ratio')} | "
+            f"배출팬: {_rp('exhaust_fan_ratio')} | "
             f"조명: {_rp('lighting_ratio')} | "
             f"관수: {_rp('irrigation_ratio')}"
         )
         lines.append(
-            f"- 열풍기: {_rp('indoor_heater_ratio')} | "
-            f"순환댐퍼: {_rp('circulation_ratio')} | "
-            f"흡기댐퍼: {_rp('intake_valve_ratio')} | "
-            f"배기댐퍼: {_rp('exhaust_valve_ratio')}"
+            f"- 실내히터: {_rp('indoor_heater_ratio')} | "
+            f"순환밸브: {_rp('circulation_ratio')} | "
+            f"흡입밸브: {_rp('intake_valve_ratio')} | "
+            f"배출밸브: {_rp('exhaust_valve_ratio')}"
         )
 
     # 이동평균 트렌드

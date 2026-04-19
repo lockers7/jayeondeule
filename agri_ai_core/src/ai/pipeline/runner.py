@@ -49,11 +49,18 @@ def run_3stage_pipeline_sync(user_query, full_query, farm_id, house_id, farm_nam
         )
 
         question_type = analysis.get("question_type", "general")
-        logger.info(f"[3단계파이프라인] 1단계 완료: type={question_type} 도구={len(analysis.get('required_data', []))}개")
+        required_data = analysis.get("required_data", []) or []
+        logger.info(f"[3단계파이프라인] 1단계 완료: type={question_type} 도구={len(required_data)}개")
 
-        # greeting/conversation_ref는 도구 불필요 → 2단계 스킵
-        if question_type in ("greeting", "conversation_ref"):
-            logger.info(f"[3단계파이프라인] 2단계 스킵 (type={question_type}, 도구 불필요)")
+        # 2단계 스킵 조건:
+        #   - greeting/conversation_ref/general: 도구 불필요 유형
+        #   - required_data=[]: LLM이 도구가 필요 없다고 판단한 모든 경우
+        _skip_types = ("greeting", "conversation_ref", "general")
+        if question_type in _skip_types or not required_data:
+            logger.info(
+                f"[3단계파이프라인] 2단계 스킵 "
+                f"(type={question_type}, 도구 {len(required_data)}개, LLM 자체 지식으로 답변)"
+            )
             collected = {"data": [], "sources": [], "tools_used": [], "sufficient": True}
         else:
             # [2단계] 데이터 수집 + 검증

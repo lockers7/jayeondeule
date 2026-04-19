@@ -34,14 +34,15 @@ export default function RelayDashboard({farmId, house, setSelectedHouse}) {
 
     const relayLabels = useMemo(() => {
         if (farmId == 1 && house.housId == 2) {
-            // 릴레이 라벨(2동 임시)
+            // 릴레이 라벨(2호 재배사) — [변경1 · 2026-04-19] 순환/흡기/배기/배수 +1 shift로
+            // 웹 버튼 번호 = DB relay_N_flag 컬럼 번호 = 현장 장비가 모두 일치
             return [
                 {label: "흡입팬(7)", num: 7},
                 {label: "배출팬(8)", num: 8},
-                {label: "순환밸브(9)", num: 9},
-                {label: "흡입밸브(10)", num: 10},
-                {label: "배출밸브(11)", num: 11},
-                {label: "배수밸브(12)", num: 12},
+                {label: "순환밸브(10)", num: 10},   // [변경1] 9 → 10
+                {label: "흡입밸브(11)", num: 11},   // [변경1] 10 → 11
+                {label: "배출밸브(12)", num: 12},   // [변경1] 11 → 12
+                {label: "배수밸브(13)", num: 13},   // [변경1] 12 → 13
                 {label: "포그생성(순환모터)(2)", num: 2},
                 {label: "조명(5)", num: 5},
                 {label: "관수(6)", num: 6},
