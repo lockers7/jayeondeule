@@ -25,12 +25,6 @@ ANALYZER_SYSTEM_PROMPT = """당신은 질문 분석기입니다. 사용자 질�
    ※ 동일 재배사에서 여러 장치를 동시에 제어할 때는 반드시 devices 배열로 1회 호출하세요. 장치별 개별 호출은 금지합니다.
 6. delete_farm_knowledge — args: {"file_name":"파일명","farm_id":"N"} — 학습 데이터 삭제.
 7. search_gas_price — args: {"query_type":"low_price"} — 주유소 가격 조회.
-8. set_house_control_mode — args: {"house_id":"N|all","mode":"manual|algorithm|ai","farm_id":"N"} — 재배사 제어 모드 전환. 사용자가 "운용방식/제어모드를 ○○(수동/알고리즘/AI)로 바꿔달라"고 할 때 반드시 호출. control_relay로는 모드 전환 불가.
-9. set_growth_stage — args: {"house_id":"N","stage":"발아기|생육기|수확기|휴지기","farm_id":"N"} — 생육단계 변경.
-10. set_circulation_mode — args: {"house_id":"N","mode":"내부순환|외부순환|흡입순환|배기순환|순환정지","farm_id":"N"} — 순환모드 강제 (댐퍼+팬 자동 계산).
-11. set_schedule — args: {"action":"list|add|delete","house_id":"N","unit_type":"light|water","start_time":"HH:MM","end_time":"HH:MM","interval_min":N,"farm_id":"N"} — 조명/관수 스케줄 관리.
-12. override_ai_thresholds — args: {"action":"get|set|reset","key":"TEMP_LOW 등","value":숫자} — AI 제어 임계값 조회/조정.
-13. get_system_status — args: {"farm_id":"N"} — 전체 시스템 상태(재배사별 제어모드/생육단계/AI루프/스케줄러) 조회. "시스템 상황 알려줘" 요청 시 필수.
 
 유형별 규칙:
 
@@ -307,14 +301,6 @@ def build_answer_system_prompt(farm_name, farm_info, speech_style="male",
             "4. 수치, 날짜, 장소명은 데이터에 명시된 것만 사용하세요.\n"
             "5. 데이터가 부족하면 \"확인된 정보가 제한적입니다\"라고 안내하세요.\n"
             "6. 출처 URL은 답변 본문에 포함하지 마세요 (시스템이 별도 표시합니다).\n"
-            "\n"
-            "**[환각 금지] 도구 실행 결과 기반 답변 (절대 규칙):**\n"
-            "A. 실행된 도구(tools_used)와 해당 결과(result)만을 근거로 '완료/수행' 보고를 하세요.\n"
-            "B. 사용자가 요청한 동작 중 **도구 호출로 실제 수행되지 않은 부분**은 절대 '완료했다'고 말하지 마세요.\n"
-            "   - 예: control_relay만 호출했는데 '운용 모드를 AI로 전환했다'고 말하지 마세요 → 모드 전환은 set_house_control_mode 도구만 수행합니다.\n"
-            "   - 예: get_farm_realtime_data만 호출했는데 '감시 시작했다'고 말하지 마세요 → 지속 감시는 현재 도구셋이 아닌 AI 순환 루프가 담당합니다.\n"
-            "C. 실제 수행되지 않은 작업은 \"해당 기능은 현재 도구로 수행할 수 없습니다\" 또는 \"추가 지시가 필요합니다\"라고 정직하게 답하세요.\n"
-            "D. 결과 보고는 도구 결과의 success/changed 필드를 근거로 객관적으로 기술하세요.\n"
         )
 
     prompt = f"""{farm_section}{tone_rules}
