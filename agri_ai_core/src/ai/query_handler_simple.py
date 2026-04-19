@@ -323,13 +323,60 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
         _progress_history = []  # 도구/단계 메시지 이력
         _last_progress_msg = ""
         _idle_cycle = 0  # 새 이벤트 없이 반복된 횟수
+        _last_phase = "starting"  # 최근 수신한 phase (하트비트 메시지 선택에 사용)
 
-        # LLM 대기 중 순환 표시할 기본 메시지
+        # phase별 / 경과시간별 하트비트 메시지 테이블 — 반복을 피하고
+        # 현재 내부 진행 단계를 사용자에게 자세히 전달한다.
+        # ─ llm_generating(3단계): 답변 생성이 가장 오래 걸리므로 단계별 세분화
+        _HEARTBEAT_BY_PHASE = {
+            "analyzing": [
+                (0,   "🧠 질문 의도를 파악하고 있습니다..."),
+                (10,  "🧠 질문 유형을 분류하고 있습니다..."),
+                (20,  "🧠 필요한 데이터를 판단하고 있습니다..."),
+            ],
+            "data_collecting": [
+                (0,   "📥 필요한 데이터를 수집하고 있습니다..."),
+                (10,  "📥 데이터를 계속 수집하고 있습니다..."),
+                (30,  "📥 여러 소스에서 데이터를 확인하고 있습니다..."),
+            ],
+            "validating": [
+                (0,   "🔎 수집한 데이터의 충분성을 검증하고 있습니다..."),
+                (10,  "🔎 추가 자료가 필요한지 판단 중입니다..."),
+            ],
+            "supplementing": [
+                (0,   "📥 부족한 자료를 보충 수집하고 있습니다..."),
+            ],
+            "llm_generating": [
+                (0,   "✍️ 답변을 작성하고 있습니다..."),
+                (8,   "✍️ 핵심 내용을 정리하고 있습니다..."),
+                (20,  "📊 표와 구조를 구성하고 있습니다..."),
+                (40,  "📝 상세 내용을 다듬고 있습니다..."),
+                (70,  "🧵 답변을 마무리하고 있습니다..."),
+                (110, "🧵 마지막 검토 중입니다..."),
+            ],
+            "finalizing": [
+                (0,   "🧵 답변을 최종 정리하고 있습니다..."),
+            ],
+        }
+        # phase 미지정/기타일 때 폴백 메시지 (3개 순환)
         _waiting_messages = [
-            "AI가 질문을 분석하고 있습니다...",
-            "최적의 답변을 준비하고 있습니다...",
-            "정보를 종합하여 답변을 구성하고 있습니다...",
+            "AI가 답변을 준비하고 있습니다...",
+            "최적의 답변을 구성하고 있습니다...",
+            "정보를 종합하고 있습니다...",
         ]
+        _phase_enter_ts = datetime.now()  # 현재 phase 진입 시점
+
+        def _pick_heartbeat_msg(phase: str, phase_elapsed: int) -> str:
+            """현재 phase와 해당 phase 내 경과시간으로 안내 문구를 선택."""
+            table = _HEARTBEAT_BY_PHASE.get(phase)
+            if not table:
+                return _waiting_messages[_idle_cycle % len(_waiting_messages)]
+            # 테이블은 (threshold_sec, msg) 오름차순 → 경과시간 이하 최대값 선택
+            chosen = table[0][1]
+            for th, msg in table:
+                if phase_elapsed >= th:
+                    chosen = msg
+            return chosen
 
         while True:
             try:
@@ -365,6 +412,11 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
                             _progress_history.append(evt)
                     latest = new_events[-1]
                     _last_progress_msg = latest.get("message", "")
+                    new_phase = latest.get("phase", "processing")
+                    # phase가 바뀐 경우 진입 타임스탬프 갱신 (하트비트 경과시간 리셋)
+                    if new_phase != _last_phase:
+                        _phase_enter_ts = datetime.now()
+                        _last_phase = new_phase
                     # 도구명 + 단계 정보 포함하여 상세 표시
                     _tool_label = ""
                     if latest.get("tool_display"):
@@ -375,19 +427,23 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
                     yield {
                         "type": "status",
                         "content": f"{_tool_label}{_last_progress_msg} ({elapsed_wait}초 경과)",
-                        "phase": latest.get("phase", "processing"),
+                        "phase": new_phase,
                         "tool_name": latest.get("tool_name"),
                         "tool_display": latest.get("tool_display"),
                         "iteration": latest.get("iteration"),
                         "max_iterations": latest.get("max_iterations"),
                     }
                 else:
-                    # 새 이벤트 없음 → 이력/기본 메시지를 순환하며 표시
+                    # 새 이벤트 없음 → 현재 phase와 해당 phase 경과시간에 맞춘
+                    # 세분화된 하트비트 메시지를 선택해 출력
                     _idle_cycle += 1
-                    all_messages = [h.get("message", "") for h in _progress_history if h.get("message")]
-                    all_messages.extend(_waiting_messages)
-                    cycle_msg = all_messages[_idle_cycle % len(all_messages)] if all_messages else "답변 생성 중입니다..."
-                    yield {"type": "status", "content": f"{cycle_msg} ({elapsed_wait}초 경과)"}
+                    phase_elapsed = int((datetime.now() - _phase_enter_ts).total_seconds())
+                    cycle_msg = _pick_heartbeat_msg(_last_phase, phase_elapsed)
+                    yield {
+                        "type": "status",
+                        "content": f"{cycle_msg} ({elapsed_wait}초 경과)",
+                        "phase": _last_phase,
+                    }
 
         response_text, sources, tools_used, response_type = _unpack_llm_result(result)
 

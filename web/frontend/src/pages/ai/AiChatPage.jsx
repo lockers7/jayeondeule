@@ -6,6 +6,7 @@ import ChatMessageList from "../../components/ai/ChatMessageList.jsx";
 import ChatInput from "../../components/ai/ChatInput.jsx";
 import {ragPerform, ragSave, getConversationHistory} from "../../utils/aiChatUtil.js";
 import * as streamManager from "../../utils/aiChatStreamManager.js";
+import "./AiChatPage.css";
 
 const SESSION_STORAGE_KEY = "ai_chat_session_id";
 const MESSAGES_STORAGE_KEY = "ai_chat_messages";
@@ -470,7 +471,7 @@ export default function AiChatPage() {
                     </>
                 )}
             </div>
-            <Container style={{display: "flex", height: "calc(100vh - 56px)"}}>
+            <Container className="ai-chat-container">
                 <ChatSidebar
                     selectedFarm={selectedFarm}
                     setSelectedFarm={handleFarmChange}

@@ -161,7 +161,7 @@ def _check_emergency(sensor_data):
     if co2 is not None and co2 > CO2_CRITICAL_HIGH:
         return True, _build_device_settings(), '배기순환', False
 
-    # 수온 (물가열기만 제어, 다른 장치 유지)
+    # 수온 (수온히터만 제어, 다른 장치 유지)
     if water_temp is not None and water_temp < WATER_TEMP_CRITICAL_LOW:
         return True, {'water_heater_flag': True}, None, True
 

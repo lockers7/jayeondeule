@@ -118,6 +118,11 @@ def reset_heater_state(farm_id, house_id):
 # ══════════════════════════════════════
 # Semantic name → relay_*st_flag 핀 매핑
 # ══════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# [변경2 · 2026-04-19] 1/3호 STANDARD — 웹 UI/현장 배선 기준으로 11↔14 교환
+#   원본: air_intake_valve_flag → relay_11, air_exhaust_valve_flag → relay_14
+#   변경 후: air_intake → relay_14, air_exhaust → relay_11
+# ══════════════════════════════════════════════════════════════════════════════
 RELAY_PIN_MAP_STANDARD = {
     'water_heater_flag': 'relay_1st_flag',
     'fog_occurs_flag': 'relay_2st_flag',
@@ -128,11 +133,16 @@ RELAY_PIN_MAP_STANDARD = {
     'irrigation_flag': 'relay_8st_flag',
     'indoor_heater_flag': 'relay_9st_flag',
     'air_circulation_valve_flag': 'relay_10st_flag',
-    'air_intake_valve_flag': 'relay_11st_flag',
-    'air_exhaust_valve_flag': 'relay_14st_flag',
+    'air_intake_valve_flag':   'relay_14st_flag',  # [변경2] 11 → 14
+    'air_exhaust_valve_flag':  'relay_11st_flag',  # [변경2] 14 → 11
     'indoor_heater_valve_flag': 'relay_15st_flag',
 }
 
+# ══════════════════════════════════════════════════════════════════════════════
+# [변경1 · 2026-04-19] 2호 전용 +1 shift — 웹 UI/DB 컬럼 번호와 장비 의미 일치화
+#   원본: air_circulation_valve_flag → relay_9st_flag, ..., indoor_heater_valve_flag → relay_14st_flag
+#   변경 후: 순환 valve 이후 모든 플래그가 +1 shift
+# ══════════════════════════════════════════════════════════════════════════════
 RELAY_PIN_MAP_E = {
     'water_heater_flag': 'relay_1st_flag',
     'fog_occurs_flag': 'relay_2st_flag',
@@ -141,81 +151,70 @@ RELAY_PIN_MAP_E = {
     'irrigation_flag': 'relay_6st_flag',
     'intake_fan_flag': 'relay_7st_flag',
     'exhaust_fan_flag': 'relay_8st_flag',
-    'air_circulation_valve_flag': 'relay_9st_flag',
-    'air_intake_valve_flag': 'relay_10st_flag',
-    'air_exhaust_valve_flag': 'relay_11st_flag',
-    'drainage_motor_flag': 'relay_12st_flag',
-    'indoor_heater_flag': 'relay_13st_flag',
-    'indoor_heater_valve_flag': 'relay_14st_flag',
+    'air_circulation_valve_flag': 'relay_10st_flag',  # [변경1] 9 → 10
+    'air_intake_valve_flag':      'relay_11st_flag',  # [변경1] 10 → 11
+    'air_exhaust_valve_flag':     'relay_12st_flag',  # [변경1] 11 → 12
+    'drainage_motor_flag':        'relay_13st_flag',  # [변경1] 12 → 13
+    'indoor_heater_flag':         'relay_14st_flag',  # [변경1] 13 → 14
+    'indoor_heater_valve_flag':   'relay_15st_flag',  # [변경1] 14 → 15
 }
 
 
+# [변경3] 웹 UI(RelayDashboard) 라벨 용어로 전 시스템 통일
 SEMANTIC_LABELS = {
-    'water_heater_flag': '물가열기',
-    'fog_occurs_flag': '분사펌프',
-    'drainage_motor_flag': '배수밸브',
-    'intake_fan_flag': '흡기팬',
-    'exhaust_fan_flag': '배기팬',
-    'lighting_flag': '조명',
-    'irrigation_flag': '관수',
-    'indoor_heater_flag': '열풍기',
-    'indoor_heater_valve_flag': '열풍댐퍼',
-    'air_circulation_valve_flag': '순환댐퍼',
-    'air_intake_valve_flag': '흡기댐퍼',
-    'air_exhaust_valve_flag': '배기댐퍼',
-    'radiator_flag': '라디에이터',
+    'water_heater_flag':          '수온히터',
+    'fog_occurs_flag':            '포그생성',
+    'drainage_motor_flag':        '배수밸브',
+    'intake_fan_flag':            '흡입팬',
+    'exhaust_fan_flag':           '배출팬',
+    'lighting_flag':              '조명',
+    'irrigation_flag':            '관수',
+    'indoor_heater_flag':         '실내히터',
+    'indoor_heater_valve_flag':   '히터밸브',
+    'air_circulation_valve_flag': '순환밸브',
+    'air_intake_valve_flag':      '흡입밸브',
+    'air_exhaust_valve_flag':     '배출밸브',
+    'radiator_flag':              '라디에이터',
 }
 
-# 한글 별칭 → 시멘틱 flag 매핑 (Web UI 이름, 사용자 구어체 등)
+# 한글 별칭 → 시멘틱 flag 매핑 (Web UI 이름 기준)
+# [변경3] 전 시스템 용어 통일 — 웹 UI 표시 용어와 축약형만 유지.
 DEVICE_ALIASES = {
-    # water_heater_flag 별칭
+    # water_heater_flag
     '수온히터': 'water_heater_flag',
-    '물가열기': 'water_heater_flag',
     '칠러': 'water_heater_flag',
     '칠러1': 'water_heater_flag',
     '칠러Ⅰ': 'water_heater_flag',
-    # fog_occurs_flag 별칭
+    # fog_occurs_flag
     '포그생성': 'fog_occurs_flag',
     '포그': 'fog_occurs_flag',
-    '분사펌프': 'fog_occurs_flag',
-    '순환모터': 'fog_occurs_flag',
-    # drainage_motor_flag 별칭
+    # drainage_motor_flag
     '배수밸브': 'drainage_motor_flag',
     '배수': 'drainage_motor_flag',
-    # intake_fan_flag 별칭
+    # intake_fan_flag
     '흡입팬': 'intake_fan_flag',
-    '흡기팬': 'intake_fan_flag',
     '흡입': 'intake_fan_flag',
-    # exhaust_fan_flag 별칭
+    # exhaust_fan_flag
     '배출팬': 'exhaust_fan_flag',
-    '배기팬': 'exhaust_fan_flag',
     '배출': 'exhaust_fan_flag',
-    # lighting_flag 별칭
+    # lighting_flag
     '조명': 'lighting_flag',
     'light': 'lighting_flag',
     'lighting': 'lighting_flag',
-    # irrigation_flag 별칭
+    # irrigation_flag
     '관수': 'irrigation_flag',
     'irrigation': 'irrigation_flag',
-    # indoor_heater_flag 별칭
+    # indoor_heater_flag
     '실내히터': 'indoor_heater_flag',
-    '열풍기': 'indoor_heater_flag',
     '히터': 'indoor_heater_flag',
-    # indoor_heater_valve_flag 별칭
+    # indoor_heater_valve_flag
     '히터밸브': 'indoor_heater_valve_flag',
-    '열풍댐퍼': 'indoor_heater_valve_flag',
-    '히터댐퍼': 'indoor_heater_valve_flag',
-    # air_circulation_valve_flag 별칭
+    # air_circulation_valve_flag
     '순환밸브': 'air_circulation_valve_flag',
-    '순환댐퍼': 'air_circulation_valve_flag',
-    # air_intake_valve_flag 별칭
+    # air_intake_valve_flag
     '흡입밸브': 'air_intake_valve_flag',
-    '흡기밸브': 'air_intake_valve_flag',
-    '흡기댐퍼': 'air_intake_valve_flag',
-    # air_exhaust_valve_flag 별칭
+    # air_exhaust_valve_flag
     '배출밸브': 'air_exhaust_valve_flag',
-    '배기밸브': 'air_exhaust_valve_flag',
-    '배기댐퍼': 'air_exhaust_valve_flag',
     # radiator_flag 별칭
     '라디에이터': 'radiator_flag',
 }
@@ -231,7 +230,7 @@ def resolve_device_alias(name):
 
 
 # ════════════════════════════════════
-# 순환 모드 정의 (댐퍼 → 15초 후 → 팬)
+# 순환 모드 정의 (밸브 → 15초 후 → 팬)
 # ════════════════════════════════════
 CIRCULATION_MODES = {
     '순환정지': {

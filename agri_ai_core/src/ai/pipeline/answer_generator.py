@@ -40,6 +40,8 @@ def generate_answer(user_query, analysis_result, collected_result,
     # 결과가 명확한 실행형 유형 → 간결 보고 (LLM 토큰 절약)
     _concise_types = ("farm_control", "farm_knowledge_delete")
     is_concise = question_type in _concise_types
+    # general(단위변환·계산·상식·정의 등)은 외부 데이터 불필요 + 짧은 답변으로 충분
+    is_general = (question_type == "general")
 
     # 수집된 데이터와 출처
     all_sources = collected_result.get("sources", [])
@@ -64,30 +66,43 @@ def generate_answer(user_query, analysis_result, collected_result,
         current_dt = now.strftime("%Y년 %m월 %d일 %A %H시 %M분")
 
         # 3단계 프롬프트 — 1단계 분석 결과 + 출처 목록 포함
+        # general은 build_answer_system_prompt 내부에서 경량 프롬프트로 분기되므로
+        # 농장 정보/출처 목록 모두 전달하지 않아도 영향 없음 (함수가 무시함).
         system_prompt = build_answer_system_prompt(
             farm_name=farm_name,
             farm_info=farm_info,
             speech_style=speech_style or "male",
             analysis_result=analysis_result,
             current_datetime=current_dt,
-            source_list=all_sources,  # 번호 매겨진 출처를 LLM에 전달
+            source_list=all_sources,
         )
 
-        # 수집 데이터를 시스템 프롬프트에 포함
-        system_prompt += f"\n\n[수집된 데이터]\n{data_text}"
+        # general은 수집 데이터/과거 히스토리 주입 생략 (외부 데이터 불필요 질문)
+        if not is_general:
+            system_prompt += f"\n\n[수집된 데이터]\n{data_text}"
 
         messages = [{"role": "system", "content": system_prompt}]
 
-        # 대화 컨텍스트 주입
-        if conversation_history:
+        # 대화 컨텍스트 주입 — general은 생략 (단위변환/상식에 과거 대화 불필요, 토큰 절약)
+        if conversation_history and not is_general:
             _build_conversation_context(messages, conversation_history, user_query)
 
         messages.append({"role": "user", "content": user_query})
 
         # LLM 호출 (도구 미제공 → 순수 답변만 생성)
-        # 실행형 유형(제어/삭제)은 간결 보고로 토큰 절약
-        answer_num_predict = 1024 if is_concise else NUM_PREDICT
-        answer_num_ctx = 4096 if is_concise else NUM_CTX
+        # 유형별 num_predict/num_ctx 조정:
+        #   general : 짧은 답변(변환/계산/상식) — 768/4096 (prompt_eval·generate 모두 축소)
+        #   concise : 제어/삭제 결과 보고 — 1024/4096
+        #   default : RAG/날씨/웹검색 등 길이 보장 — NUM_PREDICT/NUM_CTX
+        if is_general:
+            answer_num_predict = 768
+            answer_num_ctx = 4096
+        elif is_concise:
+            answer_num_predict = 1024
+            answer_num_ctx = 4096
+        else:
+            answer_num_predict = NUM_PREDICT
+            answer_num_ctx = NUM_CTX
 
         t_llm = time.time()
         response = _ollama_chat(

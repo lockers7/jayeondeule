@@ -252,45 +252,45 @@ def _build_system_prompt(growth_stage):
         "/no_think\n"
         "당신은 상황버섯 스마트팜 릴레이 제어 전문 AI입니다.\n\n"
         "## 재배사 구조\n"
-        "- 공기흐름: 바닥 2열 덕트 흡입 → 환풍기 → 열냉가습기 → 환풍기 → 상단 1열 덕트 배기\n"
-        "- 열냉가습기: 지하수 탱크 + 물가열기 + 분사펌프 → 물안개를 통과하는 공기에 분사펌프 온도의 습기를 더하는장치\n\n"
+        "- 공기흐름: 바닥 2열 덕트 흡입 → 환풍기 → 열냉가습기 → 환풍기 → 상단 1열 덕트 배출\n"
+        "- 열냉가습기: 지하수 탱크 + 수온히터 + 포그생성 → 물안개를 통과하는 공기에 물안개 온도의 습기를 더하는 장치\n\n"
         "## 제어 장치와 효과\n"
-        "- water_heater_flag: 물가열기 → 열냉가습기 내 지하수 탱크의 물을 가열 → 수온 상승 → 내부온도·습도 동시 상승\n"
-        "- fog_occurs_flag: 분사펌프 → 탱크물을 물안개로 강하게 분사 → 공기가 물안개 통과 시 습도 상승\n"
-        f"- indoor_heater_flag: 열풍기 → 직접 가열 → 내부온도 급속 상승 (최대 {HEATER_MAX_CONTINUOUS_MIN}분 연속, {HEATER_COOLDOWN_MIN}분 쿨다운 필수)\n"
-        "- indoor_heater_valve_flag: 열풍댐퍼 → 열풍기ON 전 반드시 먼저 ON, OFF 시 열풍기 먼저 OFF\n"
-        "- intake_fan_flag: 흡기팬 → 흡기댐퍼와 연동, 외부 공기 유입\n"
-        "- exhaust_fan_flag: 배기팬 → 배기댐퍼와 연동, 내부 공기 배출\n"
-        "- air_circulation_valve_flag: 순환댐퍼 → 내부 공기 순환 경로 조절\n"
-        "- air_intake_valve_flag: 흡기댐퍼 → 외부 공기 유입 경로 조절\n"
-        "- air_exhaust_valve_flag: 배기댐퍼 → 내부 공기 배출 경로 조절\n"
+        "- water_heater_flag: 수온히터 → 열냉가습기 내 지하수 탱크의 물을 가열 → 수온 상승 → 내부온도·습도 동시 상승\n"
+        "- fog_occurs_flag: 포그생성 → 탱크물을 물안개로 강하게 분사 → 공기가 물안개 통과 시 습도 상승\n"
+        f"- indoor_heater_flag: 실내히터 → 직접 가열 → 내부온도 급속 상승 (최대 {HEATER_MAX_CONTINUOUS_MIN}분 연속, {HEATER_COOLDOWN_MIN}분 쿨다운 필수)\n"
+        "- indoor_heater_valve_flag: 히터밸브 → 실내히터ON 전 반드시 먼저 ON, OFF 시 실내히터 먼저 OFF\n"
+        "- intake_fan_flag: 흡입팬 → 흡입밸브와 연동, 외부 공기 유입\n"
+        "- exhaust_fan_flag: 배출팬 → 배출밸브와 연동, 내부 공기 배출\n"
+        "- air_circulation_valve_flag: 순환밸브 → 내부 공기 순환 경로 조절\n"
+        "- air_intake_valve_flag: 흡입밸브 → 외부 공기 유입 경로 조절\n"
+        "- air_exhaust_valve_flag: 배출밸브 → 내부 공기 배출 경로 조절\n"
         "- lighting_flag, irrigation_flag, drainage_motor_flag: 별도 스케줄 제어 → 변경 금지\n\n"
-        "## 순환 모드 (댐퍼 설정 후 15초 뒤 팬 가동)\n"
-        "- 내부순환: 순환댐퍼ON, 흡기댐퍼OFF, 배기댐퍼OFF → 흡기팬ON, 배기팬ON (내부 공기 순환, 온습도 유지)\n"
-        "- 외부순환: 순환댐퍼OFF, 흡기댐퍼ON, 배기댐퍼ON → 흡기팬ON, 배기팬ON (내부공기를 외부공기로 대체)\n"
-        "- 흡입순환: 순환댐퍼OFF, 흡기댐퍼ON, 배기댐퍼OFF → 흡기팬ON, 배기팬OFF (외부공기 유입으로 CO2 하락)\n"
-        "- 배기순환: 순환댐퍼OFF, 흡기댐퍼OFF, 배기댐퍼ON → 흡기팬OFF, 배기팬ON (내부공기 배출로 CO2 하락)\n"
-        "- 순환정지: 순환댐퍼ON, 흡기댐퍼ON, 배기댐퍼ON → 흡기팬OFF, 배기팬OFF\n\n"
+        "## 순환 모드 (밸브 설정 후 15초 뒤 팬 가동)\n"
+        "- 내부순환: 순환밸브ON, 흡입밸브OFF, 배출밸브OFF → 흡입팬ON, 배출팬ON (내부 공기 순환, 온습도 유지)\n"
+        "- 외부순환: 순환밸브OFF, 흡입밸브ON, 배출밸브ON → 흡입팬ON, 배출팬ON (내부공기를 외부공기로 대체)\n"
+        "- 흡입순환: 순환밸브OFF, 흡입밸브ON, 배출밸브OFF → 흡입팬ON, 배출팬OFF (외부공기 유입으로 CO2 하락)\n"
+        "- 배기순환: 순환밸브OFF, 흡입밸브OFF, 배출밸브ON → 흡입팬OFF, 배출팬ON (내부공기 배출로 CO2 하락)\n"
+        "- 순환정지: 순환밸브ON, 흡입밸브ON, 배출밸브ON → 흡입팬OFF, 배출팬OFF\n\n"
         "## 제어 우선순위 (반드시 준수)\n"
         "온도 > 습도 > CO2 순서로 판단하고, 상위 항목의 결정을 하위 항목이 뒤집지 마세요.\n\n"
         "### 1순위: 온도\n"
-        f"- 온도 < {TEMP_LOW}℃ (저온): 물가열기ON, 내부순환 → 가열 우선. 습도/CO2 조치가 온도를 더 낮추면 안 됨\n"
+        f"- 온도 < {TEMP_LOW}℃ (저온): 수온히터ON, 내부순환 → 가열 우선. 습도/CO2 조치가 온도를 더 낮추면 안 됨\n"
         f"- 온도 > {TEMP_HIGH}℃ (고온): 가열장치 전체OFF, 배기순환 → 냉각 우선. 습도 조치가 온도를 더 높이면 안 됨\n"
         "- 온도 정상: 다음 순위(습도)로 이동\n\n"
         "### 2순위: 습도 (온도 결정과 충돌 시 온도 우선)\n"
-        f"- 습도 < {HUMIDITY_LOW}% (저습): 분사펌프ON + 내부순환 권장. 단, 온도가 고온이면 배기순환 유지\n"
-        f"- 습도 > {HUMIDITY_HIGH}% (고습): 분사펌프OFF + 배기순환 권장. 단, 온도가 저온이면 내부순환 유지\n"
+        f"- 습도 < {HUMIDITY_LOW}% (저습): 포그생성ON + 내부순환 권장. 단, 온도가 고온이면 배기순환 유지\n"
+        f"- 습도 > {HUMIDITY_HIGH}% (고습): 포그생성OFF + 배기순환 권장. 단, 온도가 저온이면 내부순환 유지\n"
         "- 습도 정상: 다음 순위(CO2)로 이동\n\n"
         "### 3순위: CO2 (온도·습도 결정과 충돌 시 상위 우선)\n"
         f"- CO2 > {CO2_HIGH}ppm (고농도): 배기순환 권장. 단, 저온이면 내부순환 유지 (온도 우선)\n"
         "- CO2 정상: 현재 순환모드 유지\n\n"
         "### 복합 상황 판단 예시\n"
-        "- 저온+고습: 열풍기ON + 내부순환 (온도 우선, 습도는 열풍으로 자연 하강)\n"
-        "- 저온+저습: 물가열기ON + 분사펌프ON + 내부순환 (둘 다 가열/가습 방향 일치)\n"
-        "- 고온+저습: 분사펌프ON + 배기순환 (온도 우선 냉각, 습도는 분사펌프로 보완)\n"
+        "- 저온+고습: 실내히터ON + 내부순환 (온도 우선, 습도는 열풍으로 자연 하강)\n"
+        "- 저온+저습: 수온히터ON + 포그생성ON + 내부순환 (둘 다 가열/가습 방향 일치)\n"
+        "- 고온+저습: 포그생성ON + 배기순환 (온도 우선 냉각, 습도는 포그생성으로 보완)\n"
         "- 고온+고습: 전체OFF + 배기순환 (온도·습도 모두 하강 방향 일치)\n"
         "- 정상온도+고습+고CO2: 배기순환 (습도·CO2 동시 해소)\n"
-        "- 정상온도+저습+고CO2: 내부순환 + 분사펌프ON (습도 우선, CO2는 차선)\n\n"
+        "- 정상온도+저습+고CO2: 내부순환 + 포그생성ON (습도 우선, CO2는 차선)\n\n"
         "## 외부순환 제한 규칙\n"
         f"- 외부온도가 {TEMP_LOW}~{TEMP_HIGH}℃ 범위 밖이면 외부순환 금지\n"
         f"- 외부습도가 {HUMIDITY_LOW}~{HUMIDITY_HIGH}% 범위 밖이면 외부순환 금지\n"
@@ -302,14 +302,14 @@ def _build_system_prompt(growth_stage):
             "## 현재 생육단계: 발이기 (3~5일)\n"
             "- 적정 온도: 29~33℃ (온도 제어에만 집중)\n"
             "- 습도/CO2 제어 중지\n"
-            "- 온도 < 29℃ → 물가열기ON + 열풍기ON + 내부순환\n"
+            "- 온도 < 29℃ → 수온히터ON + 실내히터ON + 내부순환\n"
             "- 온도 > 33℃ → 전체 가열OFF + 배기순환\n"
             "- 온도 정상(29~33℃) → 제어 없음\n\n"
         )
     elif growth_stage == '수확기':
         stage_guide = (
             "## 현재 생육단계: 수확기 (2~3일)\n"
-            "- 관수밸브 강제 OFF (변경 금지)\n"
+            "- 관수 강제 OFF (변경 금지)\n"
             "- 배기순환 우선\n"
             "- 이외 생육기 제어와 동일\n\n"
         )
@@ -324,17 +324,17 @@ def _build_system_prompt(growth_stage):
 
     rules = (
         "## 비상 임계값 (절대 위반 금지)\n"
-        f"- 온도 < {TEMP_CRITICAL_LOW}℃ → 물가열기+열풍기 ON, 내부순환\n"
+        f"- 온도 < {TEMP_CRITICAL_LOW}℃ → 수온히터+실내히터 ON, 내부순환\n"
         f"- 온도 > {TEMP_CRITICAL_HIGH}℃ → 전체 가열 OFF, 배기순환\n"
-        f"- 습도 < {HUMIDITY_CRITICAL_LOW}% → 물가열기ON+분사펌프ON, 내부순환\n"
-        f"- 습도 > {HUMIDITY_CRITICAL_HIGH}% → 분사펌프OFF, 배기순환\n"
+        f"- 습도 < {HUMIDITY_CRITICAL_LOW}% → 수온히터ON+포그생성ON, 내부순환\n"
+        f"- 습도 > {HUMIDITY_CRITICAL_HIGH}% → 포그생성OFF, 배기순환\n"
         f"- CO2 > {CO2_CRITICAL_HIGH}ppm → 배기순환\n"
-        f"- 수온 < {WATER_TEMP_CRITICAL_LOW}℃ → 물가열기 ON\n"
-        f"- 수온 > {WATER_TEMP_CRITICAL_HIGH}℃ → 물가열기 OFF\n\n"
+        f"- 수온 < {WATER_TEMP_CRITICAL_LOW}℃ → 수온히터 ON\n"
+        f"- 수온 > {WATER_TEMP_CRITICAL_HIGH}℃ → 수온히터 OFF\n\n"
         "## 선행 조치 규칙\n"
         "- 온도/습도/CO2가 정상범위 경계에 접근 중이면, 비상 임계치 도달 전에 예방 조치를 취하세요.\n"
         "- 예: 온도 30.5℃ 상승 추세 → 외부순환으로 33℃ 도달 방지\n"
-        "- 예: 습도 73% 하강 추세 → 분사펌프 가동으로 70% 미만 방지\n"
+        "- 예: 습도 73% 하강 추세 → 포그생성 가동으로 70% 미만 방지\n"
         "- 외부 온도/습도도 고려하여 외부순환 적합 여부를 판단하세요.\n\n"
         "## 응답 형식 (JSON 1개만 출력, 설명 없이 JSON만)\n"
         "필수 키 5개: action, reason, devices, circulation (최상위 키)\n"
@@ -524,7 +524,7 @@ def _validate_safety(parsed, sensor_data, farm_id, house_id):
         elif indoor_temp < TEMP_CRITICAL_LOW:
             # 저온 비상 시 가열 OFF 거부
             if not devices.get('water_heater_flag') and not devices.get('indoor_heater_flag'):
-                logger.warning(f"[AI제어] 안전 보정: 저온비상({indoor_temp}℃) → 물가열기+열풍기 강제 ON")
+                logger.warning(f"[AI제어] 안전 보정: 저온비상({indoor_temp}℃) → 수온히터+실내히터 강제 ON")
                 devices['water_heater_flag'] = True
                 devices['indoor_heater_flag'] = True
                 devices['indoor_heater_valve_flag'] = True
@@ -533,21 +533,21 @@ def _validate_safety(parsed, sensor_data, farm_id, house_id):
     if indoor_humidity is not None:
         if indoor_humidity > HUMIDITY_CRITICAL_HIGH:
             if devices.get('fog_occurs_flag'):
-                logger.warning(f"[AI제어] 안전 보정: 고습비상({indoor_humidity}%) → 분사펌프 강제 OFF")
+                logger.warning(f"[AI제어] 안전 보정: 고습비상({indoor_humidity}%) → 포그생성 강제 OFF")
                 devices['fog_occurs_flag'] = False
 
         elif indoor_humidity < HUMIDITY_CRITICAL_LOW:
             if not devices.get('fog_occurs_flag'):
-                logger.warning(f"[AI제어] 안전 보정: 저습비상({indoor_humidity}%) → 분사펌프 강제 ON")
+                logger.warning(f"[AI제어] 안전 보정: 저습비상({indoor_humidity}%) → 포그생성 강제 ON")
                 devices['fog_occurs_flag'] = True
 
     # (3) 수온 비상 위반 방지
     if water_temp is not None:
         if water_temp > WATER_TEMP_CRITICAL_HIGH and devices.get('water_heater_flag'):
-            logger.warning(f"[AI제어] 안전 보정: 수온과열({water_temp}℃) → 물가열기 강제 OFF")
+            logger.warning(f"[AI제어] 안전 보정: 수온과열({water_temp}℃) → 수온히터 강제 OFF")
             devices['water_heater_flag'] = False
         elif water_temp < WATER_TEMP_CRITICAL_LOW and not devices.get('water_heater_flag'):
-            logger.warning(f"[AI제어] 안전 보정: 수온저하({water_temp}℃) → 물가열기 강제 ON")
+            logger.warning(f"[AI제어] 안전 보정: 수온저하({water_temp}℃) → 수온히터 강제 ON")
             devices['water_heater_flag'] = True
 
     # (4) 외부순환 제한 검증
@@ -558,18 +558,18 @@ def _validate_safety(parsed, sensor_data, farm_id, house_id):
             logger.warning(f"[AI제어] 안전 보정: 외부환경 부적합(외부온도={outdoor_temp}, 외부습도={outdoor_humidity}) → 내부순환 전환")
             circulation = '내부순환'
 
-    # (5) 열풍기 쿨다운 검증
+    # (5) 실내히터 쿨다운 검증
     if devices.get('indoor_heater_flag', False):
         heater_available, in_cooldown = check_heater_cooldown(farm_id, house_id)
         if not heater_available:
-            logger.warning(f"[AI제어] 안전 보정: 열풍기 쿨다운 중 → 열풍기 OFF")
+            logger.warning(f"[AI제어] 안전 보정: 실내히터 쿨다운 중 → 실내히터 OFF")
             devices['indoor_heater_flag'] = False
             devices['indoor_heater_valve_flag'] = False
 
-    # (6) 열풍기-열풍댐퍼 연동 보정
+    # (6) 실내히터-히터밸브 연동 보정
     if devices.get('indoor_heater_flag', False) and not devices.get('indoor_heater_valve_flag', False):
         devices['indoor_heater_valve_flag'] = True
-        logger.info(f"[AI제어] 안전 보정: 열풍기ON → 열풍댐퍼 강제 ON")
+        logger.info(f"[AI제어] 안전 보정: 실내히터ON → 히터밸브 강제 ON")
 
     # (7) 순환모드 유효성
     if circulation not in VALID_CIRCULATIONS:

@@ -2,10 +2,10 @@ import React from "react";
 import {Modal, Button, Table, Badge} from "react-bootstrap";
 
 const DEVICE_LABELS = {
-    water_heater_flag: "물가열기",
-    fog_occurs_flag: "분사펌프",
-    indoor_heater_flag: "열풍기",
-    indoor_heater_valve_flag: "열풍댐퍼",
+    water_heater_flag: "수온히터",
+    fog_occurs_flag: "포그생성",
+    indoor_heater_flag: "실내히터",
+    indoor_heater_valve_flag: "히터밸브",
 };
 
 function DeviceBadges({devices}) {

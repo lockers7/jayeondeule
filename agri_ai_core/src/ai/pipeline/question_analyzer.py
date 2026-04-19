@@ -88,7 +88,8 @@ def _parse_analysis_json(response_text):
 # ═════════════════════
 _VALID_TYPES = {
     "farm_sensor", "farm_control", "farm_knowledge", "farm_knowledge_delete",
-    "weather", "web_search", "gas_price", "greeting", "conversation_ref", "complex",
+    "weather", "web_search", "gas_price", "greeting", "conversation_ref",
+    "general", "complex",
 }
 _VALID_TOOLS = {
     "search_web", "fetch_url_content", "get_farm_realtime_data",

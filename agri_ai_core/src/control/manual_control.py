@@ -1,7 +1,7 @@
 # ══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 # 환경제어 모듈.
 # 센서값 기반 릴레이 자동 제어 알고리즘 (온도/습도/CO2).
-# 생육단계별 제어, 비상제어, 열풍기 쿨다운, 외부순환, 64케이스 분기를 포함한다.
+# 생육단계별 제어, 비상제어, 실내히터 쿨다운, 외부순환, 64케이스 분기를 포함한다.
 # --->
 # _log_house_status: log house status
 # _classify: classify
@@ -103,7 +103,7 @@ _update_heater_tracking = update_heater_tracking
 def _reset_heater_cooldown(farm_id, house_id, order_label=""):
     reset_heater_state(farm_id, house_id)
     scope = _house_prefix(order_label, farm_id, house_id)
-    logger.info(f"{scope}: 비상제어 → 열풍기 쿨다운 초기화")
+    logger.info(f"{scope}: 비상제어 → 실내히터 쿨다운 초기화")
 
 
 def _get_current_heater_state(current_relay, pin_map):
@@ -157,7 +157,7 @@ def _write_relay(farm_id, house_id, relay_values):
 
 
 # ═════════════════════════════════════════════════
-# 2단계 릴레이 제어 (댐퍼→15초→팬, 열풍댐퍼→열풍기)
+# 2단계 릴레이 제어 (밸브→15초→팬, 히터밸브→실내히터)
 # ═════════════════════════════════════════════════
 def _execute_control(
     farm_id,
@@ -182,23 +182,23 @@ def _execute_control(
     heater_damper_on = device_settings.get('indoor_heater_valve_flag', False)
     prev_heater_on = _get_current_heater_state(current_relay, pin_map)
 
-    # === Phase 1: 댐퍼 + 장치 (팬/열풍기 시퀀스 대기) ===
+    # === Phase 1: 밸브 + 장치 (팬/실내히터 시퀀스 대기) ===
     phase1_semantic = {}
 
-    # 순환 댐퍼 설정
+    # 순환 밸브 설정
     phase1_semantic.update(circ['dampers'])
 
-    # 물가열기, 분사펌프 즉시 적용
+    # 수온히터, 포그생성 즉시 적용
     phase1_semantic['water_heater_flag'] = device_settings.get('water_heater_flag', False)
     phase1_semantic['fog_occurs_flag'] = device_settings.get('fog_occurs_flag', False)
 
-    # 열풍기/열풍댐퍼 Phase 1 (장치조작절대지침 준수)
+    # 실내히터/히터밸브 Phase 1 (장치조작절대지침 준수)
     if heater_on and not prev_heater_on:
-        # ON 시퀀스: 열풍댐퍼 ON 먼저, 열풍기는 Phase 2에서 ON
+        # ON 시퀀스: 히터밸브 ON 먼저, 실내히터는 Phase 2에서 ON
         phase1_semantic['indoor_heater_valve_flag'] = True
         phase1_semantic['indoor_heater_flag'] = False
     elif not heater_on and prev_heater_on:
-        # OFF 시퀀스: 열풍기 OFF 먼저, 열풍댐퍼는 Phase 2에서 OFF
+        # OFF 시퀀스: 실내히터 OFF 먼저, 히터밸브는 Phase 2에서 OFF
         phase1_semantic['indoor_heater_flag'] = False
         phase1_semantic['indoor_heater_valve_flag'] = True
     else:
@@ -222,18 +222,18 @@ def _execute_control(
     _write_relay(farm_id, house_id, phase1_values)
 
     scope = _house_prefix(order_label, farm_id, house_id)
-    logger.info(f"{scope}: Phase 1 댐퍼제어 완료 ({reason}, {circulation_mode})")
+    logger.info(f"{scope}: Phase 1 밸브제어 완료 ({reason}, {circulation_mode})")
 
-    # === 15초 대기 (댐퍼→팬, 열풍댐퍼→열풍기 공통) ===
+    # === 15초 대기 (밸브→팬, 히터밸브→실내히터 공통) ===
     time.sleep(DAMPER_FAN_DELAY_SEC)
 
-    # === Phase 2: 팬 + 열풍기 최종 상태 ===
+    # === Phase 2: 팬 + 실내히터 최종 상태 ===
     phase2_semantic = dict(phase1_semantic)
 
     # 팬 최종 설정
     phase2_semantic.update(circ['fans'])
 
-    # 열풍기/열풍댐퍼 최종 상태
+    # 실내히터/히터밸브 최종 상태
     phase2_semantic['indoor_heater_flag'] = heater_on
     phase2_semantic['indoor_heater_valve_flag'] = heater_damper_on
 
@@ -242,7 +242,7 @@ def _execute_control(
     phase2_values = _build_relay_values(house_id, phase2_semantic, current_relay, harvest_mode)
     result = _write_relay(farm_id, house_id, phase2_values)
 
-    # 열풍기 상태 추적
+    # 실내히터 상태 추적
     _update_heater_tracking(farm_id, house_id, heater_on)
 
     logger.info(f"{scope}: Phase 2 팬  제어 완료 ({reason}, {circulation_mode})")
@@ -257,7 +257,7 @@ def _execute_control(
 
 
 # ═════════════════════════════════════════════
-# 수온 비상 전용 (물가열기만 변경, 나머지 유지)
+# 수온 비상 전용 (수온히터만 변경, 나머지 유지)
 # ═════════════════════════════════════════════
 def _execute_water_temp_emergency(
     farm_id,
@@ -276,7 +276,7 @@ def _execute_water_temp_emergency(
         for key in relay_values:
             relay_values[key] = bool(current_relay.get(key, False))
 
-    # 물가열기만 변경
+    # 수온히터만 변경
     water_heater_pin = pin_map.get('water_heater_flag')
     if water_heater_pin:
         relay_values[water_heater_pin] = water_heater_on
@@ -291,12 +291,12 @@ def _execute_water_temp_emergency(
 
     status = "ON" if water_heater_on else "OFF"
     scope = _house_prefix(order_label, farm_id, house_id)
-    logger.info(f"{scope}: 수온 비상 → 물가열기 {status}")
+    logger.info(f"{scope}: 수온 비상 → 수온히터 {status}")
 
     return {
         "success": result.get("success", False),
-        "reason": f"수온비상_물가열기{status}",
-        "message": f"수온 비상제어 → 물가열기 {status}",
+        "reason": f"수온비상_수온히터{status}",
+        "message": f"수온 비상제어 → 수온히터 {status}",
     }
 
 
@@ -365,7 +365,7 @@ def _determine_environment_action(sensor_data, growth_stage, farm_id, house_id):
             water_on = emergency_devices.get('water_heater_flag', False)
             return {
                 "sensor": sensor_str, "growth_stage": growth_stage,
-                "reason": f"수온비상_물가열기{'ON' if water_on else 'OFF'}",
+                "reason": f"수온비상_수온히터{'ON' if water_on else 'OFF'}",
                 "devices": emergency_devices, "circulation": None,
                 "device_summary": format_device_decision(emergency_devices),
                 "is_emergency": True, "water_temp_only": True, "in_cooldown": False,
@@ -433,7 +433,7 @@ def _determine_environment_action(sensor_data, growth_stage, farm_id, house_id):
 
     reason = f"64케이스(온도:{temp_state},습도:{humidity_state},CO2:{co2_state})"
     if in_cooldown:
-        reason += " [열풍기쿨다운]"
+        reason += " [실내히터쿨다운]"
 
     return {
         "sensor": sensor_str, "growth_stage": growth_stage,
@@ -512,11 +512,11 @@ def control_manual_environment(farm_id, house_id, growth_stage='생육기', orde
                 current_relay, harvest_mode, reason="비상제어", order_label=order_label
             )
 
-        # 열풍기 쿨다운 로깅
+        # 실내히터 쿨다운 로깅
         if action["in_cooldown"]:
-            logger.info(f"{scope}: 열풍기 쿨다운 중 (5분)")
+            logger.info(f"{scope}: 실내히터 쿨다운 중 (5분)")
             if action["devices"].get('indoor_heater_flag') is False:
-                logger.info(f"{scope}: 열풍기 쿨다운 → 열풍기 제외 제어")
+                logger.info(f"{scope}: 실내히터 쿨다운 → 실내히터 제외 제어")
 
         # 외부순환/64케이스 로깅
         if action["reason"] == "외부정상+내부비정상":

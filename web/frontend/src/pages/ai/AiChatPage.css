@@ -1,0 +1,33 @@
+/* ─────────────────────────────────────────────
+   AI Chat 페이지 전용 스타일
+   PC:     대화 컨테이너 높이 = 뷰포트 - 헤더(56px)
+   모바일: 대화 영역이 너무 길어지지 않도록 2/3만 사용
+   ───────────────────────────────────────────── */
+
+.ai-chat-container {
+    display: flex;
+    height: calc(100vh - 56px);
+    max-height: calc(100vh - 56px);
+}
+
+/* Bootstrap md breakpoint (≤768px): 스마트폰/작은 태블릿 */
+@media (max-width: 768px) {
+    .ai-chat-container {
+        height: calc((100vh - 56px) * 2 / 3) !important;
+        max-height: calc((100vh - 56px) * 2 / 3) !important;
+        min-height: 0 !important;
+    }
+
+    /* 내부 flex 자식(사이드바 + 대화영역)도 상한 강제 */
+    .ai-chat-container > * {
+        max-height: 100% !important;
+    }
+
+    /* 대화 영역(사이드바 옆 flex:1 컬럼)의 높이도 컨테이너로 제한 */
+    .ai-chat-container > div[style*="flex: 1"],
+    .ai-chat-container > div[style*="flex:1"] {
+        height: 100% !important;
+        max-height: 100% !important;
+        min-height: 0 !important;
+    }
+}
