@@ -34,6 +34,12 @@ from agri_ai_core.src.ai.tools_admin import (
     set_schedule,
     override_ai_thresholds,
 )
+# [Phase 4] Agent 모니터링 — schedule_monitor / list_monitors / cancel_monitor
+from agri_ai_core.src.ai.tools_agent import (
+    schedule_monitor,
+    list_monitors,
+    cancel_monitor,
+)
 
 logger = setup_logger(__name__)
 
@@ -159,11 +165,28 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
             )
 
         elif tool_name == "get_system_status":
-            # tools_data 에서 추가 구현 예정 (Phase 1-3)
             from agri_ai_core.src.ai.tools_data import get_system_status
             result = get_system_status(
                 farm_id=tool_args.get("farm_id"),
             )
+
+        # ─────── [Phase 4 Agent 모니터링] ───────
+        elif tool_name == "schedule_monitor":
+            result = schedule_monitor(
+                intent=tool_args.get("intent") or tool_args.get("purpose") or "모니터링",
+                start_time=tool_args.get("start_time"),
+                end_time=tool_args.get("end_time"),
+                interval_min=int(tool_args.get("interval_min", 30)),
+                house_ids=tool_args.get("house_ids"),
+                farm_id=tool_args.get("farm_id"),
+                alert_on_normal=bool(tool_args.get("alert_on_normal", False)),
+            )
+
+        elif tool_name == "list_monitors":
+            result = list_monitors()
+
+        elif tool_name == "cancel_monitor":
+            result = cancel_monitor(job_id=tool_args.get("job_id"))
 
         else:
             result = {

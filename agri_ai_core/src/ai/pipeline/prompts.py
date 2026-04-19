@@ -31,6 +31,9 @@ ANALYZER_SYSTEM_PROMPT = """당신은 질문 분석기입니다. 사용자 질�
 11. set_schedule — args: {"action":"list|add|delete","house_id":"N","unit_type":"light|water","start_time":"HH:MM","end_time":"HH:MM","interval_min":N,"farm_id":"N"} — 조명/관수 스케줄 관리.
 12. override_ai_thresholds — args: {"action":"get|set|reset","key":"TEMP_LOW 등","value":숫자} — AI 제어 임계값 조회/조정.
 13. get_system_status — args: {"farm_id":"N"} — 전체 시스템 상태(재배사별 제어모드/생육단계/AI루프/스케줄러) 조회. "시스템 상황 알려줘" 요청 시 필수.
+14. schedule_monitor — args: {"intent":"의도","start_time":"HH:MM","end_time":"HH:MM","interval_min":30,"house_ids":"1,2,3|all","farm_id":"N","alert_on_normal":false} — Agent 모니터링 Job 등록. "○시부터 ○시까지 ○분마다 감시/모니터링/지켜봐", "오늘 밤 재배사 봐줘" 등 시간 기반 관찰을 요청하면 반드시 호출. 이상 감지 시 채팅 알림 자동 발행.
+15. list_monitors — args: {} — 현재 등록된 Agent 모니터링 목록. "감시 뭐 돌고 있어?"류 질문.
+16. cancel_monitor — args: {"job_id":"agent_monitor_..."} — 특정 Agent 모니터링 취소.
 
 유형별 규칙:
 

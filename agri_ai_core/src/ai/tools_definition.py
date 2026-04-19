@@ -263,6 +263,29 @@ _ADMIN_TOOLS: List[Dict[str, Any]] = [
         "parameters": {"type": "object", "properties": {
             "farm_id": {"type": "string"}
         }}}},
+    # ─── [Phase 4] Agent 모니터링 도구 ───
+    {"type": "function", "function": {
+        "name": "schedule_monitor",
+        "description": "사용자가 지정한 시간대에 주기적으로 재배사를 감시하는 Agent 모니터링 Job을 등록합니다. 이상(온도·습도·CO2 임계 이탈) 감지 시 채팅 알림을 자동 발행합니다. 사용자가 '○시부터 ○시까지 ○분마다 감시해줘', '오늘 밤 재배사 모니터링해줘' 등 시간 기반 감시를 요청할 때 반드시 호출하세요. 스케줄 강제 제어가 아닌, 관찰+알림 기반 개입 방식입니다.",
+        "parameters": {"type": "object", "properties": {
+            "intent": {"type": "string", "description": "사용자 의도 한 줄 (알림 메시지에 포함, 예: '야간 저온 감시')"},
+            "start_time": {"type": "string", "description": "시작 시각 ('HH:MM' 또는 'YYYY-MM-DD HH:MM')"},
+            "end_time": {"type": "string", "description": "종료 시각"},
+            "interval_min": {"type": "integer", "description": "체크 주기 (분, 1~1440). 기본 30"},
+            "house_ids": {"type": "string", "description": "'1,2,3' 또는 'all'. 생략 시 전 재배사"},
+            "farm_id": {"type": "string"},
+            "alert_on_normal": {"type": "boolean", "description": "true면 정상 상태도 매 주기 알림. 기본 false (이상시만)"}
+        }, "required": ["intent", "start_time", "end_time", "interval_min"]}}},
+    {"type": "function", "function": {
+        "name": "list_monitors",
+        "description": "현재 등록된 Agent 모니터링 Job 목록을 조회합니다. 사용자가 '지금 어떤 감시가 돌아가고 있는지' 물으면 호출.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "cancel_monitor",
+        "description": "특정 Agent 모니터링 Job을 취소합니다. job_id는 list_monitors 결과에서 확보.",
+        "parameters": {"type": "object", "properties": {
+            "job_id": {"type": "string"}
+        }, "required": ["job_id"]}}},
 ]
 
 

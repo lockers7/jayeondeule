@@ -97,6 +97,8 @@ _VALID_TOOLS = {
     # [Phase 1] 관리 도구
     "set_house_control_mode", "set_growth_stage", "set_circulation_mode",
     "set_schedule", "override_ai_thresholds", "get_system_status",
+    # [Phase 4] Agent 모니터링 도구
+    "schedule_monitor", "list_monitors", "cancel_monitor",
 }
 
 

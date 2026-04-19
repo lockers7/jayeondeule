@@ -1,0 +1,256 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# Agent 모니터링 도구 — 사용자가 지시한 시간대에 주기적으로 재배사를 감시·알림.
+# APScheduler 동적 Job 등록으로 구현. in-memory (재시작 시 소멸; DB 영속화는 추후).
+# --->
+# schedule_monitor: 모니터링 Job 등록 (start/end/interval + house_ids + intent)
+# list_monitors:    현재 등록된 Agent 모니터링 Job 조회
+# cancel_monitor:   Job 취소
+# ══════════════════════════════════════════════════════════════════════════════
+import traceback
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
+
+from agri_ai_core.logs import setup_logger
+from agri_ai_core.src.ai.tools_utils import normalize_id as _normalize_id
+
+logger = setup_logger(__name__)
+
+_AGENT_JOB_PREFIX = "agent_monitor_"
+_AGENT_JOB_META: Dict[str, Dict[str, Any]] = {}  # job_id → {intent, start, end, houses, interval, created_at}
+
+
+def _parse_time(t: str, default_date: datetime = None) -> datetime:
+    """'22:00' | '2026-04-19 22:00' | ISO 형식 파싱."""
+    t = (t or "").strip()
+    if not t:
+        raise ValueError("시각이 비어있습니다")
+
+    # ISO 형식
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(t, fmt)
+        except ValueError:
+            continue
+
+    # HH:MM / H:MM — 오늘 기준
+    if ":" in t and len(t) <= 5:
+        h, m = map(int, t.split(":"))
+        now = default_date or datetime.now()
+        dt = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        # 이미 지난 시각이면 다음날
+        if dt < now:
+            dt += timedelta(days=1)
+        return dt
+
+    raise ValueError(f"시각 형식 인식 실패: {t}")
+
+
+def _monitor_job_run(
+    job_id: str,
+    farm_id: str,
+    house_ids: List[str],
+    intent: str,
+    alert_on_normal: bool = False,
+) -> None:
+    """APScheduler가 매 주기마다 호출하는 실행 함수. 센서 확인 + 이상시 알림 발행."""
+    from agri_ai_core.src.ai.tools_data import get_farm_realtime_data
+    from agri_ai_core.src.ai import alert_bus
+    from agri_ai_core.src.control.control_common import (
+        TEMP_LOW, TEMP_HIGH, TEMP_CRITICAL_LOW, TEMP_CRITICAL_HIGH,
+        HUMIDITY_LOW, HUMIDITY_HIGH, HUMIDITY_CRITICAL_LOW, HUMIDITY_CRITICAL_HIGH,
+        CO2_HIGH, CO2_CRITICAL_HIGH,
+    )
+
+    for hid in house_ids:
+        try:
+            data = get_farm_realtime_data(house_id=hid, farm_id=farm_id, data_type="sensor")
+            sensor = (data or {}).get("sensor") or {}
+            t = sensor.get("indoor_temperature")
+            h = sensor.get("indoor_humidity")
+            c = sensor.get("co2")
+
+            # 이상 판별
+            anomalies = []
+            if t is not None:
+                if t < TEMP_CRITICAL_LOW or t > TEMP_CRITICAL_HIGH:
+                    anomalies.append(("critical", f"온도 비상: {t}℃"))
+                elif t < TEMP_LOW or t > TEMP_HIGH:
+                    anomalies.append(("warning", f"온도 정상범위 이탈: {t}℃"))
+            if h is not None:
+                if h < HUMIDITY_CRITICAL_LOW or h > HUMIDITY_CRITICAL_HIGH:
+                    anomalies.append(("critical", f"습도 비상: {h}%"))
+                elif h < HUMIDITY_LOW or h > HUMIDITY_HIGH:
+                    anomalies.append(("warning", f"습도 정상범위 이탈: {h}%"))
+            if c is not None:
+                if c > CO2_CRITICAL_HIGH:
+                    anomalies.append(("critical", f"CO2 비상: {c}ppm"))
+                elif c > CO2_HIGH:
+                    anomalies.append(("warning", f"CO2 정상범위 이탈: {c}ppm"))
+
+            if anomalies:
+                # 가장 심각한 레벨로 발행
+                level = "critical" if any(a[0] == "critical" for a in anomalies) else "warning"
+                msg = " / ".join(a[1] for a in anomalies)
+                alert_bus.publish(
+                    level=level, category="agent_monitor",
+                    farm_id=farm_id, house_id=hid,
+                    title=f"[Agent] {hid}호 이상 감지",
+                    message=f"{intent} → {msg}",
+                    data={"job_id": job_id, "sensor": sensor, "anomalies": anomalies},
+                )
+            elif alert_on_normal:
+                alert_bus.publish(
+                    level="info", category="agent_monitor",
+                    farm_id=farm_id, house_id=hid,
+                    title=f"[Agent] {hid}호 정상",
+                    message=f"{intent} → 온도 {t}℃ · 습도 {h}% · CO2 {c}ppm (정상)",
+                    data={"job_id": job_id, "sensor": sensor},
+                )
+        except Exception as e:
+            logger.error(f"[Agent] 모니터링 실행 오류 house={hid}: {e}\n{traceback.format_exc()}")
+
+
+def schedule_monitor(
+    intent: str,
+    start_time: str,
+    end_time: str,
+    interval_min: int,
+    house_ids: Any = None,
+    farm_id: str = None,
+    alert_on_normal: bool = False,
+) -> Dict[str, Any]:
+    """사용자 지정 시간대에 주기적 센서 감시+알림 Job 등록.
+
+    Args:
+        intent: 사용자 의도 한 줄 (알림에 포함)
+        start_time: 시작 시각 ('HH:MM' | 'YYYY-MM-DD HH:MM' | ISO)
+        end_time: 종료 시각
+        interval_min: 주기(분). 최소 1분, 최대 1440분(24시간)
+        house_ids: ['1','2','3'] 또는 'all'
+        farm_id: 농장 ID
+        alert_on_normal: True면 이상 없을 때도 매 주기 정상 상태 알림 발행
+
+    Returns:
+        {success, job_id, start, end, interval_min, houses, intent}
+    """
+    from agri_ai_core.src.control.task_scheduler import add_job
+    from apscheduler.triggers.interval import IntervalTrigger
+
+    if not intent:
+        intent = "모니터링"
+
+    try:
+        start_dt = _parse_time(start_time)
+        end_dt = _parse_time(end_time, default_date=start_dt)
+        if end_dt <= start_dt:
+            # 종료가 더 작으면 다음날
+            end_dt += timedelta(days=1)
+
+        if interval_min < 1 or interval_min > 1440:
+            return {"success": False, "error": "interval_min은 1~1440 범위여야 합니다"}
+
+        # house_ids 정규화
+        if isinstance(house_ids, str):
+            s = house_ids.strip().lower()
+            if s == "all" or s == "전체":
+                houses = ["1", "2", "3"]
+            else:
+                houses = [x.strip() for x in house_ids.split(",") if x.strip()]
+        elif isinstance(house_ids, list):
+            houses = [str(x) for x in house_ids]
+        else:
+            houses = ["1", "2", "3"]  # 기본 전체
+
+        target_farm = _normalize_id(farm_id) or "1"
+
+        job_id = f"{_AGENT_JOB_PREFIX}{int(datetime.now().timestamp() * 1000)}"
+
+        # Closure 로 인자 바인딩
+        def _runner(_job_id=job_id, _farm=target_farm, _houses=houses,
+                    _intent=intent, _aon=alert_on_normal):
+            _monitor_job_run(_job_id, _farm, _houses, _intent, _aon)
+
+        # APScheduler 동적 등록
+        trigger = IntervalTrigger(
+            minutes=interval_min,
+            start_date=start_dt,
+            end_date=end_dt,
+        )
+        from agri_ai_core.src.control.task_scheduler import _scheduler
+        if _scheduler is None:
+            return {"success": False, "error": "스케줄러가 초기화되지 않았습니다 (FastAPI 재시작 필요)"}
+
+        _scheduler.add_job(_runner, trigger=trigger, id=job_id, replace_existing=True)
+
+        _AGENT_JOB_META[job_id] = {
+            "intent": intent,
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+            "interval_min": interval_min,
+            "houses": houses,
+            "farm_id": target_farm,
+            "alert_on_normal": alert_on_normal,
+            "created_at": datetime.now().isoformat(),
+        }
+
+        logger.info(
+            f"[Agent] 모니터링 Job 등록: {job_id} "
+            f"{start_dt}~{end_dt} {interval_min}분 houses={houses} intent='{intent}'"
+        )
+
+        # 시작 직후 1회 즉시 실행 (즉각 피드백용)
+        try:
+            _monitor_job_run(job_id, target_farm, houses, f"{intent} (즉시실행)", alert_on_normal=True)
+        except Exception:
+            pass
+
+        return {
+            "success": True,
+            "job_id": job_id,
+            "start": start_dt.isoformat(),
+            "end": end_dt.isoformat(),
+            "interval_min": interval_min,
+            "houses": houses,
+            "intent": intent,
+            "message": f"{start_dt.strftime('%H:%M')}~{end_dt.strftime('%H:%M')} 사이 {interval_min}분마다 "
+                       f"{','.join(houses)}호 감시. 이상 감지 시 채팅에 알림 전송. 즉시 초기 점검 1회 실행.",
+        }
+
+    except Exception as e:
+        logger.error(f"[Agent] schedule_monitor 오류: {e}\n{traceback.format_exc()}")
+        return {"success": False, "error": str(e)}
+
+
+def list_monitors() -> Dict[str, Any]:
+    """현재 등록된 Agent 모니터링 Job 목록 조회."""
+    from agri_ai_core.src.control.task_scheduler import _scheduler
+    if _scheduler is None:
+        return {"success": False, "error": "스케줄러 미초기화"}
+
+    active = []
+    for j in _scheduler.get_jobs():
+        if j.id.startswith(_AGENT_JOB_PREFIX):
+            meta = _AGENT_JOB_META.get(j.id, {})
+            active.append({
+                "job_id": j.id,
+                "next_run": j.next_run_time.isoformat() if j.next_run_time else None,
+                **meta,
+            })
+    return {"success": True, "monitors": active, "count": len(active)}
+
+
+def cancel_monitor(job_id: str) -> Dict[str, Any]:
+    """특정 모니터링 Job 취소."""
+    from agri_ai_core.src.control.task_scheduler import _scheduler
+    if _scheduler is None:
+        return {"success": False, "error": "스케줄러 미초기화"}
+    try:
+        existing = _scheduler.get_job(job_id)
+        if not existing:
+            return {"success": False, "error": f"Job 없음: {job_id}"}
+        _scheduler.remove_job(job_id)
+        _AGENT_JOB_META.pop(job_id, None)
+        logger.info(f"[Agent] 모니터링 Job 취소: {job_id}")
+        return {"success": True, "cancelled": job_id}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
