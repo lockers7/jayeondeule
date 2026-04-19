@@ -23,6 +23,7 @@
 import json
 import os
 import time
+from typing import Optional
 from contextlib import asynccontextmanager
 import uuid
 
@@ -204,6 +205,14 @@ async def lifespan(app: FastAPI):
     from agri_ai_core.startup import initialize_app, shutdown_app
     initialize_app()
 
+    # [Phase 3] 알림 버스에 이벤트 루프 바인딩 (sync 스레드 → SSE 브리지)
+    try:
+        import asyncio as _asyncio
+        from agri_ai_core.src.ai import alert_bus as _alert_bus
+        _alert_bus.bind_event_loop(_asyncio.get_running_loop())
+    except Exception as _e:
+        logger.warning("[alert_bus] 이벤트 루프 바인딩 실패: %s", _e)
+
     yield
 
     # 애플리케이션 종료 처리
@@ -324,6 +333,65 @@ async def geo_location(request: Request):
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# [Phase 3] Proactive 알림 — SSE 스트림 + 최근 알림 조회
+# ═════════════════════════════════════════════════════════════════════════════
+@app.get("/api/v1/alerts/recent")
+async def alerts_recent(limit: int = 50, level: Optional[str] = None):
+    """최근 알림 목록 (신규 구독자가 놓친 이벤트 확인용)."""
+    from agri_ai_core.src.ai import alert_bus
+    return {"alerts": alert_bus.get_recent(limit=limit, level=level)}
+
+
+@app.post("/api/v1/alerts/publish")
+async def alerts_publish(request: Request):
+    """운영/디버그용 — 알림을 수동 발행. 주로 Phase 3 통합 테스트에 사용.
+    body: {level, category, farm_id, house_id, title, message, data?}
+    """
+    from agri_ai_core.src.ai import alert_bus
+    body = await request.json()
+    evt = alert_bus.publish(
+        level=body.get("level", "info"),
+        category=body.get("category", "manual"),
+        farm_id=body.get("farm_id"),
+        house_id=body.get("house_id"),
+        title=body.get("title", "알림"),
+        message=body.get("message", ""),
+        data=body.get("data"),
+    )
+    return {"success": True, "event": evt}
+
+
+@app.get("/api/v1/alerts/stream")
+async def alerts_stream():
+    """SSE: AI 순환 루프 이상 감지 이벤트를 실시간 스트림."""
+    import asyncio as _asyncio
+    import json as _json
+    from fastapi.responses import StreamingResponse
+    from agri_ai_core.src.ai import alert_bus
+
+    queue = alert_bus.subscribe(maxsize=100)
+
+    async def _event_gen():
+        try:
+            # 초기 메시지
+            yield f"event: connected\ndata: {_json.dumps({'timestamp': datetime.now().isoformat()})}\n\n"
+            while True:
+                try:
+                    evt = await _asyncio.wait_for(queue.get(), timeout=25.0)
+                    yield f"event: alert\ndata: {_json.dumps(evt, ensure_ascii=False)}\n\n"
+                except _asyncio.TimeoutError:
+                    # keep-alive 핑
+                    yield ": ping\n\n"
+        finally:
+            alert_bus.unsubscribe(queue)
+
+    return StreamingResponse(_event_gen(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    })
 
 
 @app.get("/api/v1/ai-judgment/{farm_id}/{house_id}")
