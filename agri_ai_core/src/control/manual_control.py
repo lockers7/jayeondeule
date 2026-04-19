@@ -323,6 +323,19 @@ def _handle_ai_emergency(farm_id, house_id, growth_stage, order_label=""):
             emergency_devices.get('water_heater_flag', False),
             current_relay, harvest_mode, order_label=order_label
         )
+        # [Phase 3] 수온 비상 알림 발행
+        try:
+            from agri_ai_core.src.ai import alert_bus as _ab
+            _ab.publish(
+                level="warning", category="water",
+                farm_id=farm_id, house_id=house_id,
+                title=f"수온 비상 제어 ({house_id}호)",
+                message=f"수온 {sensor_data.get('water_temperature','?')}℃ → 수온히터 "
+                        f"{'ON' if emergency_devices.get('water_heater_flag') else 'OFF'} 자동 적용",
+                data={"sensor": sensor_data, "water_heater": bool(emergency_devices.get('water_heater_flag'))},
+            )
+        except Exception:
+            pass
     else:
         if emergency_devices.get('indoor_heater_flag', False):
             _reset_heater_cooldown(farm_id, house_id, order_label=order_label)
@@ -331,6 +344,22 @@ def _handle_ai_emergency(farm_id, house_id, growth_stage, order_label=""):
             farm_id, house_id, emergency_devices, emergency_circulation,
             current_relay, harvest_mode, reason="AI모드_비상제어", order_label=order_label
         )
+        # [Phase 3] 비상제어 알림 발행
+        try:
+            from agri_ai_core.src.ai import alert_bus as _ab
+            indoor_temp = sensor_data.get('indoor_temperature')
+            indoor_hum = sensor_data.get('indoor_humidity')
+            co2 = sensor_data.get('co2')
+            _ab.publish(
+                level="critical", category="control",
+                farm_id=farm_id, house_id=house_id,
+                title=f"비상 제어 발동 ({house_id}호)",
+                message=(f"센서: 온도 {indoor_temp}℃ · 습도 {indoor_hum}% · CO2 {co2}ppm → "
+                         f"순환={emergency_circulation}, 강제장치={format_device_decision(emergency_devices)}"),
+                data={"sensor": sensor_data, "devices": emergency_devices, "circulation": emergency_circulation},
+            )
+        except Exception:
+            pass
     return result, True
 
 
