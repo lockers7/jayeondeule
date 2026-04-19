@@ -16,6 +16,12 @@
         "/workspace/jayeondeule"
       ]
     },
+    "web-search": {
+      "command": "node",
+      "args": [
+        "/workspace/jayeondeule/.mcp/web-search/build/index.js"
+      ]
+    },
     "fetch": {
       "command": "npx",
       "args": [
@@ -23,45 +29,42 @@
         "@kazuph/mcp-fetch"
       ]
     },
-    "searxng": {
+    "brave-search": {
       "command": "npx",
       "args": [
         "-y",
-        "mcp-searxng"
+        "@modelcontextprotocol/server-brave-search"
       ],
       "env": {
-        "SEARXNG_URL": "http://127.0.0.1:8888"
+        "BRAVE_API_KEY": "${BRAVE_SEARCH_API_KEY}"
       }
     },
-    "naver-search": {
+    "tavily": {
       "command": "npx",
       "args": [
         "-y",
-        "@isnow890/naver-search-mcp"
+        "tavily-mcp"
       ],
       "env": {
-        "NAVER_CLIENT_ID": "${NAVER_CLIENT_ID}",
-        "NAVER_CLIENT_SECRET": "${NAVER_CLIENT_SECRET}"
+        "TAVILY_API_KEY": "${TAVILY_API_KEY}"
       }
     },
-    "paper-search": {
-      "command": "uvx",
+    "exa": {
+      "command": "npx",
       "args": [
-        "--from",
-        "git+https://github.com/openags/paper-search-mcp",
-        "paper-search-mcp"
+        "-y",
+        "exa-mcp-server"
+      ],
+      "env": {
+        "EXA_API_KEY": "${EXA_API_KEY}"
+      }
+    },
+    "ddg-web-search": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@zhafron/mcp-web-search"
       ]
-    },
-    "korea-weather": {
-      "command": "uvx",
-      "args": [
-        "--from",
-        "git+https://github.com/ohhan777/korea_weather.git",
-        "korea_weather"
-      ],
-      "env": {
-        "KOREA_WEATHER_API_KEY": "${KOREA_WEATHER_API_KEY}"
-      }
     }
   }
 }

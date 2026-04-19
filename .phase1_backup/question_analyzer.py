@@ -94,9 +94,6 @@ _VALID_TYPES = {
 _VALID_TOOLS = {
     "search_web", "fetch_url_content", "get_farm_realtime_data",
     "search_farm_knowledge", "control_relay", "delete_farm_knowledge", "search_gas_price",
-    # [Phase 1] 관리 도구
-    "set_house_control_mode", "set_growth_stage", "set_circulation_mode",
-    "set_schedule", "override_ai_thresholds", "get_system_status",
 }
 
 

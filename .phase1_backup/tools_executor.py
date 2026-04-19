@@ -26,14 +26,6 @@ from agri_ai_core.src.ai.tools_control import (
 )
 from agri_ai_core.src.ai.tools_search import search_web, fetch_url_content
 from agri_ai_core.src.ai.opinet_tools import search_gas_price
-# [Phase 1] 관리 도구 — 제어 모드/생육단계/순환모드/스케줄/임계값/시스템상태
-from agri_ai_core.src.ai.tools_admin import (
-    set_house_control_mode,
-    set_growth_stage,
-    set_circulation_mode,
-    set_schedule,
-    override_ai_thresholds,
-)
 
 logger = setup_logger(__name__)
 
@@ -114,55 +106,6 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
                 sigun=tool_args.get("sigun"),
                 prodcd=tool_args.get("prodcd", "B027"),
                 fuel_name=tool_args.get("fuel_name"),
-            )
-
-        # ─────── [Phase 1 신규 관리 도구] ───────
-        elif tool_name == "set_house_control_mode":
-            result = set_house_control_mode(
-                house_id=tool_args.get("house_id"),
-                mode=tool_args.get("mode"),
-                farm_id=tool_args.get("farm_id"),
-            )
-
-        elif tool_name == "set_growth_stage":
-            result = set_growth_stage(
-                house_id=tool_args.get("house_id"),
-                stage=tool_args.get("stage"),
-                farm_id=tool_args.get("farm_id"),
-            )
-
-        elif tool_name == "set_circulation_mode":
-            result = set_circulation_mode(
-                house_id=tool_args.get("house_id"),
-                mode=tool_args.get("mode"),
-                farm_id=tool_args.get("farm_id"),
-            )
-
-        elif tool_name == "set_schedule":
-            result = set_schedule(
-                action=tool_args.get("action", "list"),
-                house_id=tool_args.get("house_id"),
-                unit_type=tool_args.get("unit_type", "light"),
-                start_time=tool_args.get("start_time"),
-                end_time=tool_args.get("end_time"),
-                interval_min=tool_args.get("interval_min"),
-                weekdays=tool_args.get("weekdays"),
-                excs_type=tool_args.get("excs_type", "daily"),
-                farm_id=tool_args.get("farm_id"),
-            )
-
-        elif tool_name == "override_ai_thresholds":
-            result = override_ai_thresholds(
-                action=tool_args.get("action", "get"),
-                key=tool_args.get("key"),
-                value=tool_args.get("value"),
-            )
-
-        elif tool_name == "get_system_status":
-            # tools_data 에서 추가 구현 예정 (Phase 1-3)
-            from agri_ai_core.src.ai.tools_data import get_system_status
-            result = get_system_status(
-                farm_id=tool_args.get("farm_id"),
             )
 
         else:
