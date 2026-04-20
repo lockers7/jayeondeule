@@ -195,6 +195,35 @@ def _daily_log_cleanup():
         logger.error(f"[스케줄] 일일 로그 정리 실패: {e}")
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# [Wave 11] PostgreSQL 커넥션 풀 상태 주기 로깅 (기본 5분)
+# 사용률 경고 임계(기본 80%) 초과 시 WARNING 레벨, 정상은 INFO.
+# ═══════════════════════════════════════════════════════════════════════════
+def _pg_pool_heartbeat():
+    try:
+        from agri_ai_core.src.postgresql.connection import db as _db
+        stats = _db.get_pool_stats()
+        if not stats.get("initialized"):
+            return   # 아직 풀 없음 (쿼리 발생 전) — 조용히 skip
+        in_use = stats.get("in_use")
+        idle = stats.get("idle")
+        pmax = stats.get("max") or 0
+        if in_use is not None and pmax > 0:
+            util = in_use / pmax
+            msg = (f"[PG_POOL] in_use={in_use} idle={idle} "
+                   f"min={stats.get('min')} max={pmax} "
+                   f"util={util*100:.0f}%")
+            if util >= 0.8:
+                logger.warning(msg + " (80% 초과 — 풀 확장 검토)")
+            else:
+                logger.info(msg)
+        else:
+            logger.info(f"[PG_POOL] min={stats.get('min')} max={pmax} "
+                         f"(in_use/idle 측정 불가 — psycopg2 내부 접근 실패)")
+    except Exception as e:
+        logger.debug(f"[PG_POOL] 하트비트 실패: {e}")
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # 매일 03:00에 실행 — farm_knowledge 컬렉션에서 180일 이상 된 오래된 청크 삭제
 # ════════════════════════════════════════════════════════════════════════════
@@ -312,6 +341,18 @@ def setup_default_jobs(learning_func=None, stats_func=None,
             hour=0,
             minute=0
         )
+
+        # [Wave 11] PostgreSQL 커넥션 풀 상태 주기 로그 (기본 5분)
+        # 운영 중 풀 고갈·커넥션 누수 조기 감지. PGDB_POOL_HEARTBEAT_MIN=0 이면 비활성.
+        import os as _os
+        _pg_hb_min = int(_os.getenv("PGDB_POOL_HEARTBEAT_MIN", "5") or 0)
+        if _pg_hb_min > 0:
+            add_job(
+                job_id="pg_pool_heartbeat",
+                func=_pg_pool_heartbeat,
+                trigger_type="interval",
+                minutes=_pg_hb_min,
+            )
 
         # 청크 정리 작업 (매일 03:00)
         # farm_knowledge 컬렉션에서 180일 이상 오래된 데이터 삭제

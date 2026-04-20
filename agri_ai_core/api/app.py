@@ -374,23 +374,40 @@ async def alerts_publish(request: Request):
 
 
 @app.get("/api/v1/alerts/stream")
-async def alerts_stream():
-    """SSE: AI 순환 루프 이상 감지 이벤트를 실시간 스트림."""
+async def alerts_stream(request: Request):
+    """SSE: AI 순환 루프 이상 감지 이벤트를 실시간 스트림.
+
+    [Wave 10] 개선:
+    - Last-Event-ID 헤더 지원: 재연결 시 놓친 이벤트 복원
+    - 각 이벤트에 id: 필드 첨부 (SSE 표준 자동 재연결용)
+    """
     import asyncio as _asyncio
     import json as _json
     from fastapi.responses import StreamingResponse
     from agri_ai_core.src.ai import alert_bus
 
+    last_event_id = request.headers.get("last-event-id") or request.query_params.get("last_event_id")
     queue = alert_bus.subscribe(maxsize=100)
 
     async def _event_gen():
         try:
             # 초기 메시지
             yield f"event: connected\ndata: {_json.dumps({'timestamp': datetime.now().isoformat()})}\n\n"
+
+            # [Wave 10] 재연결 시 Last-Event-ID 이후 이벤트 즉시 복원
+            if last_event_id:
+                replay = alert_bus.get_events_since(last_event_id, max_items=50)
+                for evt in replay:
+                    eid = evt.get("id", "")
+                    yield f"id: {eid}\nevent: alert\ndata: {_json.dumps(evt, ensure_ascii=False)}\n\n"
+                if replay:
+                    logger.info("[alerts_stream] Last-Event-ID=%s 이후 %d건 복원", last_event_id, len(replay))
+
             while True:
                 try:
                     evt = await _asyncio.wait_for(queue.get(), timeout=25.0)
-                    yield f"event: alert\ndata: {_json.dumps(evt, ensure_ascii=False)}\n\n"
+                    eid = evt.get("id", "")
+                    yield f"id: {eid}\nevent: alert\ndata: {_json.dumps(evt, ensure_ascii=False)}\n\n"
                 except _asyncio.TimeoutError:
                     # keep-alive 핑
                     yield ": ping\n\n"
@@ -401,6 +418,21 @@ async def alerts_stream():
         "Cache-Control": "no-cache",
         "X-Accel-Buffering": "no",
     })
+
+
+@app.get("/api/v1/alerts/stats")
+async def alerts_stats():
+    """alert_bus 관측성 통계 (published/dropped/subscribers/buffer_size)."""
+    from agri_ai_core.src.ai import alert_bus
+    return {"success": True, **alert_bus.get_stats()}
+
+
+@app.get("/api/v1/system/pg_pool")
+async def pg_pool_stats():
+    """[Wave 11] PostgreSQL 커넥션 풀 실시간 상태 (min/max/in_use/idle)."""
+    from agri_ai_core.src.postgresql.connection import db as _db
+    stats = _db.get_pool_stats()
+    return {"success": True, **stats}
 
 
 @app.get("/api/v1/ai-judgment/{farm_id}/{house_id}")

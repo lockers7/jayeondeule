@@ -158,21 +158,30 @@ def restore_active_jobs() -> int:
                 "ORDER BY start_dttm",
                 as_dict=True,
             )
+        now = datetime.now()
         for r in rows or []:
             try:
                 # houses 가 JSONB → psycopg2 가 list 로 자동 파싱
                 houses = r.get("houses") or []
                 if isinstance(houses, str):
                     houses = json.loads(houses)
+                start_dt = r["start_dttm"]
+                interval_min = int(r["interval_min"])
+                # [Wave 9] 재시작 gap 동안 놓친 tick 이 있는지 판정
+                # 조건: Job 시작 시각이 이미 지났고, gap 이 interval 의 1.0배 이상이면
+                #       최소 1회 tick 이 누락된 것으로 간주하고 복원 직후 1회 즉시 실행
+                missed = (start_dt <= now
+                          and (now - start_dt).total_seconds() >= interval_min * 60)
                 _reregister_job(
                     job_id=r["job_id"],
                     farm_id=str(r["farm_id"]),
                     intent=r.get("intent") or "모니터링",
-                    start_dt=r["start_dttm"],
+                    start_dt=start_dt,
                     end_dt=r["end_dttm"],
-                    interval_min=int(r["interval_min"]),
+                    interval_min=interval_min,
                     houses=[str(h) for h in houses],
                     alert_on_normal=bool(r.get("alert_on_normal")),
+                    fire_once_now=missed,
                 )
                 restored += 1
             except Exception as e:
@@ -186,8 +195,10 @@ def restore_active_jobs() -> int:
 
 def _reregister_job(job_id: str, farm_id: str, intent: str,
                       start_dt: datetime, end_dt: datetime,
-                      interval_min: int, houses: list, alert_on_normal: bool) -> None:
-    """APScheduler 에 Job 을 등록하고 _AGENT_JOB_META 에 메타데이터 캐시."""
+                      interval_min: int, houses: list, alert_on_normal: bool,
+                      fire_once_now: bool = False) -> None:
+    """APScheduler 에 Job 을 등록하고 _AGENT_JOB_META 에 메타데이터 캐시.
+    fire_once_now=True 면 놓친 tick 보완 목적으로 복원 직후 1회 즉시 실행 (별도 스레드)."""
     from apscheduler.triggers.interval import IntervalTrigger
     from agri_ai_core.src.control.task_scheduler import _scheduler
     if _scheduler is None:
@@ -216,6 +227,19 @@ def _reregister_job(job_id: str, farm_id: str, intent: str,
         "alert_on_normal": alert_on_normal,
         "created_at": datetime.now().isoformat(),
     }
+
+    # [Wave 9] 놓친 tick 보완: 복원 직후 1회 즉시 실행 (별도 스레드)
+    # alert_on_normal 은 원본 설정 유지 → 이상 없으면 알림도 없음 (소음 없음)
+    if fire_once_now:
+        def _gap_catchup():
+            try:
+                _monitor_job_run(job_id, farm_id, list(houses),
+                                  f"{intent} (재시작 gap 보완)", alert_on_normal)
+            except Exception as _e:
+                logger.error(f"[Agent] gap catchup 실행 오류 ({job_id}): {_e}")
+        threading.Thread(target=_gap_catchup, daemon=True,
+                          name=f"agent-gap-catchup-{job_id}").start()
+        logger.info(f"[Agent] Job {job_id} 놓친 tick 감지 → 복원 직후 즉시 1회 실행 스레드 시작")
 
 
 def _monitor_job_run(

@@ -174,20 +174,55 @@ class DatabaseHandler:
             if self._pool is not None:
                 return True
             try:
+                # [Wave 11] min/max 커넥션 수를 환경변수로 노출 — 운영 환경 튜닝
+                minconn = self._safe_positive_int(os.getenv("PGDB_POOL_MIN"), default=1)
+                maxconn = self._safe_positive_int(os.getenv("PGDB_POOL_MAX"), default=5)
+                if minconn > maxconn:
+                    minconn = maxconn
                 self._pool = ThreadedConnectionPool(
-                    minconn=1,
-                    maxconn=5,
+                    minconn=minconn,
+                    maxconn=maxconn,
                     host=self.HOST,
                     port=self.PORT,
                     database=self.DATABASE,
                     user=self.USER,
                     password=self.PASSWORD,
                 )
-                self.logger.info("DB 커넥션 풀 초기화 완료 (minconn=1, maxconn=5)")
+                self._pool_min = minconn
+                self._pool_max = maxconn
+                self.logger.info(f"DB 커넥션 풀 초기화 완료 (minconn={minconn}, maxconn={maxconn})")
                 return True
             except Exception as e:
                 self.logger.error(f"DB 커넥션 풀 초기화 실패: {e}")
                 return False
+
+    # [Wave 11] 커넥션 풀 관측성
+    def get_pool_stats(self) -> dict:
+        """현재 풀 사용 상태 스냅샷.
+        ThreadedConnectionPool 내부 자료구조를 직접 읽어야 하는데 공식 API 가 없어
+        접근 가능한 속성을 best-effort 로 추출. 실패해도 기본 metadata 반환."""
+        if self._pool is None:
+            return {"initialized": False, "min": getattr(self, "_pool_min", 1),
+                    "max": getattr(self, "_pool_max", 5),
+                    "in_use": None, "idle": None}
+        info = {
+            "initialized": True,
+            "min": getattr(self, "_pool_min", 1),
+            "max": getattr(self, "_pool_max", 5),
+            "in_use": None, "idle": None,
+        }
+        # psycopg2 ThreadedConnectionPool 내부 속성 (private, 안전하게 try)
+        try:
+            pool = self._pool
+            used = getattr(pool, "_used", None)
+            free = getattr(pool, "_pool", None)
+            if used is not None:
+                info["in_use"] = len(used)
+            if free is not None:
+                info["idle"] = len(free)
+        except Exception:
+            pass
+        return info
 
     # ============================================================
     # 풀에서 커넥션 획득

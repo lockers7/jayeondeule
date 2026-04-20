@@ -26,6 +26,14 @@ _subscribers: Set[asyncio.Queue] = set()
 _lock = threading.Lock()
 _loop_ref: Optional[asyncio.AbstractEventLoop] = None  # FastAPI 이벤트 루프 참조
 
+# [Wave 10] SSE 백프레셔/드롭 통계 — 관측성 목적
+_stats = {
+    "published": 0,
+    "dropped_queue_full": 0,   # 구독자 Queue 만석으로 drop 된 이벤트 수
+    "subscribers_total_registered": 0,
+}
+_stats_lock = threading.Lock()
+
 # [E2] 영속 로깅 — alert_l_log 테이블 자동 생성 + DB 기록 (실패 시 조용히 삼켜
 # 메모리 버퍼 경로는 그대로 유지. 기존 프로세스 훼손 금지 원칙 준수).
 _PERSIST_ENABLED = os.getenv("ALERT_BUS_PERSIST", "1") not in ("0", "false", "False")
@@ -79,6 +87,8 @@ def publish(
     with _lock:
         _buffer.append(evt)
         subs = list(_subscribers)
+    with _stats_lock:
+        _stats["published"] += 1
 
     # [E2] 영속 DB 로깅 (warning 이상). 실패해도 기존 경로 영향 없음.
     _persist_event(evt)
@@ -105,10 +115,12 @@ def _safe_put(queue: asyncio.Queue, evt: Dict[str, Any]) -> None:
     try:
         queue.put_nowait(evt)
     except asyncio.QueueFull:
-        # 만석이면 가장 오래된 것 제거 후 삽입
+        # 만석이면 가장 오래된 것 제거 후 삽입 + 드롭 카운트
         try:
             queue.get_nowait()
             queue.put_nowait(evt)
+            with _stats_lock:
+                _stats["dropped_queue_full"] += 1
         except Exception:
             pass
 
@@ -195,8 +207,40 @@ def subscribe(maxsize: int = 100) -> asyncio.Queue:
     q: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
     with _lock:
         _subscribers.add(q)
+    with _stats_lock:
+        _stats["subscribers_total_registered"] += 1
     logger.info(f"[alert_bus] 구독자 등록 (현재 {len(_subscribers)}명)")
     return q
+
+
+# [Wave 10] SSE 재연결 지원 — Last-Event-ID 이후 이벤트 복원
+def get_events_since(last_event_id: Optional[str], max_items: int = 50) -> List[Dict[str, Any]]:
+    """주어진 event_id 이후의 이벤트들을 메모리 ring buffer 에서 복원.
+    last_event_id 가 None 이거나 버퍼에서 못 찾으면 빈 리스트 반환.
+    SSE 클라이언트 재연결 시 Last-Event-ID 헤더 값을 그대로 넘겨 받아 사용."""
+    if not last_event_id:
+        return []
+    with _lock:
+        items = list(_buffer)
+    # id 가 일치하는 지점을 찾고 그 뒤부터 반환
+    found_idx = None
+    for i, evt in enumerate(items):
+        if evt.get("id") == last_event_id:
+            found_idx = i
+            break
+    if found_idx is None:
+        return []
+    return items[found_idx + 1:][:max_items]
+
+
+def get_stats() -> Dict[str, Any]:
+    """관측성용 통계 스냅샷 반환."""
+    with _stats_lock:
+        snap = dict(_stats)
+    with _lock:
+        snap["active_subscribers"] = len(_subscribers)
+        snap["buffer_size"] = len(_buffer)
+    return snap
 
 
 def unsubscribe(queue: asyncio.Queue) -> None:
