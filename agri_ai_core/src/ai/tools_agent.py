@@ -1,11 +1,17 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # Agent 모니터링 도구 — 사용자가 지시한 시간대에 주기적으로 재배사를 감시·알림.
-# APScheduler 동적 Job 등록으로 구현. in-memory (재시작 시 소멸; DB 영속화는 추후).
+# APScheduler 동적 Job 등록 + DB(agent_monitor_m_job) 영속화 하이브리드.
 # --->
 # schedule_monitor: 모니터링 Job 등록 (start/end/interval + house_ids + intent)
 # list_monitors:    현재 등록된 Agent 모니터링 Job 조회
 # cancel_monitor:   Job 취소
+# restore_active_jobs: 서비스 시작 시 DB 로부터 active Job 재등록
+# _ensure_agent_job_table:  agent_monitor_m_job 테이블 lazy CREATE IF NOT EXISTS
+# _persist_agent_job: Job 등록 시 DB INSERT (메모리 meta 와 이중화)
+# _mark_agent_job_cancelled: Job 취소 시 DB UPDATE cancelled_at
 # ══════════════════════════════════════════════════════════════════════════════
+import json
+import threading
 import traceback
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -20,6 +26,27 @@ logger = setup_logger(__name__)
 
 _AGENT_JOB_PREFIX = "agent_monitor_"
 _AGENT_JOB_META: Dict[str, Dict[str, Any]] = {}  # job_id → {intent, start, end, houses, interval, created_at}
+
+# [Wave 7] DB 영속화 — alert_l_log 와 동일한 lazy CREATE 패턴 사용
+_agent_table_ready = False
+_agent_table_lock = threading.Lock()
+
+_CREATE_AGENT_JOB_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS agent_monitor_m_job (
+    job_id          VARCHAR(64) PRIMARY KEY,
+    farm_id         VARCHAR(32) NOT NULL,
+    intent          TEXT,
+    start_dttm      TIMESTAMP NOT NULL,
+    end_dttm        TIMESTAMP NOT NULL,
+    interval_min    INTEGER NOT NULL,
+    houses          JSONB NOT NULL,
+    alert_on_normal BOOLEAN DEFAULT FALSE,
+    created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+    cancelled_at    TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_job_active
+    ON agent_monitor_m_job(end_dttm, cancelled_at);
+"""
 
 
 def _parse_time(t: str, default_date: datetime = None) -> datetime:
@@ -46,6 +73,149 @@ def _parse_time(t: str, default_date: datetime = None) -> datetime:
         return dt
 
     raise ValueError(f"시각 형식 인식 실패: {t}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# [Wave 7] DB 영속화 헬퍼 — agent_monitor_m_job 테이블
+# ═══════════════════════════════════════════════════════════════════════════
+def _ensure_agent_job_table() -> bool:
+    """agent_monitor_m_job 테이블 lazy CREATE. 실패해도 in-memory 경로는 유지."""
+    global _agent_table_ready
+    if _agent_table_ready:
+        return True
+    with _agent_table_lock:
+        if _agent_table_ready:
+            return True
+        try:
+            from agri_ai_core.src.postgresql.connection import db_session
+            with db_session() as db:
+                db.execute_query(_CREATE_AGENT_JOB_TABLE_SQL, ())
+            _agent_table_ready = True
+            logger.info("[Agent] agent_monitor_m_job 영속 테이블 준비 완료")
+            return True
+        except Exception as e:
+            logger.warning(f"[Agent] 테이블 준비 실패 (in-memory 만 사용): {e}")
+            return False
+
+
+def _persist_agent_job(job_id: str, farm_id: str, intent: str,
+                         start_dt: datetime, end_dt: datetime,
+                         interval_min: int, houses: list, alert_on_normal: bool) -> None:
+    """Job 등록을 DB 에 기록. 실패 시 로그만."""
+    if not _ensure_agent_job_table():
+        return
+    try:
+        from agri_ai_core.src.postgresql.connection import db_session
+        houses_json = json.dumps([str(h) for h in (houses or [])], ensure_ascii=False)
+        with db_session() as db:
+            db.execute_query(
+                "INSERT INTO agent_monitor_m_job "
+                "(job_id, farm_id, intent, start_dttm, end_dttm, interval_min, "
+                " houses, alert_on_normal, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, NOW()) "
+                "ON CONFLICT (job_id) DO NOTHING",
+                (job_id, str(farm_id), intent, start_dt, end_dt, interval_min,
+                 houses_json, bool(alert_on_normal)),
+            )
+    except Exception as e:
+        logger.debug(f"[Agent] Job 영속화 실패 ({job_id}): {e}")
+
+
+def _mark_agent_job_cancelled(job_id: str) -> None:
+    """Job 취소를 DB 에 반영."""
+    if not _ensure_agent_job_table():
+        return
+    try:
+        from agri_ai_core.src.postgresql.connection import db_session
+        with db_session() as db:
+            db.execute_query(
+                "UPDATE agent_monitor_m_job SET cancelled_at=NOW() "
+                "WHERE job_id=%s AND cancelled_at IS NULL",
+                (job_id,),
+            )
+    except Exception as e:
+        logger.debug(f"[Agent] Job 취소 영속화 실패 ({job_id}): {e}")
+
+
+def restore_active_jobs() -> int:
+    """서비스 시작 시 DB 에서 active(미취소 + end 미경과) Job 을 APScheduler 에 재등록.
+    반환: 복원된 Job 개수. 호출처는 api/app.py lifespan 에서 이벤트 루프 바인딩 직후.
+
+    멱등성: ON CONFLICT 없이 replace_existing=True 로 APScheduler 재등록.
+    DB 에 있는데 이미 메모리에도 있는 경우(해당 프로세스가 방금 등록함) 덮어쓰기로 안전.
+    """
+    if not _ensure_agent_job_table():
+        return 0
+    restored = 0
+    try:
+        from agri_ai_core.src.postgresql.connection import db_session
+        with db_session() as db:
+            rows = db.fetch_all(
+                "SELECT job_id, farm_id, intent, start_dttm, end_dttm, interval_min, "
+                "       houses, alert_on_normal "
+                "FROM agent_monitor_m_job "
+                "WHERE cancelled_at IS NULL AND end_dttm > NOW() "
+                "ORDER BY start_dttm",
+                as_dict=True,
+            )
+        for r in rows or []:
+            try:
+                # houses 가 JSONB → psycopg2 가 list 로 자동 파싱
+                houses = r.get("houses") or []
+                if isinstance(houses, str):
+                    houses = json.loads(houses)
+                _reregister_job(
+                    job_id=r["job_id"],
+                    farm_id=str(r["farm_id"]),
+                    intent=r.get("intent") or "모니터링",
+                    start_dt=r["start_dttm"],
+                    end_dt=r["end_dttm"],
+                    interval_min=int(r["interval_min"]),
+                    houses=[str(h) for h in houses],
+                    alert_on_normal=bool(r.get("alert_on_normal")),
+                )
+                restored += 1
+            except Exception as e:
+                logger.error(f"[Agent] Job 복원 실패 ({r.get('job_id')}): {e}")
+        if restored:
+            logger.info(f"[Agent] 재시작 후 active Job {restored}건 복원")
+    except Exception as e:
+        logger.warning(f"[Agent] active Job 조회 실패: {e}")
+    return restored
+
+
+def _reregister_job(job_id: str, farm_id: str, intent: str,
+                      start_dt: datetime, end_dt: datetime,
+                      interval_min: int, houses: list, alert_on_normal: bool) -> None:
+    """APScheduler 에 Job 을 등록하고 _AGENT_JOB_META 에 메타데이터 캐시."""
+    from apscheduler.triggers.interval import IntervalTrigger
+    from agri_ai_core.src.control.task_scheduler import _scheduler
+    if _scheduler is None:
+        logger.warning(f"[Agent] 스케줄러 미초기화 — Job {job_id} 등록 보류")
+        return
+
+    def _runner(_job_id=job_id, _farm=farm_id, _houses=houses,
+                _intent=intent, _aon=alert_on_normal):
+        _monitor_job_run(_job_id, _farm, _houses, _intent, _aon)
+
+    # 현재 이후에만 트리거되도록 start_date 보정 (이미 지난 시각이면 다음 주기)
+    eff_start = start_dt if start_dt > datetime.now() else datetime.now() + timedelta(seconds=5)
+    trigger = IntervalTrigger(
+        minutes=interval_min,
+        start_date=eff_start,
+        end_date=end_dt,
+    )
+    _scheduler.add_job(_runner, trigger=trigger, id=job_id, replace_existing=True)
+    _AGENT_JOB_META[job_id] = {
+        "intent": intent,
+        "start": start_dt.isoformat() if hasattr(start_dt, "isoformat") else str(start_dt),
+        "end": end_dt.isoformat() if hasattr(end_dt, "isoformat") else str(end_dt),
+        "interval_min": interval_min,
+        "houses": list(houses),
+        "farm_id": farm_id,
+        "alert_on_normal": alert_on_normal,
+        "created_at": datetime.now().isoformat(),
+    }
 
 
 def _monitor_job_run(
@@ -200,6 +370,13 @@ def schedule_monitor(
             "created_at": datetime.now().isoformat(),
         }
 
+        # [Wave 7] DB 영속화 (재시작 후 restore_active_jobs 가 복원)
+        _persist_agent_job(
+            job_id=job_id, farm_id=target_farm, intent=intent,
+            start_dt=start_dt, end_dt=end_dt, interval_min=interval_min,
+            houses=houses, alert_on_normal=alert_on_normal,
+        )
+
         logger.info(
             f"[Agent] 모니터링 Job 등록: {job_id} "
             f"{start_dt}~{end_dt} {interval_min}분 houses={houses} intent='{intent}'"
@@ -254,9 +431,13 @@ def cancel_monitor(job_id: str) -> Dict[str, Any]:
     try:
         existing = _scheduler.get_job(job_id)
         if not existing:
-            return {"success": False, "error": f"Job 없음: {job_id}"}
+            # 메모리엔 없지만 DB 에만 있는 경우도 있으므로 DB 취소는 수행
+            _mark_agent_job_cancelled(job_id)
+            return {"success": False, "error": f"Job 없음: {job_id} (DB 취소 표시 완료)"}
         _scheduler.remove_job(job_id)
         _AGENT_JOB_META.pop(job_id, None)
+        # [Wave 7] DB 취소 반영 (영속 복원 대상에서 제외)
+        _mark_agent_job_cancelled(job_id)
         logger.info(f"[Agent] 모니터링 Job 취소: {job_id}")
         return {"success": True, "cancelled": job_id}
     except Exception as e:

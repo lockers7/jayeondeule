@@ -213,6 +213,15 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         logger.warning("[alert_bus] 이벤트 루프 바인딩 실패: %s", _e)
 
+    # [Wave 7] Agent 모니터링 Job 영속 복원 — 서비스 재시작 후 active Job 재등록
+    try:
+        from agri_ai_core.src.ai.tools_agent import restore_active_jobs as _restore_agent_jobs
+        _restored = _restore_agent_jobs()
+        if _restored:
+            logger.info("[Agent] 재시작 후 monitor Job %d건 복원", _restored)
+    except Exception as _e:
+        logger.warning("[Agent] monitor Job 복원 실패: %s", _e)
+
     yield
 
     # 애플리케이션 종료 처리
