@@ -315,8 +315,15 @@ def _build_conversation_context(messages: list, conversation_history: list, user
     _user_query_stripped = (user_query or "").strip()
     _user_refs_number = bool(re.search(r'\d+번', _user_query_stripped))
     _is_conv = _is_conversational_query(user_query)
+    # 재포맷 요청(표로/요약/자세히/정리 등): 직전 assistant 답변을 숫자 손실 없이 전량 보존해야 함.
+    # 기본 350자 자름 로직이 표·수치를 잘라먹어 재포맷 시 환각을 유발하는 문제 방지.
+    _is_reformat = bool(_REFORMAT_RE.search(_user_query_stripped)) and not re.search(
+        r"(지금|새로|최신|다시\s*조회|다시\s*확인)", _user_query_stripped
+    )
     if not _is_conv:
         logger.info("[멀티턴] 요구/지시 쿼리 감지 → assistant 이전 맥락 제외 (최신 데이터 우선)")
+    elif _is_reformat:
+        logger.info("[멀티턴] 재포맷 요청 감지 → 직전 assistant 답변 full-length 보존")
 
     # 최근 턴 필터링 및 조립
     _context_parts = []
@@ -381,12 +388,17 @@ def _build_conversation_context(messages: list, conversation_history: list, user
                                 "켜드렸습니다", "꺼드렸습니다", "성공적으로 켜", "성공적으로 꺼")
             if any(i in content for i in _relay_indicators) and any(i in content for i in _done_indicators):
                 content = "(이전 제어 완료)"
+            elif _is_reformat:
+                # 재포맷 요청: 이전 assistant 답변 전량 보존 (표/수치 손실 방지)
+                pass
             else:
                 _has_list = bool(
                     re.search(r'\d+[\.\)]\s*\*{0,2}\S+\.(pdf|txt|csv|json|md)', content)
                     or re.search(r'\|\s*\d+\s*\|.*\.(pdf|txt|csv|json|md)', content)
+                    # 마크다운 표 감지 (| --- |)
+                    or re.search(r'\n\s*\|[\s:-]+\|', content)
                 )
-                _max_len = 800 if (_has_list or _user_refs_number) else 350
+                _max_len = 1600 if (_has_list or _user_refs_number) else 350
                 if len(content) > _max_len:
                     content = content[:_max_len] + "..."
         elif role == "user" and len(content) > 400:

@@ -255,11 +255,23 @@ def _generate_simple_response(user_query, conversation_history, farm_name, speec
             tone = "존댓말(~합니다, ~입니다)로 친절하게 응대하세요."
 
         if response_type == "conversation_ref":
-            task = "사용자가 이전 대화 내용을 물어보고 있습니다. [직전 대화 맥락]을 참고하여 답변하세요."
+            task = (
+                "사용자가 이전 대화의 내용을 다시 묻거나, 이전 답변을 다른 형식(표/요약/자세히/간단히)으로 "
+                "재표현해 달라고 요청하고 있습니다.\n"
+                "[직전 대화 맥락]의 마지막 assistant 답변에 포함된 모든 수치·센서값·재배사 이름·상태 판단을 "
+                "**그대로 유지**한 채, 사용자가 원하는 형식으로만 재구성하세요.\n"
+                "**절대 규칙:**\n"
+                "- 이전 답변에 없는 숫자·항목을 새로 만들어내지 마세요(환각 금지).\n"
+                "- 이전 답변의 숫자를 다른 값으로 바꾸거나 반올림하지 마세요.\n"
+                "- 이전 답변에 포함된 재배사 전부를 그대로 포함하세요(1호만·일부만 금지).\n"
+                "- 새로운 도구 호출·실시간 조회 없이, 이전 맥락만으로 재구성하세요."
+            )
             num_predict = NUM_PREDICT
+            temperature = 0.2  # 재포맷은 결정적으로 (환각 억제)
         else:
             task = "인사나 일상 대화에 짧고 따뜻하게 응답하세요."
             num_predict = 256
+            temperature = 0.7
 
         system_prompt = (
             f"당신은 {farm_name + ' 농장의 ' if farm_name else ''}AI 도우미입니다.\n"
@@ -274,7 +286,7 @@ def _generate_simple_response(user_query, conversation_history, farm_name, speec
 
         response = _ollama_chat(
             model=model_name, messages=messages, tools=None,
-            options={"temperature": 0.7, "num_predict": num_predict, "num_ctx": 4096, "think": False},
+            options={"temperature": temperature, "num_predict": num_predict, "num_ctx": 4096, "think": False},
             keep_alive='1h',
         )
 
