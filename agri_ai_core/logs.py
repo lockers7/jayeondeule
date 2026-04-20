@@ -20,6 +20,7 @@ import os
 import re
 import sys
 import glob
+import grp
 import logging
 import tempfile
 from datetime import datetime, timedelta
@@ -28,6 +29,25 @@ from agri_ai_core.config import settings
 
 # 초기화된 로거 캐시
 _loggers_initialized = {}
+
+# [Wave 6] 로그 파일 공유 그룹 — 서비스는 root, 운영자는 jayeondeule 로
+# 접근 가능하도록 로그 파일을 그룹 쓰기 가능(664)으로 설정한다. 환경변수로 덮어쓰기 가능.
+_LOG_FILE_GROUP = os.getenv("LOG_FILE_GROUP", "jayeondeule")
+_LOG_FILE_MODE  = 0o664
+
+
+def _normalize_log_file_permissions(path):
+    """로그 파일 생성/오픈 시 공유 권한(0o664) + 지정 그룹 으로 정규화.
+    실패(권한 부족·그룹 없음)는 조용히 무시 — 기존 동작과 하위 호환 유지."""
+    try:
+        os.chmod(path, _LOG_FILE_MODE)
+    except OSError:
+        pass
+    try:
+        gid = grp.getgrnam(_LOG_FILE_GROUP).gr_gid
+        os.chown(path, -1, gid)   # uid=-1 → 소유자 유지, 그룹만 변경
+    except (KeyError, OSError, PermissionError):
+        pass
 
 
 # ═══════════════════════════
@@ -61,10 +81,7 @@ class DailyRotatingFileHandler(logging.FileHandler):
     # 파일 열기 (root/일반 유저 혼재 환경에서 권한 충돌 방지)
     def _open(self):
         stream = super()._open()
-        try:
-            os.chmod(self.baseFilename, 0o644)
-        except OSError:
-            pass
+        _normalize_log_file_permissions(self.baseFilename)
         return stream
 
     # 로그 레코드 출력 (날짜 변경시 새 파일로 전환)
@@ -115,10 +132,7 @@ def _setup_logger_impl(cache_key, logger_name, file_pattern, error_label, use_pl
         if use_plain_file:
             log_path = os.path.join(log_dir, file_pattern)
             file_handler = logging.FileHandler(log_path, mode='a', encoding='utf-8')
-            try:
-                os.chmod(log_path, 0o644)
-            except OSError:
-                pass
+            _normalize_log_file_permissions(log_path)
         else:
             file_handler = DailyRotatingFileHandler(os.path.join(log_dir, file_pattern), encoding='utf-8')
         file_handler.setLevel(log_level)
