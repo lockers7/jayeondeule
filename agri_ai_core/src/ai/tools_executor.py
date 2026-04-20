@@ -81,16 +81,19 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
             devices = tool_args.get("devices")
             h_id = tool_args.get("house_id")
             f_id = tool_args.get("farm_id")
+            auth_fid = tool_args.get("auth_farm_id")
             # house_id='all' + devices 배열 → 전 재배사 다중 장치 일괄 제어
             if devices and isinstance(devices, list) and len(devices) > 0:
                 if str(h_id or "").strip().lower() in ("all", "전체", "모든"):
                     result = _control_relay_all_houses(
                         farm_id=f_id, devices=devices, mode=tool_args.get("mode"),
+                        auth_farm_id=auth_fid,
                     )
                 else:
                     result = control_relays_batch(
                         house_id=h_id, devices=devices,
                         farm_id=f_id, mode=tool_args.get("mode"),
+                        auth_farm_id=auth_fid,
                     )
             else:
                 result = control_relay(
@@ -99,6 +102,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
                     action=tool_args.get("action"),
                     farm_id=f_id,
                     mode=tool_args.get("mode"),
+                    auth_farm_id=auth_fid,
                 )
 
         elif tool_name == "search_web":
@@ -128,6 +132,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
                 house_id=tool_args.get("house_id"),
                 mode=tool_args.get("mode"),
                 farm_id=tool_args.get("farm_id"),
+                auth_farm_id=tool_args.get("auth_farm_id"),
             )
 
         elif tool_name == "set_growth_stage":
@@ -135,6 +140,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
                 house_id=tool_args.get("house_id"),
                 stage=tool_args.get("stage"),
                 farm_id=tool_args.get("farm_id"),
+                auth_farm_id=tool_args.get("auth_farm_id"),
             )
 
         elif tool_name == "set_circulation_mode":
@@ -142,6 +148,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
                 house_id=tool_args.get("house_id"),
                 mode=tool_args.get("mode"),
                 farm_id=tool_args.get("farm_id"),
+                auth_farm_id=tool_args.get("auth_farm_id"),
             )
 
         elif tool_name == "set_schedule":
@@ -155,6 +162,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
                 weekdays=tool_args.get("weekdays"),
                 excs_type=tool_args.get("excs_type", "daily"),
                 farm_id=tool_args.get("farm_id"),
+                auth_farm_id=tool_args.get("auth_farm_id"),
             )
 
         elif tool_name == "override_ai_thresholds":

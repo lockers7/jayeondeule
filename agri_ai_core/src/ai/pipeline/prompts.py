@@ -79,6 +79,12 @@ web_search (검색/추천/찾아/알려):
 gas_price (주유소/유가/기름값):
 - search_gas_price 필수.
 
+agent_monitor (Agent 모니터링 조회·취소 — 도구명 미언급 자연어 포함):
+- "지금 감시/모니터링 돌고 있는 거 있어?", "감시 목록", "예약된 모니터링 보여줘" → list_monitors 단독 호출.
+- "그 감시 취소해줘", "ID ○○○ 취소", "모니터링 중단" → cancel_monitor 호출 (job_id 가 명시되지 않았으면 먼저 list_monitors 로 조회 후 사용자 지목 유도).
+- 신규 모니터링 등록("N시부터 M시까지 ○분마다 감시/지켜봐")은 farm_sensor 유형 대신 schedule_monitor 를 priority=1 로 포함.
+- 이 유형은 question_type="general" 로 분류하되 required_data 에 해당 도구를 지정하세요.
+
 greeting (인사/잡담): required_data=[]
 conversation_ref (이전 대화 참조 / 재포맷 요청): required_data=[]
 - 다음 요청은 이전 대화의 **데이터가 이미 있다**는 가정으로 conversation_ref로 분류하고 도구를 호출하지 마세요.

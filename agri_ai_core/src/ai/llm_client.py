@@ -426,6 +426,13 @@ def get_llm_response_with_tools(
 
 # (get_llm_response_with_tools 파라미터 블록 계속)
 ) -> Dict[str, Any]:
+    # [DEPRECATED 경고 · D1] 이 Tool Use 반복 루프는 3단계 파이프라인(pipeline/runner.py)의
+    # fallback 용으로만 유지된다. 신규 기능은 3단계 파이프라인에 추가하고, 이 경로는 향후
+    # 단일화(제거)될 예정이다. 호출 시 경로를 로깅해 의존성 파악 및 조기 경보를 돕는다.
+    logger.warning(
+        "[DEPRECATED] get_llm_response_with_tools(Tool Use 반복 루프)가 호출됨 — "
+        "3단계 파이프라인 fallback 경로. 장기적으로 제거 예정, 새 기능은 pipeline/runner.py 에 추가 요망."
+    )
     try:
         from agri_ai_core.src.ai.tools_definition import get_available_tools, get_system_prompt_with_tools
         from agri_ai_core.src.ai.tools_executor import execute_tool

@@ -19,17 +19,27 @@ from agri_ai_core.src.ai.tools_utils import (
     normalize_id as _normalize_id,
     build_ai_conflict as _build_ai_conflict,
 )
+from agri_ai_core.src.ai.tools_auth import (
+    require_non_zero_house as _require_non_zero_house,
+    check_farm_access as _check_farm_access,
+)
 
 logger = setup_logger(__name__)
 
 
-def _resolve_relay_ids(house_id, farm_id):
-    """릴레이 제어용 house_id/farm_id를 정규화하고 검증한다. (house_id, farm_id) 또는 에러 dict 반환."""
+def _resolve_relay_ids(house_id, farm_id, auth_farm_id=None):
+    """릴레이 제어용 house_id/farm_id를 정규화하고 검증한다. (house_id, farm_id) 또는 에러 dict 반환.
+    auth_farm_id 가 전달되면 농장 접근권(자기 농장만 제어 가능) 도 검증한다.
+    house_id='0' 은 물리 장치 미존재로 항상 거부한다 (권한 무관)."""
     from agri_ai_core.src.postgresql.connection import db_session
     from agri_ai_core.src.postgresql.queries import GET_ONE_FARM
+    # 0호 거부 가드 — house_id='0' 은 어떤 사용자도 제어 불가 (통합재배사, 물리 장치 없음)
+    zero_err = _require_non_zero_house(house_id)
+    if zero_err:
+        return zero_err
     target_house_id = _normalize_id(house_id)
     if not target_house_id:
-        return {"success": False, "error": "house_id를 확인할 수 없습니다. '1', '2', '3' 중 하나를 사용하세요."}
+        return {"success": False, "error": "house_id를 확인할 수 없습니다. 구체적 재배사 번호 또는 'all' 을 사용하세요."}
     target_farm_id = _normalize_id(farm_id)
     if not target_farm_id or target_farm_id == "0":
         target_farm_id = None
@@ -40,6 +50,10 @@ def _resolve_relay_ids(house_id, farm_id):
                 target_farm_id = str(farm.get("farm_id"))
     if not target_farm_id:
         return {"success": False, "error": "farm_id를 확인할 수 없습니다."}
+    # 농장 접근권 검증 — 시스템관리자(auth_farm_id=None/0)는 전 농장, 농장관리자는 자기 농장만
+    access_err = _check_farm_access(auth_farm_id, target_farm_id)
+    if access_err:
+        return access_err
     return target_house_id, target_farm_id
 
 
@@ -54,8 +68,10 @@ def _get_ai_judgment_safe(farm_id, house_id):
 
 
 def _control_relay_all_houses(device_name: str = None, action: str = None, farm_id: str = None,
-                               mode: str = None, devices: list = None) -> Dict[str, Any]:
-    """house_id='all' 요청 시 모든 재배사(hous_id!=0)에 대해 일괄 제어."""
+                               mode: str = None, devices: list = None,
+                               auth_farm_id: str = None) -> Dict[str, Any]:
+    """house_id='all' 요청 시 모든 재배사(hous_id!=0)에 대해 일괄 제어.
+    auth_farm_id 전달 시 farm 접근권(자기 농장만)도 검증한다."""
     from agri_ai_core.src.postgresql.connection import db_session
     from agri_ai_core.src.postgresql.queries import GET_ONE_FARM, GET_ALL_HOUSES
     t_start = time.time()
@@ -69,6 +85,10 @@ def _control_relay_all_houses(device_name: str = None, action: str = None, farm_
                 target_farm_id = str(farm.get("farm_id"))
     if not target_farm_id:
         return {"success": False, "error": "farm_id를 확인할 수 없습니다."}
+    # 농장 접근권 검증 (시스템관리자 auth_farm_id=None/0 → 전체 허용, 농장관리자는 자기 농장만)
+    access_err = _check_farm_access(auth_farm_id, target_farm_id)
+    if access_err:
+        return access_err
     with db_session() as database:
         houses = database.fetch_all(GET_ALL_HOUSES, vals=(target_farm_id,), as_dict=True)
     if not houses:
@@ -112,14 +132,19 @@ def _control_relay_all_houses(device_name: str = None, action: str = None, farm_
 
 
 def control_relay(house_id: str, device_name: str = None, action: str = None,
-                   farm_id: str = None, mode: str = None) -> Dict[str, Any]:
+                   farm_id: str = None, mode: str = None,
+                   auth_farm_id: str = None) -> Dict[str, Any]:
+    """LLM 이 호출하는 단일 릴레이 제어 진입점.
+    auth_farm_id 는 세션 사용자(시스템관리자=None, 농장관리자=자기농장ID)의 권한 검증용."""
     # house_id='all' → 전 재배사 일괄 제어
     if str(house_id or "").strip().lower() in ("all", "전체", "모든"):
         return _control_relay_all_houses(device_name=device_name, action=action,
-                                         farm_id=farm_id, mode=mode)
+                                         farm_id=farm_id, mode=mode,
+                                         auth_farm_id=auth_farm_id)
     # mode가 지정된 경우 일괄 제어로 위임
     if mode in ("reverse_all", "all_on", "all_off"):
-        return control_relays_batch(house_id=house_id, farm_id=farm_id, mode=mode)
+        return control_relays_batch(house_id=house_id, farm_id=farm_id, mode=mode,
+                                    auth_farm_id=auth_farm_id)
 
     t_start = time.time()
     logger.info(f"[릴레이제어] 시작 farm_id={farm_id} house_id={house_id} device={device_name} action={action}")
@@ -128,7 +153,7 @@ def control_relay(house_id: str, device_name: str = None, action: str = None,
         from agri_ai_core.src.control.relay_manager import set_relay_value
         from agri_ai_core.src.control.control_common import SEMANTIC_LABELS, set_llm_relay_lock, resolve_device_alias
 
-        ids = _resolve_relay_ids(house_id, farm_id)
+        ids = _resolve_relay_ids(house_id, farm_id, auth_farm_id=auth_farm_id)
         if isinstance(ids, dict):
             return ids
         target_house_id, target_farm_id = ids
@@ -272,7 +297,8 @@ def _batch_build_by_devices(devices, valid_devices, SEMANTIC_LABELS):
 
 
 def control_relays_batch(house_id: str, devices: List[Dict[str, str]] = None,
-                         farm_id: str = None, mode: str = None) -> Dict[str, Any]:
+                         farm_id: str = None, mode: str = None,
+                         auth_farm_id: str = None) -> Dict[str, Any]:
     """재배사의 여러 릴레이 장치를 일괄 제어한다.
     mode 우선 (reverse_all/all_on/all_off) → mode 없으면 devices 배열 사용.
     제어 후 LLM 잠금을 설정하여 자동제어가 일정시간 억제된다.
@@ -285,7 +311,7 @@ def control_relays_batch(house_id: str, devices: List[Dict[str, str]] = None,
             SEMANTIC_LABELS, set_llm_relay_lock, reverse_pin_map,
         )
 
-        ids = _resolve_relay_ids(house_id, farm_id)
+        ids = _resolve_relay_ids(house_id, farm_id, auth_farm_id=auth_farm_id)
         if isinstance(ids, dict):
             return ids
         target_house_id, target_farm_id = ids

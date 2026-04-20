@@ -13,6 +13,10 @@ from typing import Any, Dict, Optional
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.ai.tools_utils import normalize_id as _normalize_id
+from agri_ai_core.src.ai.tools_auth import (
+    check_house_control_access as _check_house_control_access,
+    check_farm_access as _check_farm_access,
+)
 
 logger = setup_logger(__name__)
 
@@ -45,7 +49,8 @@ _VALID_CIRCULATION_MODES = ("내부순환", "외부순환", "흡입순환", "배
 # ═══════════════════════════════════════════════════════════════════════════════
 # 1. set_house_control_mode — 재배사 제어 모드 전환
 # ═══════════════════════════════════════════════════════════════════════════════
-def set_house_control_mode(house_id: str, mode: str, farm_id: str = None) -> Dict[str, Any]:
+def set_house_control_mode(house_id: str, mode: str, farm_id: str = None,
+                            auth_farm_id: str = None) -> Dict[str, Any]:
     """재배사의 제어 모드(mnul_ctrl_flag + ctrl_type)를 변경한다.
 
     Args:
@@ -53,6 +58,7 @@ def set_house_control_mode(house_id: str, mode: str, farm_id: str = None) -> Dic
                   또는 재배사 이름(예: '상황버섯2호재배사'). 재배사 개수·번호는 농장별 가변.
         mode: 'manual' | 'algorithm' | 'ai'
         farm_id: 농장 ID (기본값: default_tool_args의 farm_id)
+        auth_farm_id: 세션 사용자 농장 ID (None/0=시스템관리자, N=농장관리자). 권한 검증용.
 
     Returns:
         {success, action, changed: [{farm_id, house_id, before: {...}, after: {...}}]}
@@ -70,7 +76,12 @@ def set_house_control_mode(house_id: str, mode: str, farm_id: str = None) -> Dic
     mnul_flag = mode in ("manual", "ai")
 
     target_house = _normalize_house(house_id)
-    target_farm = _normalize_id(farm_id) or "1"
+    target_farm = _normalize_id(farm_id) or _normalize_id(auth_farm_id) or "1"
+
+    # 0호 거부 + 농장 접근권 검증 (tools_auth 위임)
+    auth_err = _check_house_control_access(auth_farm_id, target_farm, target_house)
+    if auth_err:
+        return auth_err
 
     try:
         with db_session() as db:
@@ -149,13 +160,15 @@ def set_house_control_mode(house_id: str, mode: str, farm_id: str = None) -> Dic
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2. set_growth_stage — 재배사 생육단계 변경
 # ═══════════════════════════════════════════════════════════════════════════════
-def set_growth_stage(house_id: str, stage: Any, farm_id: str = None) -> Dict[str, Any]:
+def set_growth_stage(house_id: str, stage: Any, farm_id: str = None,
+                      auth_farm_id: str = None) -> Dict[str, Any]:
     """재배사의 생육단계(crop_lvel)를 변경한다.
 
     Args:
         house_id: 해당 농장의 hous_id 또는 'all' (재배사 구성은 농장별 가변)
         stage: '발아기' | '생육기' | '수확기' | '휴지기' (또는 숫자 1~4)
         farm_id: 농장 ID
+        auth_farm_id: 세션 사용자 농장 ID (None/0=시스템관리자, N=농장관리자). 권한 검증용.
     """
     from agri_ai_core.src.postgresql.connection import db_session
 
@@ -167,7 +180,12 @@ def set_growth_stage(house_id: str, stage: Any, farm_id: str = None) -> Dict[str
         }
 
     target_house = _normalize_house(house_id)
-    target_farm = _normalize_id(farm_id) or "1"
+    target_farm = _normalize_id(farm_id) or _normalize_id(auth_farm_id) or "1"
+
+    # 0호 거부 + 농장 접근권 검증
+    auth_err = _check_house_control_access(auth_farm_id, target_farm, target_house)
+    if auth_err:
+        return auth_err
 
     try:
         with db_session() as db:
@@ -230,16 +248,19 @@ def set_growth_stage(house_id: str, stage: Any, farm_id: str = None) -> Dict[str
 # ═══════════════════════════════════════════════════════════════════════════════
 # 3. set_circulation_mode — 순환모드 수동 강제
 # ═══════════════════════════════════════════════════════════════════════════════
-def set_circulation_mode(house_id: str, mode: str, farm_id: str = None) -> Dict[str, Any]:
+def set_circulation_mode(house_id: str, mode: str, farm_id: str = None,
+                          auth_farm_id: str = None) -> Dict[str, Any]:
     """재배사의 순환모드를 강제 설정한다 (댐퍼+팬 조합 반영).
 
     Args:
         house_id: 해당 농장의 hous_id 또는 'all' (재배사 구성은 농장별 가변)
         mode: '내부순환' | '외부순환' | '흡입순환' | '배기순환' | '순환정지'
         farm_id: 농장 ID
+        auth_farm_id: 세션 사용자 농장 ID (None/0=시스템관리자, N=농장관리자). 권한 검증용.
 
-    Note: 이 도구는 릴레이를 직접 제어한다. 재배사의 ctrl_type='manual'일 때만 유효.
-          algorithm/ai 모드에서는 5초/10초마다 덮어써질 수 있음.
+    Note: ctrl_type='manual' 인 재배사에서만 영속적으로 반영된다.
+          algorithm/ai 모드 재배사는 5~10초 주기 자동 루프가 덮어쓰므로
+          응답의 warnings 필드에 해당 안내가 포함된다.
     """
     from agri_ai_core.src.control.control_common import CIRCULATION_MODES, get_pin_map
     from agri_ai_core.src.control.relay_manager import set_relay_value
@@ -256,19 +277,25 @@ def set_circulation_mode(house_id: str, mode: str, farm_id: str = None) -> Dict[
         return {"success": False, "error": f"순환모드 정의 없음: {mode}"}
 
     target_house = _normalize_house(house_id)
-    target_farm = _normalize_id(farm_id) or "1"
+    target_farm = _normalize_id(farm_id) or _normalize_id(auth_farm_id) or "1"
+
+    # 0호 거부 + 농장 접근권 검증
+    auth_err = _check_house_control_access(auth_farm_id, target_farm, target_house)
+    if auth_err:
+        return auth_err
 
     try:
         with db_session() as db:
+            # ctrl_type 을 함께 조회하여 algorithm/ai 모드 재배사에는 경고 포함 (A4)
             if target_house == "all":
                 rows = db.fetch_all(
-                    query=("SELECT farm_id, hous_id, hous_name FROM farmhouse_m_info "
+                    query=("SELECT farm_id, hous_id, hous_name, ctrl_type FROM farmhouse_m_info "
                            "WHERE farm_id=%s AND hous_id>0 AND COALESCE(dlte_yn,'N')<>'Y'"),
                     vals=(target_farm,), as_dict=True,
                 )
             else:
                 rows = db.fetch_all(
-                    query=("SELECT farm_id, hous_id, hous_name FROM farmhouse_m_info "
+                    query=("SELECT farm_id, hous_id, hous_name, ctrl_type FROM farmhouse_m_info "
                            "WHERE farm_id=%s AND hous_id=%s AND COALESCE(dlte_yn,'N')<>'Y'"),
                     vals=(target_farm, target_house), as_dict=True,
                 )
@@ -276,6 +303,7 @@ def set_circulation_mode(house_id: str, mode: str, farm_id: str = None) -> Dict[
                 return {"success": False, "error": f"재배사 없음 (farm={target_farm}, house={target_house})"}
 
             applied = []
+            warnings = []
             for r in rows:
                 pin_map = get_pin_map(int(r["hous_id"]))
                 relay_values = {}
@@ -291,20 +319,32 @@ def set_circulation_mode(house_id: str, mode: str, farm_id: str = None) -> Dict[
                         relay_values[pin] = val
 
                 result = set_relay_value(r["farm_id"], r["hous_id"], relay_values, raw_mode=False)
+                # A4: algorithm/ai 모드 재배사는 자동 루프가 덮어쓰므로 경고 수집
+                ctrl_type = (r.get("ctrl_type") or "").strip().lower()
+                if ctrl_type in ("algorithm", "ai"):
+                    warnings.append(
+                        f"{r['hous_id']}호({r.get('hous_name','')})는 현재 ctrl_type='{ctrl_type}' "
+                        f"이므로 자동 제어 루프가 5~10초 내 덮어쓸 수 있습니다. "
+                        f"지속 적용을 원하시면 먼저 set_house_control_mode(mode='manual')로 전환하세요."
+                    )
                 applied.append({
                     "farm_id": str(r["farm_id"]),
                     "house_id": str(r["hous_id"]),
                     "house_name": r["hous_name"],
+                    "ctrl_type": ctrl_type,
                     "mode": mode,
                     "relay_updates": relay_values,
                     "success": result.get("success", False) if isinstance(result, dict) else True,
                 })
                 logger.info(
                     f"[순환모드강제] farm={r['farm_id']} house={r['hous_id']} → {mode} "
-                    f"릴레이={relay_values}"
+                    f"릴레이={relay_values} ctrl_type={ctrl_type}"
                 )
 
-        return {"success": True, "action": f"circulation→{mode}", "applied": applied}
+        ret = {"success": True, "action": f"circulation→{mode}", "applied": applied}
+        if warnings:
+            ret["warnings"] = warnings
+        return ret
 
     except Exception as e:
         logger.error(f"[순환모드강제] 오류: {e}\n{traceback.format_exc()}")
@@ -324,6 +364,7 @@ def set_schedule(
     weekdays: str = None,
     excs_type: str = "daily",
     farm_id: str = None,
+    auth_farm_id: str = None,
 ) -> Dict[str, Any]:
     """조명/관수 자동 제어 스케줄을 추가·삭제한다.
 
@@ -337,6 +378,7 @@ def set_schedule(
         weekdays: 'mon,tue,...' 콤마 구분 또는 'daily'
         excs_type: 기본 'daily'
         farm_id: 농장 ID
+        auth_farm_id: 세션 사용자 농장 ID (None/0=시스템관리자, N=농장관리자). 권한 검증용.
     """
     from agri_ai_core.src.postgresql.connection import db_session
     from datetime import datetime
@@ -344,10 +386,13 @@ def set_schedule(
     if action not in ("add", "delete", "list"):
         return {"success": False, "error": f"action은 add/delete/list 중 하나여야 합니다: {action}"}
     unit_type_db = "water" if unit_type in ("water", "irrigation", "관수") else "light"
-    target_farm = _normalize_id(farm_id) or "1"
+    target_farm = _normalize_id(farm_id) or _normalize_id(auth_farm_id) or "1"
     target_house = _normalize_house(house_id)
-    if target_house in (None, "all"):
-        return {"success": False, "error": "set_schedule는 특정 house_id만 지원합니다 (all 불가)"}
+
+    # 0호 거부 + 'all' 거부(단건 전용) + 농장 접근권 검증
+    auth_err = _check_house_control_access(auth_farm_id, target_farm, target_house, allow_all=False)
+    if auth_err:
+        return auth_err
 
     try:
         with db_session() as db:
@@ -422,43 +467,38 @@ _ALLOWED_THRESHOLD_KEYS = {
 
 
 def override_ai_thresholds(action: str, key: str = None, value: float = None) -> Dict[str, Any]:
-    """AI 환경 제어용 임계값을 조회하거나 일시 조정한다.
+    """AI 환경 제어용 임계값을 조회한다. (현재 action='get' 만 지원)
 
     Args:
-        action: 'get' | 'set' | 'reset'
-        key: TEMP_LOW, TEMP_HIGH 등 (set/reset 시)
-        value: 새 값 (set 시)
+        action: 'get' (조회). 'set'/'reset' 은 미지원 (아래 Note 참조).
+        key: (set 전용, 현재 미사용)
+        value: (set 전용, 현재 미사용)
 
-    Note: 런타임 메모리에만 저장된다 (agri_ai_core 재시작 시 초기화).
-          적용되려면 control_common 모듈의 get_threshold() 헬퍼를 참조해야 하므로,
-          현재는 조회·제안 용도. 실제 반영은 추후 control_common 연동 후 동작.
+    Note: 임계값의 런타임 변경(set/reset)은 control_common 상수를 런타임에
+          재참조하는 연동 계층이 완성된 뒤에 활성화된다. 현재는 조회만 가능하며,
+          임계값 변경이 필요하면 .env 또는 control_common.py 상수를 직접 수정
+          후 서비스 재시작이 필요하다.
     """
     from agri_ai_core.src.control import control_common as cc
 
     if action == "get":
         current = {k: getattr(cc, k, None) for k in _ALLOWED_THRESHOLD_KEYS}
-        return {"success": True, "action": "get", "current": current, "overrides": dict(_THRESHOLD_OVERRIDES)}
-
-    if action == "reset":
-        if key:
-            _THRESHOLD_OVERRIDES.pop(key, None)
-            return {"success": True, "action": "reset", "key": key}
-        _THRESHOLD_OVERRIDES.clear()
-        return {"success": True, "action": "reset_all"}
-
-    if action == "set":
-        if key not in _ALLOWED_THRESHOLD_KEYS:
-            return {"success": False, "error": f"허용되지 않은 key: {key}. 허용: {sorted(_ALLOWED_THRESHOLD_KEYS)}"}
-        if value is None:
-            return {"success": False, "error": "set 시 value 필수"}
-        try:
-            _THRESHOLD_OVERRIDES[key] = float(value)
-        except (TypeError, ValueError):
-            return {"success": False, "error": f"value 숫자 변환 실패: {value}"}
-        logger.info(f"[임계값오버라이드] {key} = {value} (runtime only)")
         return {
-            "success": True, "action": "set", "key": key, "value": value,
-            "note": "런타임 메모리에만 저장됨. 현재 control_common 상수를 런타임에 재참조하지 않으므로 실제 반영은 추후 연동 필요.",
+            "success": True, "action": "get",
+            "current": current,
+            "overrides": dict(_THRESHOLD_OVERRIDES),
         }
 
-    return {"success": False, "error": f"action은 get/set/reset 중 하나여야 합니다: {action}"}
+    if action in ("set", "reset"):
+        # A3: 실제 제어 반영 로직 미완성 상태에서 "완료" 환각을 차단하기 위해
+        # set/reset 은 명시적으로 실패 반환한다.
+        return {
+            "success": False,
+            "action": action,
+            "error": ("임계값의 런타임 변경(set/reset)은 현재 지원되지 않습니다. "
+                      "변경을 원하시면 agri_ai_core/src/control/control_common.py 의 "
+                      "상수를 직접 수정 후 서비스를 재시작해 주세요."),
+            "supported_actions": ["get"],
+        }
+
+    return {"success": False, "error": f"action은 현재 'get' 만 지원됩니다: {action}"}

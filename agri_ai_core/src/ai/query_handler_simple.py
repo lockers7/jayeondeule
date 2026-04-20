@@ -69,6 +69,7 @@ def _build_default_tool_args(user_query, farm_id, house_id, auth_farm_id=None):
         if _uuid_match:
             detected_file_name = _uuid_match.group(1)
 
+    # 조회·삭제·제어 계열 도구 공통 기본값 (farm_id/house_id 주입)
     args = {
         "search_farm_knowledge": {
             "farm_id": str(farm_id) if farm_id else None,
@@ -85,12 +86,24 @@ def _build_default_tool_args(user_query, farm_id, house_id, auth_farm_id=None):
         "delete_farm_knowledge": {
             "farm_id": str(farm_id) if farm_id else None,
         },
+        # [Phase 1 관리 도구] farm_id 기본 주입 — 미주입 시 tools_admin 이 항상 '1' 로 폴백되는 버그 방지
+        "set_house_control_mode": {"farm_id": str(farm_id) if farm_id else None},
+        "set_growth_stage":       {"farm_id": str(farm_id) if farm_id else None},
+        "set_circulation_mode":   {"farm_id": str(farm_id) if farm_id else None},
+        "set_schedule":           {"farm_id": str(farm_id) if farm_id else None},
+        "get_system_status":      {"farm_id": str(farm_id) if farm_id else None},
+        # [Phase 4 Agent 모니터링]
+        "schedule_monitor":       {"farm_id": str(farm_id) if farm_id else None},
     }
 
-    # auth_farm_id: RAG 파일 권한 체크용 (시스템관리자=None, 농장사용자=자기농장ID)
+    # auth_farm_id: RAG 권한 + 관리 도구 농장 접근권 검증 (시스템관리자=None, 농장사용자=자기농장ID)
     if auth_farm_id is not None:
         args["search_farm_knowledge"]["auth_farm_id"] = str(auth_farm_id)
         args["delete_farm_knowledge"]["auth_farm_id"] = str(auth_farm_id)
+        # 제어/관리 도구에도 전파하여 tools_auth.check_farm_access 가드 발동
+        for tool in ("control_relay", "set_house_control_mode", "set_growth_stage",
+                      "set_circulation_mode", "set_schedule"):
+            args[tool]["auth_farm_id"] = str(auth_farm_id)
 
     # 감지된 파일명은 search/delete에 기본값으로 제공
     if detected_file_name:
