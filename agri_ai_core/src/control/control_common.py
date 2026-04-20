@@ -155,7 +155,10 @@ RELAY_PIN_MAP_E = {
     'air_intake_valve_flag':      'relay_11st_flag',  # [변경1] 10 → 11
     'air_exhaust_valve_flag':     'relay_12st_flag',  # [변경1] 11 → 12
     'drainage_motor_flag':        'relay_13st_flag',  # [변경1] 12 → 13
-    'indoor_heater_flag':         'relay_14st_flag',  # [변경1] 13 → 14
+    # [변경4 · 2026-04-20] 2호 relay_14 는 현장 배선 미연결 → 미정의(제어 skip).
+    #   기존 indoor_heater_flag → relay_14 매핑 제거. E타입엔 실내히터 없음.
+    #   environment_logic 이 indoor_heater_flag=True 를 결정해도 set_relay_value에서
+    #   핀맵 miss 로 조용히 skip 됨 (relay_manager.py:110 경고 로그만).
     'indoor_heater_valve_flag':   'relay_15st_flag',  # [변경1] 14 → 15
 }
 
