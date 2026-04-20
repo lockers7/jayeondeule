@@ -9,6 +9,7 @@
 # ══════════════════════════════════════════════════════════════════════════════
 import asyncio
 import json
+import os
 import threading
 import time
 from collections import deque
@@ -19,11 +20,19 @@ from agri_ai_core.logs import setup_logger
 
 logger = setup_logger(__name__)
 
-_MAX_BUFFER = 200  # 최근 200건까지 보존
+_MAX_BUFFER = 200  # 최근 200건까지 보존 (메모리 ring buffer)
 _buffer: deque = deque(maxlen=_MAX_BUFFER)
 _subscribers: Set[asyncio.Queue] = set()
 _lock = threading.Lock()
 _loop_ref: Optional[asyncio.AbstractEventLoop] = None  # FastAPI 이벤트 루프 참조
+
+# [E2] 영속 로깅 — alert_l_log 테이블 자동 생성 + DB 기록 (실패 시 조용히 삼켜
+# 메모리 버퍼 경로는 그대로 유지. 기존 프로세스 훼손 금지 원칙 준수).
+_PERSIST_ENABLED = os.getenv("ALERT_BUS_PERSIST", "1") not in ("0", "false", "False")
+_PERSIST_MIN_LEVEL = os.getenv("ALERT_BUS_PERSIST_MIN_LEVEL", "warning")  # info/warning/critical
+_LEVEL_ORDER = {"info": 0, "warning": 1, "critical": 2}
+_table_ready = False
+_table_ready_lock = threading.Lock()
 
 
 def bind_event_loop(loop: asyncio.AbstractEventLoop) -> None:
@@ -71,6 +80,9 @@ def publish(
         _buffer.append(evt)
         subs = list(_subscribers)
 
+    # [E2] 영속 DB 로깅 (warning 이상). 실패해도 기존 경로 영향 없음.
+    _persist_event(evt)
+
     # sync 스레드에서 호출된 경우 asyncio.Queue.put_nowait 는 별도 루프가 필요
     for q in subs:
         try:
@@ -99,6 +111,83 @@ def _safe_put(queue: asyncio.Queue, evt: Dict[str, Any]) -> None:
             queue.put_nowait(evt)
         except Exception:
             pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# [E2] 비상 알림 PostgreSQL 영속 로깅 (선택적)
+# alert_l_log 테이블 — 서비스 재시작 시에도 과거 critical/warning 이력 보존
+# ═══════════════════════════════════════════════════════════════════════════
+_CREATE_ALERT_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS alert_l_log (
+    id BIGSERIAL PRIMARY KEY,
+    event_id VARCHAR(64) NOT NULL,
+    recd_dttm TIMESTAMP NOT NULL DEFAULT NOW(),
+    level VARCHAR(16) NOT NULL,
+    category VARCHAR(64) NOT NULL,
+    farm_id VARCHAR(32),
+    hous_id VARCHAR(32),
+    title TEXT,
+    message TEXT,
+    data JSONB
+);
+CREATE INDEX IF NOT EXISTS idx_alert_l_log_dttm ON alert_l_log(recd_dttm DESC);
+CREATE INDEX IF NOT EXISTS idx_alert_l_log_farm_level ON alert_l_log(farm_id, level, recd_dttm DESC);
+"""
+
+
+def _ensure_alert_table():
+    """alert_l_log 테이블 lazy 생성. 실패해도 메모리 버퍼 경로는 영향 없음."""
+    global _table_ready
+    if _table_ready:
+        return True
+    with _table_ready_lock:
+        if _table_ready:
+            return True
+        try:
+            from agri_ai_core.src.postgresql.connection import db_session
+            with db_session() as db:
+                db.execute_query(_CREATE_ALERT_TABLE_SQL, ())
+            _table_ready = True
+            logger.info("[alert_bus] alert_l_log 영속 테이블 준비 완료")
+            return True
+        except Exception as e:
+            logger.warning(f"[alert_bus] alert_l_log 테이블 준비 실패 (메모리 버퍼만 사용): {e}")
+            return False
+
+
+def _persist_event(evt: Dict[str, Any]) -> None:
+    """비상 알림을 DB 에 INSERT. 레벨 필터 + 예외 흡수."""
+    if not _PERSIST_ENABLED:
+        return
+    evt_level = (evt.get("level") or "info").lower()
+    if _LEVEL_ORDER.get(evt_level, 0) < _LEVEL_ORDER.get(_PERSIST_MIN_LEVEL, 1):
+        return   # 설정된 최소 레벨 미만은 저장 생략 (기본: info 저장 안 함)
+    if not _ensure_alert_table():
+        return
+    try:
+        from agri_ai_core.src.postgresql.connection import db_session
+        payload = evt.get("data") or {}
+        payload_json = json.dumps(payload, ensure_ascii=False, default=str)
+        with db_session() as db:
+            db.execute_query(
+                "INSERT INTO alert_l_log (event_id, recd_dttm, level, category, "
+                "farm_id, hous_id, title, message, data) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+                (
+                    evt.get("id"),
+                    evt.get("timestamp"),
+                    evt_level,
+                    evt.get("category"),
+                    evt.get("farm_id"),
+                    evt.get("house_id"),
+                    evt.get("title"),
+                    evt.get("message"),
+                    payload_json,
+                ),
+            )
+    except Exception as e:
+        # DB 실패가 알림 발행을 막아서는 안 됨 (기존 프로세스 훼손 금지)
+        logger.debug(f"[alert_bus] DB INSERT 실패: {e}")
 
 
 def subscribe(maxsize: int = 100) -> asyncio.Queue:

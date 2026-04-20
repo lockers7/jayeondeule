@@ -451,11 +451,13 @@ async def query_llm(request: QueryRequest, _=Depends(verify_api_key)):
             sources = result_data.get("sources") or None
             tools_used = result_data.get("tools_used") or None
             response_type = result_data.get("response_type")
+            tool_calls_detail = result_data.get("tool_calls_detail") or None  # [E1]
         else:
             response_text = clean_llm_response(str(result_data or ""))
             sources = None
             tools_used = None
             response_type = None
+            tool_calls_detail = None
 
         processing_time = round(time.time() - start, 3)
 
@@ -482,6 +484,7 @@ async def query_llm(request: QueryRequest, _=Depends(verify_api_key)):
             sources=sources,
             tools_used=tools_used,
             response_type=response_type,
+            tool_calls_detail=tool_calls_detail,  # [E1] 도구 호출 감사 로그
         )
     except Exception as e:
         logger.error(f"API 질의 오류: {e}")

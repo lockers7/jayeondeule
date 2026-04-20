@@ -49,6 +49,7 @@ class DataCollector:
         self.collected_data = []
         self.collected_sources = []
         self.tools_used = []
+        self.tool_calls_detail = []   # [E1] 도구 호출 감사 로그 (tool/args/success/elapsed_ms)
         self._last_merged_args = {}
         self._executed_tool_keys = set()  # (tool_name, query_key) 중복 실행 방지
 
@@ -197,6 +198,15 @@ class DataCollector:
             t_start = time.time()
             raw_result, refined_result = self._execute_single_tool(tool_name, tool_args, user_query)
             elapsed = time.time() - t_start
+
+            # [E1] 도구 호출 감사 엔트리 기록 (args 에 auth_farm_id 는 보안상 마스킹)
+            self._record_tool_call(
+                tool_name=tool_name,
+                args=self._sanitize_args_for_audit(self._last_merged_args),
+                raw_result=raw_result,
+                elapsed=elapsed,
+                ok=bool(refined_result and len(refined_result.strip()) > 10),
+            )
 
             if refined_result and len(refined_result.strip()) > 10:
                 self._add_result(tool_name, refined_result, raw_result)
@@ -441,11 +451,55 @@ class DataCollector:
         if tool_name not in self.tools_used:
             self.tools_used.append(tool_name)
 
+    # ════════════════════════════════════════════════════════════
+    # [E1] 도구 호출 감사 로그 수집
+    # ════════════════════════════════════════════════════════════
+    _AUDIT_MASK_KEYS = ("auth_farm_id",)   # 감사 로그에서 보안상 마스킹할 키
+
+    @classmethod
+    def _sanitize_args_for_audit(cls, args: dict) -> dict:
+        """감사 로그용 args 정제 — 보안 키는 '***' 로 마스킹."""
+        if not args:
+            return {}
+        out = {}
+        for k, v in args.items():
+            if k in cls._AUDIT_MASK_KEYS:
+                out[k] = "***" if v else None
+            else:
+                out[k] = v
+        return out
+
+    def _record_tool_call(self, tool_name, args, raw_result, elapsed, ok):
+        """도구 호출 1건의 감사 엔트리를 기록한다. 결과 파싱 실패해도 호출 자체는 기록."""
+        entry = {
+            "tool": tool_name,
+            "args": args,
+            "success": False,
+            "elapsed_ms": round(elapsed * 1000, 1),
+        }
+        # raw_result 는 JSON 문자열; success/error 만 파싱
+        try:
+            import json
+            if raw_result and isinstance(raw_result, str):
+                parsed = json.loads(raw_result)
+                if isinstance(parsed, dict):
+                    entry["success"] = bool(parsed.get("success", ok))
+                    if parsed.get("error"):
+                        entry["error"] = str(parsed["error"])[:200]
+                    # 제어 도구의 경우 대상 재배사 기록
+                    for k in ("house_id", "farm_id", "device_name", "action", "mode"):
+                        if parsed.get(k):
+                            entry[k] = parsed[k]
+        except Exception:
+            entry["success"] = ok
+        self.tool_calls_detail.append(entry)
+
     def _build_result(self):
         return {
             "data": self.collected_data,
             "sources": self.collected_sources,
             "tools_used": self.tools_used,
+            "tool_calls_detail": self.tool_calls_detail,
             "sufficient": len(self.collected_data) > 0,
         }
 

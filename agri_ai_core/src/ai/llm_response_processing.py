@@ -69,6 +69,7 @@ def _build_structured_result(
     response_text: str,
     sources: list,
     tools_used: list,
+    tool_calls_detail: Optional[list] = None,
 ) -> Dict[str, Any]:
     # 출처 URL 기반 중복 제거 (동일 URL 최초 1건만 유지)
     deduped_sources: list = []
@@ -81,12 +82,16 @@ def _build_structured_result(
         elif not url:
             deduped_sources.append(src)
 
-    return {
+    result = {
         "response": response_text,
         "sources": deduped_sources,
         "tools_used": tools_used if tools_used else [],
         "response_type": _determine_response_type(tools_used),
     }
+    # [E1] 도구 호출 추적성 — 감사 로그 포함 (있을 때만)
+    if tool_calls_detail:
+        result["tool_calls_detail"] = tool_calls_detail
+    return result
 
 
 # ════════════════════════════════════════════════════════

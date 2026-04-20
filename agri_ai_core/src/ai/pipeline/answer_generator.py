@@ -46,6 +46,7 @@ def generate_answer(user_query, analysis_result, collected_result,
     # 수집된 데이터와 출처
     all_sources = collected_result.get("sources", [])
     tools_used = collected_result.get("tools_used", [])
+    tool_calls_detail = collected_result.get("tool_calls_detail", [])  # [E1] 감사 로그 pass-through
 
     # 수집 데이터를 번호 매긴 텍스트로 포맷
     data_text = _format_collected_data(collected_result)
@@ -155,7 +156,8 @@ def generate_answer(user_query, analysis_result, collected_result,
             f"(LLM={llm_ms:.0f}ms, 전체={total_ms:.0f}ms) type={response_type}"
         )
 
-        return _build_structured_result(finalized, filtered_sources, tools_used)
+        return _build_structured_result(finalized, filtered_sources, tools_used,
+                                         tool_calls_detail=tool_calls_detail)
 
     except Exception as e:
         logger.error(f"[3단계] 답변 생성 오류: {e}")
