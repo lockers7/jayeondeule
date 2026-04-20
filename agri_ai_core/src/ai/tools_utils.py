@@ -17,6 +17,61 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
+# ══════════════════════════════════════════════════════════════════════════
+# [D3] 도구별 세션 컨텍스트 자동 주입 명세 (선언형 테이블)
+# query_handler_simple._build_default_tool_args 가 이 테이블을 읽어
+# 각 도구의 default 인자를 자동 생성한다. 새 도구를 추가할 때 이 표에 한 줄만
+# 등록하면 세션의 farm_id/house_id/auth_farm_id 가 자동 주입된다.
+#
+# 키 → 값 의미
+#   "farm_id":       세션 농장 ID 를 도구 default 로 주입
+#   "house_id":      세션 재배사 ID 를 도구 default 로 주입
+#   "auth_farm_id":  세션 사용자 농장 ID 를 도구 default 로 주입 (권한 검증용)
+#   "file_name":     질문에서 감지된 파일명을 도구 default 로 주입 (RAG 전용)
+# ══════════════════════════════════════════════════════════════════════════
+TOOL_DEFAULT_CONTEXT: Dict[str, Dict[str, bool]] = {
+    # RAG 조회/삭제
+    "search_farm_knowledge": {"farm_id": True, "house_id": True, "auth_farm_id": True, "file_name": True},
+    "delete_farm_knowledge": {"farm_id": True, "auth_farm_id": True, "file_name": True},
+    # 센서/릴레이 조회·제어
+    "get_farm_realtime_data": {"farm_id": True, "house_id": True},
+    "control_relay":          {"farm_id": True, "house_id": True, "auth_farm_id": True},
+    # Phase 1 관리 도구
+    "set_house_control_mode": {"farm_id": True, "auth_farm_id": True},
+    "set_growth_stage":       {"farm_id": True, "auth_farm_id": True},
+    "set_circulation_mode":   {"farm_id": True, "auth_farm_id": True},
+    "set_schedule":           {"farm_id": True, "auth_farm_id": True},
+    "get_system_status":      {"farm_id": True},
+    # Phase 4 Agent 모니터링
+    "schedule_monitor":       {"farm_id": True},
+}
+
+
+def build_default_tool_args(farm_id=None, house_id=None, auth_farm_id=None,
+                             file_name=None) -> Dict[str, Dict[str, Any]]:
+    """세션 컨텍스트 → 도구별 default 인자 dict 자동 생성.
+    TOOL_DEFAULT_CONTEXT 명세에 선언된 키만 주입한다. (알 수 없는 도구는 빈 dict)
+    값이 None 이면 해당 키는 주입하지 않는다 (LLM 이 명시 지정 기회 보장).
+    """
+    session = {
+        "farm_id": (str(farm_id) if farm_id not in (None, "") else None),
+        "house_id": (str(house_id) if house_id not in (None, "") else None),
+        "auth_farm_id": (str(auth_farm_id) if auth_farm_id not in (None, "") else None),
+        "file_name": file_name,
+    }
+    out: Dict[str, Dict[str, Any]] = {}
+    for tool_name, keyspec in TOOL_DEFAULT_CONTEXT.items():
+        entry: Dict[str, Any] = {}
+        for key, enabled in keyspec.items():
+            if not enabled:
+                continue
+            val = session.get(key)
+            if val is not None:
+                entry[key] = val
+        out[tool_name] = entry
+    return out
+
+
 # 농장별 재배사 ID 목록 캐시 — 짧은 TTL (기본 60초).
 # 재배사 추가/삭제는 드물고, 센서 조회 fan-out 마다 DB 왕복하면 부담이므로 메모이제이션.
 _HOUSE_IDS_CACHE: Dict[str, tuple] = {}   # farm_id(str) → (expire_ts, [hous_id, ...])

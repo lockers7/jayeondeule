@@ -59,7 +59,16 @@ _FILE_NAME_RE = re.compile(
 
 
 def _build_default_tool_args(user_query, farm_id, house_id, auth_farm_id=None):
-    # 질문에서 파일명 패턴 감지
+    """세션 컨텍스트(farm_id/house_id/auth_farm_id + 질문에서 감지한 file_name)
+    를 도구별 default 인자로 변환.
+
+    실제 변환 규칙은 tools_utils.TOOL_DEFAULT_CONTEXT 선언형 테이블에서 관리한다.
+    새 도구가 farm_id/house_id/auth_farm_id 를 받아야 하면 해당 테이블에 한 줄만
+    추가하면 된다.
+    """
+    from agri_ai_core.src.ai.tools_utils import build_default_tool_args as _build
+
+    # 질문에서 파일명 패턴 감지 (RAG 전용)
     detected_file_name = None
     match = _FILE_NAME_RE.search(user_query or "")
     if match:
@@ -68,50 +77,14 @@ def _build_default_tool_args(user_query, farm_id, house_id, auth_farm_id=None):
         _uuid_match = re.match(r'^[a-f0-9]{8}_(.+)$', detected_file_name)
         if _uuid_match:
             detected_file_name = _uuid_match.group(1)
-
-    # 조회·삭제·제어 계열 도구 공통 기본값 (farm_id/house_id 주입)
-    args = {
-        "search_farm_knowledge": {
-            "farm_id": str(farm_id) if farm_id else None,
-            "house_id": str(house_id) if house_id else None,
-        },
-        "get_farm_realtime_data": {
-            "farm_id": str(farm_id) if farm_id else None,
-            "house_id": str(house_id) if house_id else None,
-        },
-        "control_relay": {
-            "farm_id": str(farm_id) if farm_id else None,
-            "house_id": str(house_id) if house_id else None,
-        },
-        "delete_farm_knowledge": {
-            "farm_id": str(farm_id) if farm_id else None,
-        },
-        # [Phase 1 관리 도구] farm_id 기본 주입 — 미주입 시 tools_admin 이 항상 '1' 로 폴백되는 버그 방지
-        "set_house_control_mode": {"farm_id": str(farm_id) if farm_id else None},
-        "set_growth_stage":       {"farm_id": str(farm_id) if farm_id else None},
-        "set_circulation_mode":   {"farm_id": str(farm_id) if farm_id else None},
-        "set_schedule":           {"farm_id": str(farm_id) if farm_id else None},
-        "get_system_status":      {"farm_id": str(farm_id) if farm_id else None},
-        # [Phase 4 Agent 모니터링]
-        "schedule_monitor":       {"farm_id": str(farm_id) if farm_id else None},
-    }
-
-    # auth_farm_id: RAG 권한 + 관리 도구 농장 접근권 검증 (시스템관리자=None, 농장사용자=자기농장ID)
-    if auth_farm_id is not None:
-        args["search_farm_knowledge"]["auth_farm_id"] = str(auth_farm_id)
-        args["delete_farm_knowledge"]["auth_farm_id"] = str(auth_farm_id)
-        # 제어/관리 도구에도 전파하여 tools_auth.check_farm_access 가드 발동
-        for tool in ("control_relay", "set_house_control_mode", "set_growth_stage",
-                      "set_circulation_mode", "set_schedule"):
-            args[tool]["auth_farm_id"] = str(auth_farm_id)
-
-    # 감지된 파일명은 search/delete에 기본값으로 제공
-    if detected_file_name:
-        args["search_farm_knowledge"]["file_name"] = detected_file_name
-        args["delete_farm_knowledge"]["file_name"] = detected_file_name
         logger.info(f"[기본인자] 파일명 감지: '{detected_file_name}'")
 
-    return args
+    return _build(
+        farm_id=farm_id,
+        house_id=house_id,
+        auth_farm_id=auth_farm_id,
+        file_name=detected_file_name,
+    )
 
 
 async def _call_llm_with_timeout(full_query, farm_name, default_tool_args, conversation_history,
