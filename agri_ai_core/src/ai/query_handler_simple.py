@@ -104,7 +104,8 @@ async def _call_llm_with_timeout(full_query, farm_name, default_tool_args, conve
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# LLM 결과를 (response_text, sources, tools_used, response_type) 튜플로 언패킹
+# LLM 결과를 (response, sources, tools_used, response_type, tool_calls_detail)
+# 튜플로 언패킹. tool_calls_detail 은 Wave 4 E1 도구 호출 감사 로그 (선택적).
 # ════════════════════════════════════════════════════════════════════════════
 def _unpack_llm_result(result):
     if isinstance(result, dict):
@@ -113,8 +114,9 @@ def _unpack_llm_result(result):
             result.get("sources", []),
             result.get("tools_used", []),
             result.get("response_type", "general"),
+            result.get("tool_calls_detail") or None,
         )
-    return (str(result), [], [], "general")
+    return (str(result), [], [], "general", None)
 
 
 # ═════════════════════════
@@ -192,7 +194,7 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
             }
             return
 
-        response_text, sources, tools_used, response_type = _unpack_llm_result(result)
+        response_text, sources, tools_used, response_type, tool_calls_detail = _unpack_llm_result(result)
 
         llm_elapsed = (datetime.now() - llm_start).total_seconds()
         total_elapsed = (datetime.now() - start_time).total_seconds()
@@ -232,6 +234,7 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
             "sources": sources,
             "tools_used": tools_used,
             "response_type": response_type,
+            "tool_calls_detail": tool_calls_detail,   # [E1] 감사 로그 pass-through
         }
 
     except Exception as e:
@@ -431,7 +434,7 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
                         "phase": _last_phase,
                     }
 
-        response_text, sources, tools_used, response_type = _unpack_llm_result(result)
+        response_text, sources, tools_used, response_type, tool_calls_detail = _unpack_llm_result(result)
 
         llm_elapsed = (datetime.now() - llm_start).total_seconds()
         total_elapsed = (datetime.now() - start_time).total_seconds()
@@ -449,6 +452,7 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
             "sources": sources,
             "tools_used": tools_used,
             "response_type": response_type,
+            "tool_calls_detail": tool_calls_detail,   # [E1] 감사 로그 pass-through
             "elapsed_sec": round(total_elapsed, 1),
         }
 

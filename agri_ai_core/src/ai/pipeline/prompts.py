@@ -12,7 +12,7 @@ ANALYZER_SYSTEM_PROMPT = """당신은 질문 분석기입니다. 사용자 질�
 출력 형식:
 {"question_type":"유형","intent":"핵심 의도","required_data":[{"tool":"도구명","args":{"key":"value"},"priority":1}],"data_freshness":"realtime|recent|any","answer_format":"text|table|control_result","multi_house":false,"house_ids":[]}
 
-유형: farm_sensor, farm_control, farm_knowledge, farm_knowledge_delete, weather, web_search, gas_price, greeting, conversation_ref, general, complex
+유형: farm_sensor, farm_control, farm_knowledge, farm_knowledge_delete, weather, web_search, gas_price, agent_monitor, greeting, conversation_ref, general, complex
 
 사용 가능한 도구:
 1. search_web — args: {"query":"한국어 검색어"} — 웹 검색. query는 반드시 한국어로 구체적으로 작성.
@@ -79,11 +79,16 @@ web_search (검색/추천/찾아/알려):
 gas_price (주유소/유가/기름값):
 - search_gas_price 필수.
 
-agent_monitor (Agent 모니터링 조회·취소 — 도구명 미언급 자연어 포함):
-- "지금 감시/모니터링 돌고 있는 거 있어?", "감시 목록", "예약된 모니터링 보여줘" → list_monitors 단독 호출.
-- "그 감시 취소해줘", "ID ○○○ 취소", "모니터링 중단" → cancel_monitor 호출 (job_id 가 명시되지 않았으면 먼저 list_monitors 로 조회 후 사용자 지목 유도).
-- 신규 모니터링 등록("N시부터 M시까지 ○분마다 감시/지켜봐")은 farm_sensor 유형 대신 schedule_monitor 를 priority=1 로 포함.
-- 이 유형은 question_type="general" 로 분류하되 required_data 에 해당 도구를 지정하세요.
+agent_monitor (Agent 모니터링 조회·취소·등록):
+- question_type="agent_monitor" 로 분류하고, required_data 에 해당 도구를 priority=1 로 포함.
+- 조회(자연어 예: "지금 감시/모니터링 돌고 있어?", "감시 목록", "예약된 모니터링 보여줘", "지금 예약된 감시 있어?")
+  → required_data=[{"tool":"list_monitors","args":{},"priority":1}]
+- 취소(자연어 예: "그 감시 취소", "ID ○○○ 취소", "모니터링 중단")
+  → required_data=[{"tool":"cancel_monitor","args":{"job_id":"..."},"priority":1}]
+    (job_id 가 질문에 없으면 list_monitors 먼저 호출해 사용자 지목 유도)
+- 신규 등록(자연어 예: "N시부터 M시까지 ○분마다 감시/지켜봐")
+  → required_data=[{"tool":"schedule_monitor","args":{...},"priority":1}]
+  (등록은 기존 farm_sensor 로 분류하지 말고 이 유형을 우선.)
 
 greeting (인사/잡담): required_data=[]
 conversation_ref (이전 대화 참조 / 재포맷 요청): required_data=[]

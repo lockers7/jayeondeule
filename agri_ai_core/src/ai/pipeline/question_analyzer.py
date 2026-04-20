@@ -90,6 +90,8 @@ _VALID_TYPES = {
     "farm_sensor", "farm_control", "farm_knowledge", "farm_knowledge_delete",
     "weather", "web_search", "gas_price", "greeting", "conversation_ref",
     "general", "complex",
+    # [Phase 4 Agent 모니터링] list/cancel/schedule_monitor 조회·취소·등록 질의 전용 유형
+    "agent_monitor",
 }
 _VALID_TOOLS = {
     "search_web", "fetch_url_content", "get_farm_realtime_data",
