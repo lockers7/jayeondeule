@@ -67,6 +67,39 @@ def _get_ai_judgment_safe(farm_id, house_id):
         return None
 
 
+# ═════════════════════════════════════════════════════════════════════════
+# [B2] 히터 쿨다운 경고 헬퍼 — LLM 직접 ON 명령에 대해 안전 경고만 추가
+# 경고만 반환하고 실행은 차단하지 않는다 ("사용자 명령 즉시 실행" 철학 유지).
+# ═════════════════════════════════════════════════════════════════════════
+_HEATER_DEVICES = {"water_heater_flag", "indoor_heater_flag", "indoor_heater_valve_flag"}
+
+
+def _get_heater_cooldown_warning(farm_id, house_id, device_name: str, action: str):
+    """LLM 이 히터 계열 장치를 ON 명령할 때 쿨다운 상태를 경고 메시지로 반환.
+    반환: 경고 문자열 또는 None (경고 없음).
+    - device_name 이 히터 계열이 아니면 None
+    - action 이 ON 이 아니면 None (OFF/reverse 는 안전 이슈 없음)
+    - check_heater_cooldown 이 (False, True)면 경고 반환, 그 외 None
+    """
+    try:
+        if not device_name or device_name not in _HEATER_DEVICES:
+            return None
+        if (action or "").lower() != "on":
+            return None
+        from agri_ai_core.src.control.control_common import check_heater_cooldown
+        available, cooling = check_heater_cooldown(farm_id, house_id)
+        if cooling:
+            return (
+                f"⚠️ 안전경고: {device_name} 은 직전 30분 연속 가동 후 쿨다운(5분) 상태이지만 "
+                f"사용자 명령으로 ON 처리를 수행했습니다. 과열 방지를 위해 필요 시 OFF 명령을 "
+                f"내려 주세요."
+            )
+        return None
+    except Exception as e:
+        logger.debug(f"[히터쿨다운경고] 계산 실패: {e}")
+        return None
+
+
 def _control_relay_all_houses(device_name: str = None, action: str = None, farm_id: str = None,
                                mode: str = None, devices: list = None,
                                auth_farm_id: str = None) -> Dict[str, Any]:
@@ -196,7 +229,11 @@ def control_relay(house_id: str, device_name: str = None, action: str = None,
             # LLM 제어 잠금 설정 (자동제어 스케줄러 충돌 방지)
             set_llm_relay_lock(target_farm_id, target_house_id)
             logger.info(f"[릴레이제어] 완료 ({elapsed:.1f}s) {device_label} → {action_label} (LLM 잠금 설정)")
-            return {
+            # [B2] 히터 계열 ON 시 쿨다운 경고 (실행은 이미 성공, 안내만 추가)
+            heater_warn = _get_heater_cooldown_warning(
+                target_farm_id, target_house_id, device_name, action,
+            )
+            resp = {
                 "success": True,
                 "message": f"{target_house_id}호 재배사의 {device_label}을(를) {action_label} 처리했습니다.",
                 "farm_id": target_farm_id,
@@ -208,6 +245,9 @@ def control_relay(house_id: str, device_name: str = None, action: str = None,
                 "ai_judgment": ai_judgment,
                 "ai_conflict": ai_conflict,
             }
+            if heater_warn:
+                resp["warnings"] = [heater_warn]
+            return resp
         else:
             logger.warning(f"[릴레이제어] 실패 ({elapsed:.1f}s): {result.get('message')}")
             return {
