@@ -11,7 +11,10 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from agri_ai_core.logs import setup_logger
-from agri_ai_core.src.ai.tools_utils import normalize_id as _normalize_id
+from agri_ai_core.src.ai.tools_utils import (
+    normalize_id as _normalize_id,
+    get_farm_house_ids as _get_farm_house_ids,
+)
 
 logger = setup_logger(__name__)
 
@@ -126,7 +129,7 @@ def schedule_monitor(
         start_time: 시작 시각 ('HH:MM' | 'YYYY-MM-DD HH:MM' | ISO)
         end_time: 종료 시각
         interval_min: 주기(분). 최소 1분, 최대 1440분(24시간)
-        house_ids: ['1','2','3'] 또는 'all'
+        house_ids: 리스트(예: ['1','2','3']) 또는 콤마 구분 문자열 또는 'all'/'전체'
         farm_id: 농장 ID
         alert_on_normal: True면 이상 없을 때도 매 주기 정상 상태 알림 발행
 
@@ -149,19 +152,23 @@ def schedule_monitor(
         if interval_min < 1 or interval_min > 1440:
             return {"success": False, "error": "interval_min은 1~1440 범위여야 합니다"}
 
-        # house_ids 정규화
+        target_farm = _normalize_id(farm_id) or "1"
+        farm_houses = _get_farm_house_ids(target_farm) or []
+
+        # house_ids 정규화 — 재배사 목록은 농장별로 가변이므로 DB 동적 조회 사용
         if isinstance(house_ids, str):
             s = house_ids.strip().lower()
-            if s == "all" or s == "전체":
-                houses = ["1", "2", "3"]
+            if s in ("all", "전체", "모든", "모든재배사", "전재배사", "전체재배사"):
+                houses = farm_houses
             else:
                 houses = [x.strip() for x in house_ids.split(",") if x.strip()]
         elif isinstance(house_ids, list):
             houses = [str(x) for x in house_ids]
         else:
-            houses = ["1", "2", "3"]  # 기본 전체
+            houses = farm_houses  # 기본: 해당 농장 전 재배사
 
-        target_farm = _normalize_id(farm_id) or "1"
+        if not houses:
+            return {"success": False, "error": f"농장(farm_id={target_farm})의 감시 대상 재배사를 찾을 수 없습니다"}
 
         job_id = f"{_AGENT_JOB_PREFIX}{int(datetime.now().timestamp() * 1000)}"
 

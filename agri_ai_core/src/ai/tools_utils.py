@@ -11,9 +11,65 @@
 # to_chroma_where: 다중 키 dict → ChromaDB $and 형식 변환
 # ════════════════════════════════════════════════════════════════
 import re
+import time
+import threading
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
+
+# 농장별 재배사 ID 목록 캐시 — 짧은 TTL (기본 60초).
+# 재배사 추가/삭제는 드물고, 센서 조회 fan-out 마다 DB 왕복하면 부담이므로 메모이제이션.
+_HOUSE_IDS_CACHE: Dict[str, tuple] = {}   # farm_id(str) → (expire_ts, [hous_id, ...])
+_HOUSE_IDS_CACHE_LOCK = threading.Lock()
+_HOUSE_IDS_TTL = 60.0  # 초
+
+
+def get_farm_house_ids(farm_id: Any, include_zero: bool = False, ttl: float = _HOUSE_IDS_TTL) -> List[str]:
+    """농장의 실제 운영 재배사 ID 목록을 DB에서 동적 조회하여 반환한다.
+
+    - farm_id: 농장 ID (문자/숫자 모두 허용)
+    - include_zero: True 시 hous_id=0(공통/통합정보재배사) 포함. 기본 False.
+    - ttl: 캐시 유효 시간(초).
+
+    재배사 구성은 농장별로 다르며 가변적이므로 하드코딩 ['1','2','3'] 금지.
+    실패·결과 없음 시 빈 리스트 반환 (호출자가 스스로 동작 결정).
+    """
+    fid = normalize_id(farm_id) or str(farm_id or "").strip() or "1"
+    cache_key = f"{fid}:{int(bool(include_zero))}"
+
+    now = time.time()
+    with _HOUSE_IDS_CACHE_LOCK:
+        entry = _HOUSE_IDS_CACHE.get(cache_key)
+        if entry and entry[0] > now:
+            return list(entry[1])
+
+    try:
+        from agri_ai_core.src.postgresql.connection import db_session
+        with db_session() as db:
+            q = ("SELECT hous_id FROM farmhouse_m_info "
+                 "WHERE farm_id=%s AND COALESCE(dlte_yn,'N')<>'Y' "
+                 + ("" if include_zero else "AND hous_id>0 ")
+                 + "ORDER BY hous_id")
+            rows = db.fetch_all(query=q, vals=(fid,), as_dict=True)
+        ids = [str(int(r["hous_id"])) for r in (rows or [])]
+    except Exception:
+        ids = []
+
+    with _HOUSE_IDS_CACHE_LOCK:
+        _HOUSE_IDS_CACHE[cache_key] = (now + ttl, list(ids))
+    return ids
+
+
+def invalidate_farm_house_ids_cache(farm_id: Any = None) -> None:
+    """재배사 추가/삭제 후 캐시 무효화. farm_id 생략 시 전체 클리어."""
+    with _HOUSE_IDS_CACHE_LOCK:
+        if farm_id is None:
+            _HOUSE_IDS_CACHE.clear()
+            return
+        fid = normalize_id(farm_id) or str(farm_id or "").strip()
+        for key in list(_HOUSE_IDS_CACHE.keys()):
+            if key.startswith(f"{fid}:"):
+                _HOUSE_IDS_CACHE.pop(key, None)
 
 
 def normalize_id(value: Any) -> Optional[str]:

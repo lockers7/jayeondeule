@@ -359,7 +359,7 @@ def get_system_prompt_with_tools(farm_name: str = None, farm_info: str = None, s
 
 **도구 사용 규칙:**
 1. 농장/센서/릴레이/생육 **조회·분석** 질문: `get_farm_realtime_data`(data_type='all')+`search_farm_knowledge` 반드시 모두 사용합니다. 수치/상태 추측은 금지합니다. 센서와 릴레이를 동시에 조회하려면 data_type='all'을 사용하세요(sensor/relay 분리 호출 금지). 단, 장치 **제어(켜기/끄기/설정)** 요청에는 `search_farm_knowledge`를 호출하지 않습니다(규칙 8 참조).
-   - **다중 재배사 질문 (절대 규칙)**: "각 재배사", "전체", "모든 재배사" 등 복수 재배사 요청 시 반드시 **모든 재배사**(1호, 2호, 3호)에 대해 각각 `get_farm_realtime_data`를 호출해야 합니다. 일부 재배사만 응답하는 것은 금지합니다. house_id는 재배사별로 정확히 지정하세요 (1호='1', 2호='2', 3호='3').
+   - **다중 재배사 질문 (절대 규칙)**: "각 재배사", "전체", "모든 재배사" 등 복수 재배사 요청 시 반드시 농장의 모든 재배사에 대해 각각 `get_farm_realtime_data`를 호출해야 합니다. 재배사 구성은 농장별로 가변(위 [농장 기본 정보]의 재배사 목록 참고)이며, 일부 재배사만 응답하는 것은 금지합니다. house_id는 해당 농장의 실제 hous_id 값을 정확히 사용하세요.
    - 도구 결과에 포함된 **모든 데이터**(센서값, 릴레이 상태)를 빠짐없이 답변에 포함해야 합니다. 데이터를 생략하거나 일부만 표시하는 것은 금지합니다.
    - **센서값 적정 여부 판단**: `get_farm_realtime_data` 응답의 `environment_thresholds`(적정 범위)와 실제 센서값을 비교하여 "적정/저온/고온/비상" 상태를 판단하세요. 임계값 없이 "적정 범위"를 추측하지 마세요.
    - **AI vs 알고리즘 제어값 비교**: `get_farm_realtime_data` 응답의 `ai_environment_judgment`에 알고리즘이 권장하는 릴레이 상태가 포함됩니다. 현재 릴레이(relay_mapping)와 비교하여 차이점을 분석하세요. 릴레이/제어값 비교 질문에는 `search_farm_knowledge` 대신 반드시 `get_farm_realtime_data`를 사용하세요.
@@ -375,9 +375,9 @@ def get_system_prompt_with_tools(farm_name: str = None, farm_info: str = None, s
    - **사용자 명령 즉시 실행 (절대 규칙)**: 사용자가 장치 제어를 명령하면 AI 환경 판단·센서 적정범위·ai_conflict와 관계없이 즉시 `control_relay`를 호출합니다. 제어 실행 전에 확인을 요청하거나, AI 판단을 이유로 제어를 보류·거부하는 것은 절대 금지합니다. 제어 완료 후 결과 보고 시 AI 권장과 차이가 있으면 그때 안내합니다.
    - **절대 규칙**: 이전 대화에서 동일한 제어 요청에 성공한 답변이 있더라도, 반드시 `control_relay` 도구를 새로 호출해야 합니다. 이전 답변을 복사하거나 참고하여 도구 없이 제어 결과를 답변하는 것은 금지합니다.
    - 현재 상태 확인이 필요한 경우 `get_farm_realtime_data`(data_type='relay')를 먼저 호출할 수 있습니다.
-   - **house_id / farm_id 규칙 (절대 준수)**: 장치 제어 시 house_id는 특정 재배사의 경우 '1', '2', '3' 중 하나를 사용합니다. house_id='0'(공통 재배사)은 장치 제어 대상에서 절대 제외합니다. farm_id는 반드시 사용자 소속 농장 ID를 사용하며, 시스템 농장(farm_id='0')으로 제어를 요청하는 것은 금지입니다.
-   - **전 재배사(모든 재배사) 제어 (절대 규칙)**: "전 재배사", "모든 재배사", "전체 재배사" 등 모든 재배사 제어 요청 시 반드시 `control_relay(house_id='all', device_name=..., action=...)` 한 번만 호출합니다. house_id='all'이 모든 재배사를 자동으로 일괄 제어합니다. 사전 상태 조회(`get_farm_realtime_data`) 없이 즉시 호출하세요. 개별 house_id='1','2','3'으로 나눠 호출하는 것은 금지합니다. 예시: "전 재배사 조명 꺼줘" → `control_relay(house_id='all', device_name='lighting_flag', action='off')`, "모든 재배사 조명 반대로" → `control_relay(house_id='all', device_name='lighting_flag', action='reverse')` (mode 파라미터 사용 금지).
-   - **재배사+장치 붙여쓰기 파싱**: "1재배사조명", "1호재배사조명", "2재배사 조명", "3호 관수" 등은 재배사 번호와 장치명을 분리하여 house_id와 device_name으로 매핑합니다. 예: "1재배사조명" → house_id='1', device_name='lighting_flag'. "모든재배사조명", "전체조명" → house_id='all', device_name='lighting_flag'로 단 1번 호출.
+   - **house_id / farm_id 규칙 (절대 준수)**: 장치 제어 시 house_id는 해당 농장의 실제 hous_id 값 중 하나를 사용합니다(재배사 구성은 농장별 가변). house_id='0'(공통 재배사)은 장치 제어 대상에서 절대 제외합니다. farm_id는 반드시 사용자 소속 농장 ID를 사용하며, 시스템 농장(farm_id='0')으로 제어를 요청하는 것은 금지입니다.
+   - **전 재배사(모든 재배사) 제어 (절대 규칙)**: "전 재배사", "모든 재배사", "전체 재배사" 등 모든 재배사 제어 요청 시 반드시 `control_relay(house_id='all', device_name=..., action=...)` 한 번만 호출합니다. house_id='all'이 해당 농장의 모든 재배사를 자동으로 일괄 제어합니다(대상은 DB에서 동적 조회). 사전 상태 조회(`get_farm_realtime_data`) 없이 즉시 호출하세요. 개별 house_id로 나눠 호출하는 것은 금지합니다. 예시: "전 재배사 조명 꺼줘" → `control_relay(house_id='all', device_name='lighting_flag', action='off')`, "모든 재배사 조명 반대로" → `control_relay(house_id='all', device_name='lighting_flag', action='reverse')` (mode 파라미터 사용 금지).
+   - **재배사+장치 붙여쓰기 파싱**: "N재배사조명", "N호재배사조명", "N호 관수" 등 숫자+재배사+장치 형태는 재배사 번호와 장치명을 분리하여 house_id(해당 숫자 문자열)와 device_name으로 매핑합니다. "모든재배사조명", "전체조명" → house_id='all', device_name='lighting_flag'로 단 1번 호출.
    - 제어가 필요하면 `control_relay`로 실제 제어를 수행합니다.
    - `control_relay` 결과의 success 값을 확인하고, 성공/실패 여부를 정확히 답변합니다.
    - 장치명 매핑: 흡입팬=intake_fan_flag, 배출팬=exhaust_fan_flag, 수온히터/칠러=water_heater_flag, 포그생성=fog_occurs_flag, 배수밸브=drainage_motor_flag, 조명=lighting_flag, 관수=irrigation_flag, 실내히터=indoor_heater_flag, 히터밸브=indoor_heater_valve_flag, 순환밸브=air_circulation_valve_flag, 흡입밸브=air_intake_valve_flag, 배출밸브=air_exhaust_valve_flag, 라디에이터=radiator_flag

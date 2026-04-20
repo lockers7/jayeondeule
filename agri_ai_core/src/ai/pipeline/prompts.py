@@ -31,7 +31,7 @@ ANALYZER_SYSTEM_PROMPT = """당신은 질문 분석기입니다. 사용자 질�
 11. set_schedule — args: {"action":"list|add|delete","house_id":"N","unit_type":"light|water","start_time":"HH:MM","end_time":"HH:MM","interval_min":N,"farm_id":"N"} — 조명/관수 스케줄 관리.
 12. override_ai_thresholds — args: {"action":"get|set|reset","key":"TEMP_LOW 등","value":숫자} — AI 제어 임계값 조회/조정.
 13. get_system_status — args: {"farm_id":"N"} — 전체 시스템 상태(재배사별 제어모드/생육단계/AI루프/스케줄러) 조회. "시스템 상황 알려줘" 요청 시 필수.
-14. schedule_monitor — args: {"intent":"의도","start_time":"HH:MM","end_time":"HH:MM","interval_min":30,"house_ids":"1,2,3|all","farm_id":"N","alert_on_normal":false} — Agent 모니터링 Job 등록. "○시부터 ○시까지 ○분마다 감시/모니터링/지켜봐", "오늘 밤 재배사 봐줘" 등 시간 기반 관찰을 요청하면 반드시 호출. 이상 감지 시 채팅 알림 자동 발행.
+14. schedule_monitor — args: {"intent":"의도","start_time":"HH:MM","end_time":"HH:MM","interval_min":30,"house_ids":"all 또는 콤마구분 hous_id","farm_id":"N","alert_on_normal":false} — Agent 모니터링 Job 등록. "○시부터 ○시까지 ○분마다 감시/모니터링/지켜봐", "오늘 밤 재배사 봐줘" 등 시간 기반 관찰을 요청하면 반드시 호출. 이상 감지 시 채팅 알림 자동 발행. 재배사 구성은 농장별 가변이므로 전체 감시에는 "all" 사용.
 15. list_monitors — args: {} — 현재 등록된 Agent 모니터링 목록. "감시 뭐 돌고 있어?"류 질문.
 16. cancel_monitor — args: {"job_id":"agent_monitor_..."} — 특정 Agent 모니터링 취소.
 
@@ -45,7 +45,10 @@ weather (날씨/기온/기상/예보):
 
 farm_sensor (센서/온도/습도/릴레이/재배사 상태):
 - get_farm_realtime_data(data_type="all") 필수.
-- "각 재배사/전체/모든 재배사" → multi_house=true, house_ids=["1","2","3"]
+- "각 재배사/전체/모든 재배사" → multi_house=true, house_ids=["all"] (시스템이 해당 농장의 실제 재배사 목록을 DB에서 조회해 전개)
+- **실시간 모니터링/지켜봐/감시/상태 알려줘 등 특정 재배사를 명시하지 않은 요청** → multi_house=true, house_ids=["all"] (전 재배사 의도)
+- 특정 재배사 명시("1호", "2번재배사") 시 → multi_house=false, house_ids=[], args에 house_id="N"
+- 재배사 구성은 농장별로 가변이므로 ["1","2","3"] 같은 고정 번호를 직접 지정하지 마세요. "all" 키워드로 전체 의도를 표현하면 시스템이 DB에서 동적 조회해 fan-out합니다.
 - search_farm_knowledge도 권장 (재배 지식 보충).
 
 farm_control (장치 켜기/끄기/제어):
@@ -77,7 +80,12 @@ gas_price (주유소/유가/기름값):
 - search_gas_price 필수.
 
 greeting (인사/잡담): required_data=[]
-conversation_ref (이전 대화 참조): required_data=[]
+conversation_ref (이전 대화 참조 / 재포맷 요청): required_data=[]
+- 다음 요청은 이전 대화의 **데이터가 이미 있다**는 가정으로 conversation_ref로 분류하고 도구를 호출하지 마세요.
+  · 재포맷/재표현: "표로 작성해줘", "표로 다시", "정리해줘", "요약해줘", "간단히/자세히/짧게", "보기 좋게"
+  · 과거 참조: "아까/방금/이전에 뭐라고 했어", "방금 말한 ○○"
+- 판정 원칙: 직전 대화 맥락에 이미 나온 값/결과를 LLM이 다른 형식으로 다시 표현하면 되는 경우 → conversation_ref.
+- 예외(도구 재호출 필요): 사용자가 "지금", "새로", "최신", "다시 조회", "실시간" 등 **새 수집 의도**를 명시한 경우 → 원래 유형(farm_sensor 등) 유지.
 
 general (도구 없이 LLM 자체 지식으로 답변 가능한 일반 질문): required_data=[]
 - 판정 원칙: "외부 데이터/실시간 사실/농장 상태/특정 장소 정보가 필요 없는" 질문은 general로 분류.

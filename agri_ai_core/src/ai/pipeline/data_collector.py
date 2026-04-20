@@ -352,22 +352,86 @@ class DataCollector:
     # multi_house 확장
     # ════════════════════════════════════════════════════════════
     def _expand_multi_house(self, required_data, multi_house, house_ids):
-        if not multi_house or not house_ids:
-            return list(required_data)
-        actual_ids = ["1", "2", "3"] if "all" in house_ids else house_ids
+        """get_farm_realtime_data 의 대상 재배사를 결정하여 fan-out.
+
+        재배사 목록은 농장별로 가변이므로 DB(farmhouse_m_info)에서 동적 조회.
+        우선순위:
+        1) analyzer 가 multi_house=true + house_ids 를 명시 → 해당 ID들(또는 'all'이면 전체)로 fan-out
+        2) task args 에 유효 개별 house_id 가 있으면 단건 유지
+        3) default_tool_args (사이드바 선택) 에 유효 개별 house_id 가 있으면 단건 유지
+        4) 어디에도 유효 house_id 없음 ('0'/'all'/빈값) → 해당 농장의 전 재배사 fan-out
+        """
+        from agri_ai_core.src.ai.tools_utils import get_farm_house_ids
+
+        rt_default = (self.default_tool_args or {}).get("get_farm_realtime_data", {}) or {}
+        default_hid = str(rt_default.get("house_id") or "").strip()
+        default_fid = str(rt_default.get("farm_id") or "").strip() or None
+
+        def _all_ids_for(farm_id: str) -> list:
+            ids = get_farm_house_ids(farm_id or default_fid or "1")
+            return ids or []
+
+        if multi_house and house_ids:
+            if "all" in house_ids:
+                actual_ids = _all_ids_for(default_fid)
+            else:
+                actual_ids = [str(h) for h in house_ids]
+        else:
+            actual_ids = None
+
         expanded = []
         for task in required_data:
             tool = task.get("tool", "")
-            if tool == "get_farm_realtime_data" and len(actual_ids) > 1:
-                for hid in actual_ids:
-                    new_task = dict(task)
-                    new_args = dict(task.get("args", {}))
-                    new_args["house_id"] = hid
-                    new_task["args"] = new_args
-                    expanded.append(new_task)
-            else:
+            if tool != "get_farm_realtime_data":
                 expanded.append(task)
+                continue
+
+            args = task.get("args", {}) or {}
+            task_hid = str(args.get("house_id") or "").strip()
+            task_fid = str(args.get("farm_id") or "").strip() or default_fid
+
+            # 1) analyzer 가 명시한 multi_house fan-out
+            if actual_ids and len(actual_ids) > 1:
+                for h in actual_ids:
+                    expanded.append(self._clone_task_with_house(task, h))
+                continue
+
+            # 2) task 에 유효 개별 house_id
+            if task_hid and task_hid not in ("0", "all"):
+                expanded.append(task)
+                continue
+
+            # 3) 사이드바 기본값 (merge 단계에서 적용됨)
+            if default_hid and default_hid not in ("0", "all"):
+                expanded.append(task)
+                continue
+
+            # 4) 유효 house_id 없음 → 해당 농장의 전 재배사 fan-out (DB 동적 조회)
+            farm_houses = _all_ids_for(task_fid)
+            if not farm_houses:
+                logger.warning(
+                    f"[2단계] 농장(farm_id={task_fid}) 재배사 조회 실패 → 단건 호출 유지"
+                )
+                expanded.append(task)
+                continue
+
+            logger.info(
+                f"[2단계] get_farm_realtime_data house_id 미지정 "
+                f"(task='{task_hid}', default='{default_hid}', farm={task_fid}) "
+                f"→ DB 조회 재배사 {farm_houses} 전체 fan-out"
+            )
+            for h in farm_houses:
+                expanded.append(self._clone_task_with_house(task, h))
+
         return expanded
+
+    @staticmethod
+    def _clone_task_with_house(task, house_id):
+        new_task = dict(task)
+        new_args = dict(task.get("args", {}) or {})
+        new_args["house_id"] = str(house_id)
+        new_task["args"] = new_args
+        return new_task
 
     # ════════════════════════════════════════════════════════════
     # 헬퍼

@@ -126,10 +126,19 @@ _CONVERSATIONAL_EXTRA_RE = re.compile(
 )
 _PREV_CONV_REF_WORDS = ("아까", "방금", "이전에", "그때 뭐", "지난번", "이전 대화", "아까 말한", "방금 말한")
 
+# 이전 답변의 동일 데이터를 다른 형식으로 재표현해 달라는 요청.
+# 이 경우 assistant 이전 응답을 유지해야 도구 재호출(house_id 기본값 호출) 없이 재포맷 가능.
+_REFORMAT_RE = re.compile(
+    r"(표\s*로|표로\s*(?:다시|정리|작성|보여|만들|그려)|테이블\s*로"
+    r"|다시\s*(?:말|설명|정리|작성|보여)|요약|간단히|간략히|짧게"
+    r"|자세히|상세히|좀\s*더\s*(?:자세|상세|구체)"
+    r"|정리해|보기\s*(?:쉽|어렵|좋)|형식\s*바꿔|깔끔하게)"
+)
+
 
 def _is_conversational_query(query: str) -> bool:
     """요구/지시가 아닌 순수 일반 대화인지 판단한다.
-    True: 인사·감탄·짧은 반응·이전 대화 참조 등 → 직전 대화 맥락 포함 가능
+    True: 인사·감탄·짧은 반응·이전 대화 참조·재포맷 요청 등 → 직전 대화 맥락 포함 가능
     False(기본): 데이터 조회·장치 제어·정보 요청 등 → 최신 도구 데이터 우선, assistant 맥락 불포함
     """
     q = (query or "").strip()
@@ -143,6 +152,10 @@ def _is_conversational_query(query: str) -> bool:
         return True
     # 이전 대화 참조 질문 ("아까 뭐라고 했어?", "방금 말한 온도가 뭐야?")
     if any(ref in q for ref in _PREV_CONV_REF_WORDS):
+        return True
+    # 재포맷 요청 — 이전 답변의 데이터를 다른 형식으로 재표현 ("표로", "요약", "자세히", "다시" 등)
+    # 단, 새 수집 의도가 명확하면 제외 (예: "지금/다시 조회해서", "최신 데이터로")
+    if _REFORMAT_RE.search(q) and not re.search(r"(지금|새로|최신|다시\s*조회|다시\s*확인)", q):
         return True
     return False
 

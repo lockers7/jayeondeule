@@ -17,6 +17,17 @@ from agri_ai_core.src.ai.tools_utils import normalize_id as _normalize_id
 logger = setup_logger(__name__)
 
 
+def _normalize_house(value: Any) -> Optional[str]:
+    """house_id를 정규화하되 'all'/'전체'/'모든'은 'all' 로 보존.
+    숫자 또는 '1호재배사' 류는 숫자만 추출, 그 외는 None."""
+    if value is None:
+        return None
+    s = str(value).strip().lower()
+    if s in ("all", "전체", "모든", "모든재배사", "전재배사", "전체재배사", "모두"):
+        return "all"
+    return _normalize_id(value)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 유효성 검증 상수
 # ─────────────────────────────────────────────────────────────────────────────
@@ -38,7 +49,8 @@ def set_house_control_mode(house_id: str, mode: str, farm_id: str = None) -> Dic
     """재배사의 제어 모드(mnul_ctrl_flag + ctrl_type)를 변경한다.
 
     Args:
-        house_id: '1', '2', '3', 'all' (또는 '상황버섯2호재배사' 등 이름)
+        house_id: 해당 농장의 hous_id (문자/숫자) 또는 'all' (전 재배사),
+                  또는 재배사 이름(예: '상황버섯2호재배사'). 재배사 개수·번호는 농장별 가변.
         mode: 'manual' | 'algorithm' | 'ai'
         farm_id: 농장 ID (기본값: default_tool_args의 farm_id)
 
@@ -57,7 +69,7 @@ def set_house_control_mode(house_id: str, mode: str, farm_id: str = None) -> Dic
     # manual / ai → mnul_ctrl_flag=True, algorithm → mnul_ctrl_flag=False
     mnul_flag = mode in ("manual", "ai")
 
-    target_house = _normalize_id(house_id)
+    target_house = _normalize_house(house_id)
     target_farm = _normalize_id(farm_id) or "1"
 
     try:
@@ -141,7 +153,7 @@ def set_growth_stage(house_id: str, stage: Any, farm_id: str = None) -> Dict[str
     """재배사의 생육단계(crop_lvel)를 변경한다.
 
     Args:
-        house_id: '1', '2', '3', 'all'
+        house_id: 해당 농장의 hous_id 또는 'all' (재배사 구성은 농장별 가변)
         stage: '발아기' | '생육기' | '수확기' | '휴지기' (또는 숫자 1~4)
         farm_id: 농장 ID
     """
@@ -154,7 +166,7 @@ def set_growth_stage(house_id: str, stage: Any, farm_id: str = None) -> Dict[str
             "error": f"유효하지 않은 생육단계: {stage}. 가능한 값: 발아기/생육기/수확기/휴지기 또는 1~4",
         }
 
-    target_house = _normalize_id(house_id)
+    target_house = _normalize_house(house_id)
     target_farm = _normalize_id(farm_id) or "1"
 
     try:
@@ -222,7 +234,7 @@ def set_circulation_mode(house_id: str, mode: str, farm_id: str = None) -> Dict[
     """재배사의 순환모드를 강제 설정한다 (댐퍼+팬 조합 반영).
 
     Args:
-        house_id: '1', '2', '3', 'all'
+        house_id: 해당 농장의 hous_id 또는 'all' (재배사 구성은 농장별 가변)
         mode: '내부순환' | '외부순환' | '흡입순환' | '배기순환' | '순환정지'
         farm_id: 농장 ID
 
@@ -243,7 +255,7 @@ def set_circulation_mode(house_id: str, mode: str, farm_id: str = None) -> Dict[
     if not circ:
         return {"success": False, "error": f"순환모드 정의 없음: {mode}"}
 
-    target_house = _normalize_id(house_id)
+    target_house = _normalize_house(house_id)
     target_farm = _normalize_id(farm_id) or "1"
 
     try:
@@ -317,7 +329,7 @@ def set_schedule(
 
     Args:
         action: 'add' | 'delete' | 'list'
-        house_id: '1', '2', '3' (single only)
+        house_id: 단일 hous_id만 허용 ('all' 불가). 재배사 구성은 농장별 가변.
         unit_type: 'light' | 'water'(irrigation)
         start_time: 'HH:MM' (add 시)
         end_time:   'HH:MM' (add 시)
@@ -333,7 +345,7 @@ def set_schedule(
         return {"success": False, "error": f"action은 add/delete/list 중 하나여야 합니다: {action}"}
     unit_type_db = "water" if unit_type in ("water", "irrigation", "관수") else "light"
     target_farm = _normalize_id(farm_id) or "1"
-    target_house = _normalize_id(house_id)
+    target_house = _normalize_house(house_id)
     if target_house in (None, "all"):
         return {"success": False, "error": "set_schedule는 특정 house_id만 지원합니다 (all 불가)"}
 
