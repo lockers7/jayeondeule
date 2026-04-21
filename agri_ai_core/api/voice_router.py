@@ -1,9 +1,9 @@
-# ═════════════════════════════════════════════
-# 음성 API 라우터: STT/TTS REST API 엔드포인트.
+# ════════════════════════════════════════════════════════════════════
+# 음성 API 라우터 — STT/TTS REST API 엔드포인트.
 # --->
-# stt_endpoint: stt endpoint
-# tts_endpoint: tts endpoint
-# ═════════════════════════════════════════════
+# stt_endpoint : POST /api/v1/voice/stt — 음성 파일을 텍스트로 변환 (STT)
+# tts_endpoint : POST /api/v1/voice/tts — 텍스트를 음성(MP3)으로 변환 (TTS)
+# ════════════════════════════════════════════════════════════════════
 import time
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import Response
@@ -16,17 +16,14 @@ api_logger = setup_api_logger("api_voice")
 voice_router = APIRouter(prefix="/api/v1/voice", tags=["voice"])
 
 
-# ═══════════════════════════════
-# 음성 파일을 텍스트로 변환 (STT)
-# ═══════════════════════════════
-# 텍스트를 음성(MP3)으로 변환 (TTS)
-# ═════════════════════════════════
 class TtsRequest(BaseModel):
     text: str
 
-# ═══════════════════════════════
-# 음성 파일을 텍스트로 변환 (STT)
-# ═══════════════════════════════
+
+# ────────────────────────────────────────────────────────────────────
+# STT — 업로드된 음성 파일(최대 30MB)을 텍스트로 변환.
+# stt_engine.transcribe 에 위임. content_type 미상 시 audio/webm 가정.
+# ────────────────────────────────────────────────────────────────────
 @voice_router.post("/stt")
 async def stt_endpoint(file: UploadFile = File(...)):
     from agri_ai_core.src.voice.stt_engine import transcribe
@@ -67,6 +64,10 @@ async def stt_endpoint(file: UploadFile = File(...)):
         }
 
 
+# ────────────────────────────────────────────────────────────────────
+# TTS — 텍스트를 MP3 바이너리로 합성하여 audio/mpeg 응답 반환.
+# tts_engine.synthesize 에 위임. 빈 텍스트는 400 응답.
+# ────────────────────────────────────────────────────────────────────
 @voice_router.post("/tts")
 async def tts_endpoint(request: TtsRequest):
     from agri_ai_core.src.voice.tts_engine import synthesize

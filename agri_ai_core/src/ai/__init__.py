@@ -1,6 +1,9 @@
-# ═══════════════════════════════════
-# AI Module - LLM, RAG, Learning, MCP
-# ═══════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
+# AI 모듈 패키지 — LLM, RAG, Learning, MCP 진입점.
+# 무거운 의존성을 lazy 로딩하기 위해 __getattr__ 으로 서브모듈 import 지연.
+# --->
+# __getattr__ : 외부에서 패키지 속성 접근 시 해당 서브모듈을 lazy import
+# ════════════════════════════════════════════════════════════════════
 __all__ = [
     "get_llm_response_with_tools",
     "initialize_background_warmup",
@@ -14,6 +17,10 @@ __all__ = [
 ]
 
 
+# ────────────────────────────────────────────────────────────────────
+# 외부에서 ai.<name> 접근 시 해당 서브모듈을 lazy import 하여 반환.
+# 미정의 이름은 AttributeError. 시작 시 Ollama/임베딩 등 무거운 import 회피.
+# ────────────────────────────────────────────────────────────────────
 def __getattr__(name):
     # LLM
     if name in {"get_llm_response_with_tools", "initialize_background_warmup"}:

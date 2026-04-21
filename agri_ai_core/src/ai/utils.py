@@ -13,8 +13,10 @@ RE_THINK_TAG = re.compile(
 )
 
 
+# ────────────────────────────────────────────────────────────────────
+# 텍스트에서 <think>/<thinking> 태그와 내용을 제거한다.
+# ────────────────────────────────────────────────────────────────────
 def strip_think_tags(text: str) -> str:
-    """텍스트에서 <think>/<thinking> 태그와 내용을 제거한다."""
     if not text:
         return text
     return RE_THINK_TAG.sub("", text).strip()
@@ -24,8 +26,10 @@ def strip_think_tags(text: str) -> str:
 KOREAN_CHAR_RE = re.compile(r"[가-힣]")
 
 
+# ────────────────────────────────────────────────────────────────────
+# 텍스트에 한국어(가~힣)가 포함되어 있으면 True.
+# ────────────────────────────────────────────────────────────────────
 def has_korean(text: str) -> bool:
-    """텍스트에 한국어(가~힣)가 포함되어 있으면 True."""
     return bool(KOREAN_CHAR_RE.search(text or ""))
 
 

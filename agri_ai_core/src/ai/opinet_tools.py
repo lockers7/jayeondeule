@@ -35,8 +35,10 @@ _PROD_MAP = {
     "등유": "C004", "LPG": "K015", "부탄": "K015",
 }
 
+# ────────────────────────────────────────────────────────────────────
+# Opinet 실시간 API 호출 (실패 시 None)
+# ────────────────────────────────────────────────────────────────────
 def _opinet_api_call(endpoint: str, params: dict = None) -> Optional[List[Dict]]:
-    """Opinet 실시간 API 호출 (실패 시 None)"""
     import requests as _req
     url = f"{_OPINET_BASE}/{endpoint}.do"
     p = {"out": "json", "code": _OPINET_API_KEY}
@@ -54,9 +56,11 @@ def _opinet_api_call(endpoint: str, params: dict = None) -> Optional[List[Dict]]
         return None
 
 
+# ────────────────────────────────────────────────────────────────────
+# DB 폴백: 가장 최근 저장된 데이터 조회
+# ────────────────────────────────────────────────────────────────────
 def _opinet_db_fallback(query_type: str, prodcd: str, sido_cd: str = None,
                         sigun: str = None) -> Optional[Dict]:
-    """DB 폴백: 가장 최근 저장된 데이터 조회"""
     try:
         from agri_ai_core.src.postgresql.reader import db_session
         with db_session() as db:
@@ -127,10 +131,12 @@ def _opinet_db_fallback(query_type: str, prodcd: str, sido_cd: str = None,
     return None
 
 
+# ────────────────────────────────────────────────────────────────────
+# Opinet 유가정보 조회 — 실시간 API 우선, 실패 시 DB 폴백
+# ────────────────────────────────────────────────────────────────────
 def search_gas_price(query_type: str = "avg_national", sido: str = None,
                      sigun: str = None, prodcd: str = "B027",
                      fuel_name: str = None) -> Dict[str, Any]:
-    """Opinet 유가정보 조회 — 실시간 API 우선, 실패 시 DB 폴백"""
     if not _OPINET_API_KEY:
         return {"success": False, "error": "OPNET_API 키가 설정되지 않았습니다."}
 

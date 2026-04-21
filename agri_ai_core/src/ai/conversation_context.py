@@ -1,14 +1,14 @@
-# ════════════════════════════════════════════════════════════════════════════════
-# 하이브리드 대화 컨텍스트 관리 — VectorDB 검색 + 최근 턴 조합
-# query_handler_simple.py에서 분리된 L5 계층 모듈.
+# ════════════════════════════════════════════════════════════════════
+# 하이브리드 대화 컨텍스트 관리 — VectorDB 검색 + 최근 턴 조합.
+# query_handler_simple.py 에서 분리된 L5 계층 모듈.
 # --->
-# _classify_topic: 사용자 질문을 주제별로 분류한다 (규칙 기반)
-# load_hybrid_context: 직전 N턴 + VectorDB 관련 대화 검색
-# _search_related_conversations: VectorDB conversation_collection에서 관련 과거 대화 검색
-# save_conversation_turn_hybrid: Q+A 쌍을 PostgreSQL + VectorDB에 저장
-# _async_vectordb_save: 백그라운드 VectorDB 임베딩 저장 + 수명 관리
-# _prune_old_conversations: farm_id별 최대 N건으로 수명 관리
-# ════════════════════════════════════════════════════════════════════════════════
+# _classify_topic               : 사용자 질문 주제 분류 (규칙 기반, LLM 없음)
+# load_hybrid_context           : 직전 N턴 + VectorDB 관련 대화 검색
+# _search_related_conversations : conversation_collection 에서 과거 대화 검색
+# save_conversation_turn_hybrid : Q+A 쌍을 PostgreSQL + VectorDB 에 저장
+# _async_vectordb_save          : 백그라운드 VectorDB 임베딩 저장 + 수명 관리
+# _prune_old_conversations      : farm_id 별 최대 N건 유지
+# ════════════════════════════════════════════════════════════════════
 import hashlib
 import os
 import re
@@ -44,8 +44,11 @@ _TOPIC_PATTERNS = [
 ]
 
 
+# ────────────────────────────────────────────────────────────────────
+# 사용자 질문 주제 분류 (규칙 기반, LLM 호출 없음).
+# 매치 안 되면 'general'.
+# ────────────────────────────────────────────────────────────────────
 def _classify_topic(query: str) -> str:
-    """사용자 질문을 주제별로 분류한다 (규칙 기반). LLM 호출 없음."""
     if not query:
         return "general"
     for pattern, topic in _TOPIC_PATTERNS:
@@ -54,9 +57,10 @@ def _classify_topic(query: str) -> str:
     return "general"
 
 
-# ════════════════════════════════════════════════════════════
-# 하이브리드 대화 컨텍스트: 직전 N턴 + VectorDB 관련 대화 검색
-# ════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 하이브리드 대화 컨텍스트 로드 — 직전 N턴(즉시 맥락) + VectorDB 관련 대화.
+# VectorDB 결과 ↔ 직전 대화 교차 중복 제거 후 [system+user/assistant] 리스트 반환.
+# ────────────────────────────────────────────────────────────────────
 def load_hybrid_context(session_id, user_query, farm_id, label=""):
     if not session_id:
         return None
@@ -120,9 +124,11 @@ def load_hybrid_context(session_id, user_query, farm_id, label=""):
     return history if history else None
 
 
-# ══════════════════════════════════════════════════════════
-# VectorDB conversation_collection에서 관련 과거 대화를 검색
-# ══════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# VectorDB conversation_collection 에서 관련 과거 대화 검색.
+# farm_id 권한 필터(시스템농장=전체, 일반=자기+시스템) + 거리 임계값 +
+# 동일 주제 우선 정렬 + 유사 질문 중복 제거 후 'lines' 텍스트 반환.
+# ────────────────────────────────────────────────────────────────────
 def _search_related_conversations(user_query, farm_id):
     try:
         from agri_ai_core.src.ai.embedder import embed_text
@@ -239,9 +245,11 @@ def _search_related_conversations(user_query, farm_id):
         return None
 
 
-# ═════════════════════════════════════════════════
-# 대화 턴 저장: PostgreSQL(동기) + VectorDB(비동기)
-# ═════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 대화 턴 저장 — PostgreSQL(동기) + VectorDB(기본 비동기).
+# SPECIAL 마커 제거 후 user/assistant 두 턴을 add_turn 으로 저장.
+# 환경변수 SYNC_VECTORDB_SAVE=true 면 VectorDB 도 동기 저장.
+# ────────────────────────────────────────────────────────────────────
 def save_conversation_turn_hybrid(session_id, user_query, response_text, farm_id=None, label=""):
     if not session_id:
         return
@@ -269,9 +277,11 @@ def save_conversation_turn_hybrid(session_id, user_query, response_text, farm_id
         ).start()
 
 
-# ═══════════════════════════════════════════════════════
-# 백그라운드: Q+A 쌍을 VectorDB에 임베딩 저장 + 수명 관리
-# ═══════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 백그라운드 VectorDB 임베딩 저장 + 수명 관리.
+# 인사/잡담 필터 + content 해시 기반 중복 방지 + topic 메타데이터 부착.
+# 저장 후 farm_id 별 30건 초과분 prune.
+# ────────────────────────────────────────────────────────────────────
 def _async_vectordb_save(session_id, user_query, response_text, farm_id):
     try:
         from agri_ai_core.src.ai.embedder import embed_text
@@ -330,9 +340,10 @@ def _async_vectordb_save(session_id, user_query, response_text, farm_id):
         logger.warning(f"[하이브리드] VectorDB 비동기 저장 실패: {e}")
 
 
-# ═══════════════════════════════════════
-# farm_id별 대화 기록을 최대 N건으로 유지
-# ═══════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# farm_id 별 대화 기록을 최대 _HYBRID_MAX_RECORDS_PER_FARM 건으로 유지.
+# record_datetime 오름차순 정렬 후 오래된 항목부터 delete_document.
+# ────────────────────────────────────────────────────────────────────
 def _prune_old_conversations(collection_name, farm_id):
     try:
         from agri_ai_core.src.chroma.operations import get_documents, delete_document

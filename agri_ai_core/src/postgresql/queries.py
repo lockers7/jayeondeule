@@ -1,6 +1,8 @@
-# ══════════════════════════════
-# PostgreSQL SQL 쿼리 상수 정의.
-# ══════════════════════════════
+# ════════════════════════════════════════════════════════════════════
+# PostgreSQL SQL 쿼리 상수 모음 — 함수 없이 SQL 문자열만 정의.
+# 호출처: postgresql/connection.py 의 fetch_*/execute_query 헬퍼.
+# 섹션 구분 주석으로 농장/센서/릴레이/AI 학습/생육 RAG/AI 결정/M7~M17 등 분류.
+# ════════════════════════════════════════════════════════════════════
 # farm_id=0(시스템/가상 농장)을 제외한 실제 운영 농장을 기본값으로 사용
 GET_ONE_FARM = "SELECT farm_id, farm_name FROM FARM_M_INFO WHERE farm_id != 0 ORDER BY farm_id LIMIT 1"
 GET_ONE_HOUSE = "SELECT hous_id, hous_name FROM FARMHOUSE_M_INFO WHERE farm_id = %s AND hous_id != 0 ORDER BY hous_id LIMIT 1"
@@ -212,22 +214,28 @@ GET_CURRENT_CROP_LVEL = """SELECT HMI.crop_lvel   AS crop_lvel
 # ══════════════════
 # 최적 조건 조회
 # ══════════════════
-GET_OPTIMAL_CONDITION = """SELECT setn_dttm      AS 저장일자
-                                , tprt_min       AS 온도최저
-                                , tprt_otml      AS 온도적정
-                                , tprt_max       AS 온도최고
-                                , hmdt_min       AS 습도최저
-                                , hmdt_otml      AS 습도적정
-                                , hmdt_max       AS 습도최고
-                                , co2_min        AS co2최저
-                                , co2_otml       AS co2적정
-                                , co2_max        AS co2최고
-                                , watr_tprt_min  AS 수온최저
-                                , watr_tprt_otml AS 수온적정
-                                , watr_tprt_max  AS 수온최고
-                                , heat_tprt_min  AS 히터최저
-                                , heat_tprt_otml AS 히터적정
-                                , heat_tprt_max  AS 히터최고
+GET_OPTIMAL_CONDITION = """SELECT setn_dttm           AS 저장일자
+                                , tprt_min            AS 온도최저
+                                , tprt_otml           AS 온도적정
+                                , tprt_max            AS 온도최고
+                                , tprt_crit_min       AS 온도비상최저
+                                , tprt_crit_max       AS 온도비상최고
+                                , hmdt_min            AS 습도최저
+                                , hmdt_otml           AS 습도적정
+                                , hmdt_max            AS 습도최고
+                                , hmdt_crit_min       AS 습도비상최저
+                                , hmdt_crit_max       AS 습도비상최고
+                                , co2_min             AS co2최저
+                                , co2_otml            AS co2적정
+                                , co2_max             AS co2최고
+                                , co2_crit_max        AS co2비상최고
+                                , watr_tprt_min       AS 수온최저
+                                , watr_tprt_otml      AS 수온적정
+                                , watr_tprt_max       AS 수온최고
+                                , watr_tprt_crit_min  AS 수온비상최저
+                                , watr_tprt_crit_max  AS 수온비상최고
+                                , bud_tprt_min        AS 발이기최저
+                                , bud_tprt_max        AS 발이기최고
                               FROM SENSOR_M_SETTING O
                              WHERE farm_id = %s
                                AND hous_id = %s
@@ -639,3 +647,271 @@ GET_ACTIVE_FARM_HOUSES_WITH_CROP = """SELECT DISTINCT FMI.farm_id
                                    LEFT JOIN CODE_M_INFO CLV ON CLV.code_id = 'crop_lvel' AND CLV.code_item = HMI.crop_lvel
                                        WHERE FMI.farm_id != 0 AND HMI.hous_id != 99
                                        ORDER BY FMI.farm_id, HMI.hous_id;"""
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# [2026-04-28] AI 환경제어 LLM — 1년 전 시점 컨텍스트 조회용 SQL.
+# 호출자: agri_ai_core.src.control.ai_history_context._fetch_year_ago_baseline.
+# 기능 추가만 — 기존 SQL 의 컬럼/시그니처는 변경하지 않음.
+# ════════════════════════════════════════════════════════════════════════════
+
+# 특정 시점 기준 ±N일 범위의 최적조건 셋팅값(SENSOR_M_SETTING) 1건 — 기준일에 가장
+# 가까운 setn_dttm 의 단일 행. (vals: farm_id, house_id, target_dttm, target_dttm)
+GET_OPTIMAL_AT_DATE = """SELECT TO_CHAR(setn_dttm, 'YYYY-MM-DD HH24:MI:SS') AS 저장일자
+                              , tprt_min       AS 온도최저
+                              , tprt_otml      AS 온도적정
+                              , tprt_max       AS 온도최고
+                              , hmdt_min       AS 습도최저
+                              , hmdt_otml      AS 습도적정
+                              , hmdt_max       AS 습도최고
+                              , co2_min        AS co2최저
+                              , co2_otml       AS co2적정
+                              , co2_max        AS co2최고
+                              , watr_tprt_min  AS 수온최저
+                              , watr_tprt_otml AS 수온적정
+                              , watr_tprt_max  AS 수온최고
+                           FROM SENSOR_M_SETTING
+                          WHERE farm_id = %s AND hous_id = %s
+                            AND setn_dttm BETWEEN (%s::timestamp - INTERVAL '7 days')
+                                              AND (%s::timestamp + INTERVAL '7 days')
+                          ORDER BY ABS(EXTRACT(EPOCH FROM (setn_dttm - %s::timestamp)))
+                          LIMIT 1;"""
+
+# 특정 시점 기준 ±N일 범위의 생육 입력값(FARMHOUSE_L_CROPS) 1건 — 기준일에 가장
+# 가까운 recd_dttm 의 단일 행. (vals: farm_id, house_id, target_dttm, target_dttm,
+# target_dttm)
+GET_GROWTH_INPUT_AT_DATE = """SELECT TO_CHAR(HLC.recd_dttm, 'YYYY-MM-DD HH24:MI:SS') AS record_datetime
+                                   , HLC.crop_kind
+                                   , HLC.crop_lvel
+                                   , HLC.ctrl_type
+                                   , CMI.code_name AS growth_status
+                                   , HLC.leaf_count
+                                   , HLC.leaf_size
+                                   , HLC.leaf_color
+                                   , HLC.stem_height
+                                   , HLC.stem_diameter
+                                   , HLC.fruit_count
+                                   , HLC.fruit_size
+                                   , HLC.pest_type
+                                   , HLC.pest_severity
+                                   , HLC.growth_memo
+                                   , HLC.crop_qtty AS total_yield
+                                   , HLC.crop_grde_qtty_1 AS grade_1_yield
+                                FROM FARMHOUSE_L_CROPS HLC
+                           LEFT JOIN CODE_M_INFO CMI ON CMI.code_id = 'crop_stat' AND CMI.code_item = HLC.crop_stat
+                               WHERE HLC.farm_id = %s AND HLC.hous_id = %s
+                                 AND HLC.recd_dttm BETWEEN (%s::timestamp - INTERVAL '7 days')
+                                                       AND (%s::timestamp + INTERVAL '7 days')
+                               ORDER BY ABS(EXTRACT(EPOCH FROM (HLC.recd_dttm - %s::timestamp)))
+                               LIMIT 1;"""
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# [2026-04-28] AI 자기결정 이력 — ai_decision_log 테이블
+# 호출자: agri_ai_core.src.control.ai_decision_log
+# 테이블 자동 생성 DDL 도 동봉 (없으면 모듈이 생성).
+# ════════════════════════════════════════════════════════════════════════════
+
+CREATE_AI_DECISION_LOG_TABLE = """
+CREATE TABLE IF NOT EXISTS ai_decision_log (
+    id              BIGSERIAL PRIMARY KEY,
+    decided_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+    farm_id         INTEGER NOT NULL,
+    house_id        INTEGER NOT NULL,
+    growth_stage    VARCHAR(32),
+    action          VARCHAR(16) NOT NULL,
+    circulation     VARCHAR(16),
+    water_heater    BOOLEAN,
+    fog_occurs      BOOLEAN,
+    reason          VARCHAR(256),
+    sensor_snapshot JSONB,
+    feedback        VARCHAR(8),
+    feedback_at     TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_ai_decision_log_house_time
+    ON ai_decision_log (farm_id, house_id, decided_at DESC);
+"""
+
+INSERT_AI_DECISION_LOG = """
+INSERT INTO ai_decision_log
+    (decided_at, farm_id, house_id, growth_stage, action, circulation,
+     water_heater, fog_occurs, reason, sensor_snapshot)
+VALUES
+    (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+RETURNING id;
+"""
+
+GET_RECENT_AI_DECISIONS = """
+SELECT TO_CHAR(decided_at, 'YYYY-MM-DD HH24:MI:SS') AS decided_at,
+       action, circulation, water_heater, fog_occurs, reason, feedback
+  FROM ai_decision_log
+ WHERE farm_id = %s AND hous_id_match
+"""  # 사용 안함 — 아래 호환 SQL 사용
+
+GET_RECENT_AI_DECISIONS_SQL = """
+SELECT TO_CHAR(decided_at, 'YYYY-MM-DD HH24:MI:SS') AS decided_at,
+       action, circulation, water_heater, fog_occurs, reason, feedback
+  FROM ai_decision_log
+ WHERE farm_id = %s AND house_id = %s
+ ORDER BY decided_at DESC
+ LIMIT %s;
+"""
+
+UPDATE_AI_DECISION_FEEDBACK = """
+UPDATE ai_decision_log
+   SET feedback = %s, feedback_at = NOW()
+ WHERE id = %s;
+"""
+
+# ════════════════════════════════════════════════════════════════════════════
+# [2026-04-28] M7 재배사간 시점 비교 — 동일 농장 다른 재배사의 최신 센서/릴레이
+# ════════════════════════════════════════════════════════════════════════════
+GET_PEER_HOUSES_LATEST_SENSOR = """
+SELECT s.farm_id, s.hous_id,
+       TO_CHAR(s.recd_dttm, 'YYYY-MM-DD HH24:MI:SS') AS record_datetime,
+       s.indr_tprt_valu AS indoor_temp,
+       s.indr_hmdt_valu AS indoor_humidity,
+       s.co2_valu       AS co2,
+       s.watr_tprt_valu AS water_temp
+  FROM SENSOR_L_RECORDING s
+  JOIN (SELECT farm_id, hous_id, MAX(recd_dttm) AS max_dttm
+          FROM SENSOR_L_RECORDING
+         WHERE farm_id = %s AND hous_id <> %s
+           AND recd_dttm >= NOW() - INTERVAL '10 minutes'
+         GROUP BY farm_id, hous_id) t
+    ON t.farm_id = s.farm_id AND t.hous_id = s.hous_id AND t.max_dttm = s.recd_dttm
+ ORDER BY s.hous_id;
+"""
+
+GET_PEER_HOUSES_LATEST_RELAY = """
+SELECT r.farm_id, r.hous_id,
+       r.relay_1st_flag, r.relay_2st_flag,
+       r.relay_5st_flag, r.relay_6st_flag, r.relay_7st_flag,
+       r.relay_10st_flag, r.relay_11st_flag, r.relay_14st_flag
+  FROM RELAY_L_RECORDING r
+  JOIN (SELECT farm_id, hous_id, MAX(recd_dttm) AS max_dttm
+          FROM RELAY_L_RECORDING
+         WHERE farm_id = %s AND hous_id <> %s
+           AND recd_dttm >= NOW() - INTERVAL '10 minutes'
+         GROUP BY farm_id, hous_id) t
+    ON t.farm_id = r.farm_id AND t.hous_id = r.hous_id AND t.max_dttm = r.recd_dttm
+ ORDER BY r.hous_id;
+"""
+
+# ════════════════════════════════════════════════════════════════════════════
+# [2026-04-28] M9 이상사건 직전 환경 — 병해 발생 직전 24h 센서 평균
+# 입력: farm_id, house_id, lookback_days(기본 60)
+# ════════════════════════════════════════════════════════════════════════════
+GET_RECENT_ANOMALY_EVENTS = """
+SELECT TO_CHAR(recd_dttm, 'YYYY-MM-DD HH24:MI:SS') AS event_time,
+       pest_type, pest_severity, growth_memo, crop_lvel
+  FROM FARMHOUSE_L_CROPS
+ WHERE farm_id = %s AND hous_id = %s
+   AND recd_dttm >= NOW() - %s::interval
+   AND pest_type IS NOT NULL AND pest_type <> '없음' AND pest_type <> ''
+ ORDER BY recd_dttm DESC
+ LIMIT 5;
+"""
+
+GET_SENSOR_AVG_BEFORE = """
+SELECT ROUND(AVG(indr_tprt_valu)::numeric, 2) AS avg_indoor_temp,
+       ROUND(AVG(indr_hmdt_valu)::numeric, 2) AS avg_indoor_humidity,
+       ROUND(AVG(co2_valu)::numeric, 2)       AS avg_co2,
+       ROUND(AVG(watr_tprt_valu)::numeric, 2) AS avg_water_temp,
+       COUNT(*)                                AS sample_count
+  FROM SENSOR_L_RECORDING
+ WHERE farm_id = %s AND hous_id = %s
+   AND recd_dttm BETWEEN (%s::timestamp - INTERVAL '24 hours') AND %s::timestamp;
+"""
+
+# ════════════════════════════════════════════════════════════════════════════
+# [2026-04-28] M13 수확 결과 상관 — 1등급률 ≥ 0.6 시기의 환경 평균
+# 같은 재배사·생육단계 기준
+# ════════════════════════════════════════════════════════════════════════════
+GET_HIGH_QUALITY_PERIODS = """
+SELECT TO_CHAR(HLC.recd_dttm, 'YYYY-MM-DD') AS period_date,
+       HLC.crop_lvel,
+       HLC.crop_qtty AS total_yield,
+       HLC.crop_grde_qtty_1 AS grade_1_yield,
+       CASE WHEN HLC.crop_qtty > 0
+            THEN ROUND((HLC.crop_grde_qtty_1::numeric / HLC.crop_qtty)::numeric, 3)
+            ELSE 0 END AS grade_1_ratio
+  FROM FARMHOUSE_L_CROPS HLC
+ WHERE HLC.farm_id = %s AND HLC.hous_id = %s
+   AND HLC.crop_qtty > 0
+   AND (HLC.crop_grde_qtty_1::numeric / NULLIF(HLC.crop_qtty, 0)) >= 0.6
+ ORDER BY HLC.recd_dttm DESC
+ LIMIT 5;
+"""
+
+# ════════════════════════════════════════════════════════════════════════════
+# [2026-04-28] M16 다년치 동월 평균 — 같은 월(현재 월) 의 연도별 환경 평균
+# ════════════════════════════════════════════════════════════════════════════
+GET_MONTHLY_SEASONALITY = """
+SELECT EXTRACT(YEAR FROM recd_dttm)::int           AS yr,
+       ROUND(AVG(indr_tprt_valu)::numeric, 2)       AS avg_indoor_temp,
+       ROUND(AVG(indr_hmdt_valu)::numeric, 2)       AS avg_indoor_humidity,
+       ROUND(AVG(co2_valu)::numeric, 2)             AS avg_co2,
+       ROUND(AVG(watr_tprt_valu)::numeric, 2)       AS avg_water_temp,
+       COUNT(*)                                      AS sample_count
+  FROM SENSOR_L_RECORDING
+ WHERE farm_id = %s AND hous_id = %s
+   AND EXTRACT(MONTH FROM recd_dttm)::int = %s
+ GROUP BY yr
+ ORDER BY yr DESC
+ LIMIT 5;
+"""
+
+# ════════════════════════════════════════════════════════════════════════════
+# [2026-04-28] M17 전력 사용량 — 릴레이 가동시간 추정 (실측 인프라 미장착)
+# 최근 24h 동안 각 릴레이의 ON 비율을 기반으로 추정 사용 시간(시간 단위)
+# ════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
+# [2026-04-28] 최근 시계열 N분 간격 K건 — LLM raw 시계열 컨텍스트
+# vals: farm_id, house_id, bucket_seconds, lookback_minutes, sample_count
+# ════════════════════════════════════════════════════════════════════════════
+GET_RECENT_TIMESERIES_SAMPLES = """
+WITH ranked AS (
+    SELECT recd_dttm,
+           indr_tprt_valu  AS indoor_temp,
+           indr_hmdt_valu  AS indoor_humidity,
+           co2_valu        AS co2,
+           watr_tprt_valu  AS water_temp,
+           oudr_tprt_valu  AS outdoor_temp,
+           oudr_hmdt_valu  AS outdoor_humidity,
+           ROW_NUMBER() OVER (
+               PARTITION BY (FLOOR(EXTRACT(EPOCH FROM recd_dttm) / %s)::bigint)
+               ORDER BY recd_dttm DESC
+           ) AS rn
+      FROM SENSOR_L_RECORDING
+     WHERE farm_id = %s AND hous_id = %s
+       AND recd_dttm >= NOW() - (%s * INTERVAL '1 minute')
+)
+SELECT TO_CHAR(recd_dttm, 'YYYY-MM-DD HH24:MI:SS') AS t,
+       indoor_temp, indoor_humidity, co2, water_temp,
+       outdoor_temp, outdoor_humidity
+  FROM ranked
+ WHERE rn = 1
+ ORDER BY recd_dttm DESC
+ LIMIT %s;
+"""
+
+
+GET_POWER_USAGE_24H = """
+SELECT COUNT(*)                                                                  AS sample_count,
+       ROUND(SUM(CASE WHEN relay_1st_flag  THEN 1 ELSE 0 END)::numeric * 24
+             / NULLIF(COUNT(*), 0), 2)                                            AS heater_hours,
+       ROUND(SUM(CASE WHEN relay_2st_flag  THEN 1 ELSE 0 END)::numeric * 24
+             / NULLIF(COUNT(*), 0), 2)                                            AS misting_hours,
+       ROUND(SUM(CASE WHEN relay_5st_flag  THEN 1 ELSE 0 END)::numeric * 24
+             / NULLIF(COUNT(*), 0), 2)                                            AS intake_fan_hours,
+       ROUND(SUM(CASE WHEN relay_6st_flag  THEN 1 ELSE 0 END)::numeric * 24
+             / NULLIF(COUNT(*), 0), 2)                                            AS exhaust_fan_hours,
+       ROUND(SUM(CASE WHEN relay_7st_flag  THEN 1 ELSE 0 END)::numeric * 24
+             / NULLIF(COUNT(*), 0), 2)                                            AS lighting_hours,
+       ROUND(SUM(CASE WHEN relay_8st_flag  THEN 1 ELSE 0 END)::numeric * 24
+             / NULLIF(COUNT(*), 0), 2)                                            AS irrigation_hours
+  FROM RELAY_L_RECORDING
+ WHERE farm_id = %s AND hous_id = %s
+   AND recd_dttm >= NOW() - INTERVAL '24 hours';
+"""

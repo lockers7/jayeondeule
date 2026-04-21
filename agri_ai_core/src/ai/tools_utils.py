@@ -47,12 +47,13 @@ TOOL_DEFAULT_CONTEXT: Dict[str, Dict[str, bool]] = {
 }
 
 
+# ────────────────────────────────────────────────────────────────────
+# 세션 컨텍스트 → 도구별 default 인자 dict 자동 생성.
+# TOOL_DEFAULT_CONTEXT 명세에 선언된 키만 주입한다. (알 수 없는 도구는 빈 dict)
+# 값이 None 이면 해당 키는 주입하지 않는다 (LLM 이 명시 지정 기회 보장).
+# ────────────────────────────────────────────────────────────────────
 def build_default_tool_args(farm_id=None, house_id=None, auth_farm_id=None,
                              file_name=None) -> Dict[str, Dict[str, Any]]:
-    """세션 컨텍스트 → 도구별 default 인자 dict 자동 생성.
-    TOOL_DEFAULT_CONTEXT 명세에 선언된 키만 주입한다. (알 수 없는 도구는 빈 dict)
-    값이 None 이면 해당 키는 주입하지 않는다 (LLM 이 명시 지정 기회 보장).
-    """
     session = {
         "farm_id": (str(farm_id) if farm_id not in (None, "") else None),
         "house_id": (str(house_id) if house_id not in (None, "") else None),
@@ -79,16 +80,17 @@ _HOUSE_IDS_CACHE_LOCK = threading.Lock()
 _HOUSE_IDS_TTL = 60.0  # 초
 
 
+# ────────────────────────────────────────────────────────────────────
+# 농장의 실제 운영 재배사 ID 목록을 DB에서 동적 조회하여 반환한다.
+# 
+# - farm_id: 농장 ID (문자/숫자 모두 허용)
+# - include_zero: True 시 hous_id=0(공통/통합정보재배사) 포함. 기본 False.
+# - ttl: 캐시 유효 시간(초).
+# 
+# 재배사 구성은 농장별로 다르며 가변적이므로 하드코딩 ['1','2','3'] 금지.
+# 실패·결과 없음 시 빈 리스트 반환 (호출자가 스스로 동작 결정).
+# ────────────────────────────────────────────────────────────────────
 def get_farm_house_ids(farm_id: Any, include_zero: bool = False, ttl: float = _HOUSE_IDS_TTL) -> List[str]:
-    """농장의 실제 운영 재배사 ID 목록을 DB에서 동적 조회하여 반환한다.
-
-    - farm_id: 농장 ID (문자/숫자 모두 허용)
-    - include_zero: True 시 hous_id=0(공통/통합정보재배사) 포함. 기본 False.
-    - ttl: 캐시 유효 시간(초).
-
-    재배사 구성은 농장별로 다르며 가변적이므로 하드코딩 ['1','2','3'] 금지.
-    실패·결과 없음 시 빈 리스트 반환 (호출자가 스스로 동작 결정).
-    """
     fid = normalize_id(farm_id) or str(farm_id or "").strip() or "1"
     cache_key = f"{fid}:{int(bool(include_zero))}"
 
@@ -115,8 +117,10 @@ def get_farm_house_ids(farm_id: Any, include_zero: bool = False, ttl: float = _H
     return ids
 
 
+# ────────────────────────────────────────────────────────────────────
+# 재배사 추가/삭제 후 캐시 무효화. farm_id 생략 시 전체 클리어.
+# ────────────────────────────────────────────────────────────────────
 def invalidate_farm_house_ids_cache(farm_id: Any = None) -> None:
-    """재배사 추가/삭제 후 캐시 무효화. farm_id 생략 시 전체 클리어."""
     with _HOUSE_IDS_CACHE_LOCK:
         if farm_id is None:
             _HOUSE_IDS_CACHE.clear()
@@ -127,10 +131,11 @@ def invalidate_farm_house_ids_cache(farm_id: Any = None) -> None:
                 _HOUSE_IDS_CACHE.pop(key, None)
 
 
+# ────────────────────────────────────────────────────────────────────
+# LLM이 전달한 ID에서 숫자만 추출. 숫자가 없으면 None.
+# 예: '자연들에 농장' → None, '1' → '1', '상황버섯1호재배사' → '1'
+# ────────────────────────────────────────────────────────────────────
 def normalize_id(value: Any) -> Optional[str]:
-    """LLM이 전달한 ID에서 숫자만 추출. 숫자가 없으면 None.
-    예: '자연들에 농장' → None, '1' → '1', '상황버섯1호재배사' → '1'
-    """
     if value is None:
         return None
     s = str(value).strip()
@@ -145,8 +150,10 @@ def normalize_id(value: Any) -> Optional[str]:
     return digits[0] if digits else None
 
 
+# ────────────────────────────────────────────────────────────────────
+# json.dumps의 default 인자로 사용. Decimal/datetime 타입 변환.
+# ────────────────────────────────────────────────────────────────────
 def json_default(value: Any) -> Any:
-    """json.dumps의 default 인자로 사용. Decimal/datetime 타입 변환."""
     if isinstance(value, Decimal):
         if value.is_nan() or value.is_infinite():
             return str(value)
@@ -158,11 +165,12 @@ def json_default(value: Any) -> Any:
     return str(value)
 
 
+# ────────────────────────────────────────────────────────────────────
+# AI 권장 릴레이 상태와 사용자 수동 제어의 차이점을 한국어 문자열 리스트로 반환.
+# 차이 없거나 입력 부족 시 None 반환.
+# ────────────────────────────────────────────────────────────────────
 def build_ai_conflict(ai_judgment: Optional[Dict[str, Any]],
                       user_relay_settings: Optional[Dict[str, Any]]) -> Optional[List[str]]:
-    """AI 권장 릴레이 상태와 사용자 수동 제어의 차이점을 한국어 문자열 리스트로 반환.
-    차이 없거나 입력 부족 시 None 반환.
-    """
     if not ai_judgment or not user_relay_settings:
         return None
     ai_devices = ai_judgment.get("devices") or {}
@@ -183,8 +191,10 @@ def build_ai_conflict(ai_judgment: Optional[Dict[str, Any]],
     return conflicts or None
 
 
+# ────────────────────────────────────────────────────────────────────
+# 양의 정수 파싱. 실패하거나 0 이하면 default 반환.
+# ────────────────────────────────────────────────────────────────────
 def parse_positive_int(value: Any, default: int) -> int:
-    """양의 정수 파싱. 실패하거나 0 이하면 default 반환."""
     try:
         parsed = int(value)
         return parsed if parsed > 0 else default
@@ -192,8 +202,10 @@ def parse_positive_int(value: Any, default: int) -> int:
         return default
 
 
+# ────────────────────────────────────────────────────────────────────
+# 양의 실수 파싱. 실패하거나 0 이하면 default 반환.
+# ────────────────────────────────────────────────────────────────────
 def parse_positive_float(value: Any, default: float) -> float:
-    """양의 실수 파싱. 실패하거나 0 이하면 default 반환."""
     try:
         parsed = float(value)
         return parsed if parsed > 0 else default
@@ -201,8 +213,10 @@ def parse_positive_float(value: Any, default: float) -> float:
         return default
 
 
+# ────────────────────────────────────────────────────────────────────
+# 빈 값/None 허용 정수 파싱. 실패/빈값 시 None.
+# ────────────────────────────────────────────────────────────────────
 def parse_optional_int(value: Any) -> Optional[int]:
-    """빈 값/None 허용 정수 파싱. 실패/빈값 시 None."""
     if value in (None, ""):
         return None
     try:
@@ -211,8 +225,10 @@ def parse_optional_int(value: Any) -> Optional[int]:
         return None
 
 
+# ────────────────────────────────────────────────────────────────────
+# 다중 키 where 딕셔너리를 ChromaDB $and 형식으로 변환.
+# ────────────────────────────────────────────────────────────────────
 def to_chroma_where(where_dict: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """다중 키 where 딕셔너리를 ChromaDB $and 형식으로 변환."""
     if not where_dict:
         return None
     if len(where_dict) == 1:

@@ -58,14 +58,15 @@ _FILE_NAME_RE = re.compile(
 )
 
 
+# ────────────────────────────────────────────────────────────────────
+# 세션 컨텍스트(farm_id/house_id/auth_farm_id + 질문에서 감지한 file_name)
+# 를 도구별 default 인자로 변환.
+# 
+# 실제 변환 규칙은 tools_utils.TOOL_DEFAULT_CONTEXT 선언형 테이블에서 관리한다.
+# 새 도구가 farm_id/house_id/auth_farm_id 를 받아야 하면 해당 테이블에 한 줄만
+# 추가하면 된다.
+# ────────────────────────────────────────────────────────────────────
 def _build_default_tool_args(user_query, farm_id, house_id, auth_farm_id=None):
-    """세션 컨텍스트(farm_id/house_id/auth_farm_id + 질문에서 감지한 file_name)
-    를 도구별 default 인자로 변환.
-
-    실제 변환 규칙은 tools_utils.TOOL_DEFAULT_CONTEXT 선언형 테이블에서 관리한다.
-    새 도구가 farm_id/house_id/auth_farm_id 를 받아야 하면 해당 테이블에 한 줄만
-    추가하면 된다.
-    """
     from agri_ai_core.src.ai.tools_utils import build_default_tool_args as _build
 
     # 질문에서 파일명 패턴 감지 (RAG 전용)
@@ -336,12 +337,20 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
                 (0,   "📥 부족한 자료를 보충 수집하고 있습니다..."),
             ],
             "llm_generating": [
+                # 데이터 기반 응답(농장 센서/검색/도구 결과 종합 등) — 표·리스트 가능, 다소 김
+                # [변경13 · 2026-04-30] 인사·짧은 답변에 부적절했던 "📊 표와 구조를
+                # 구성하고 있습니다" 메시지 제거. 답변 형식과 무관한 일반 표현으로 통일.
                 (0,   "✍️ 답변을 작성하고 있습니다..."),
-                (8,   "✍️ 핵심 내용을 정리하고 있습니다..."),
-                (20,  "📊 표와 구조를 구성하고 있습니다..."),
-                (40,  "📝 상세 내용을 다듬고 있습니다..."),
-                (70,  "🧵 답변을 마무리하고 있습니다..."),
+                (10,  "✍️ 답변을 정리하고 있습니다..."),
+                (30,  "✍️ 답변을 다듬고 있습니다..."),
+                (60,  "🧵 답변을 마무리하고 있습니다..."),
                 (110, "🧵 마지막 검토 중입니다..."),
+            ],
+            "llm_generating_light": [
+                # 인사/단순 일반 답변 — 보통 5~10초 내 종료, 메시지도 간결하게
+                # 데이터 수집·표 구성과 무관한 표현만 사용.
+                (0,  "✍️ 답변을 작성하고 있습니다..."),
+                (5,  "✍️ 답변을 정리하고 있습니다..."),
             ],
             "finalizing": [
                 (0,   "🧵 답변을 최종 정리하고 있습니다..."),
@@ -355,8 +364,10 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
         ]
         _phase_enter_ts = datetime.now()  # 현재 phase 진입 시점
 
+        # ────────────────────────────────────────────────────────────────────
+        # 현재 phase와 해당 phase 내 경과시간으로 안내 문구를 선택.
+        # ────────────────────────────────────────────────────────────────────
         def _pick_heartbeat_msg(phase: str, phase_elapsed: int) -> str:
-            """현재 phase와 해당 phase 내 경과시간으로 안내 문구를 선택."""
             table = _HEARTBEAT_BY_PHASE.get(phase)
             if not table:
                 return _waiting_messages[_idle_cycle % len(_waiting_messages)]

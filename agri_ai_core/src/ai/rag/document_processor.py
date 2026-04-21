@@ -53,7 +53,7 @@ _DISEASE_KEYWORDS = [
 ]
 
 
-# ═════════════════════════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 # 대화 메시지 목록 → RAG 저장용 텍스트 변환 (공통)
 # React(app.py)에서 REST API를 통해 호출
 # Args:
@@ -62,7 +62,7 @@ _DISEASE_KEYWORDS = [
 #   house_name: 재배사명
 # Returns:
 #   str: 변환된 텍스트
-# ═════════════════════════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 def messages_to_text(messages, farm_name=None, house_name=None):
     lines = []
     lines.append(f"[농장: {farm_name or '-'}, 재배사: {house_name or '-'}]")
@@ -79,14 +79,14 @@ def messages_to_text(messages, farm_name=None, house_name=None):
     return "\n".join(lines)
 
 
-# ════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 # RAG 저장 결과 → 사용자 안내 메시지 포맷팅 (공통)
 # Args:
 #   result: llm_document_process() 반환값
 #   message_count: 저장된 메시지 수
 # Returns:
 #   tuple: (success: bool, message: str)
-# ════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 def format_rag_save_result(result, message_count=0):
     if result.get("success"):
         chunks = result.get("chunks_stored", 0)
@@ -118,9 +118,9 @@ def format_rag_save_result(result, message_count=0):
         return False, f"RAG 저장 실패: {error}"
 
 
-# ══════════════════
+# ────────────────────────────────────────────────────────────────────
 # 문서 유형 감지
-# ══════════════════
+# ────────────────────────────────────────────────────────────────────
 def detect_document_type(document_content, filename=None):
     document_type = 'general'
     crop_name = None
@@ -149,11 +149,11 @@ def detect_document_type(document_content, filename=None):
     return document_type, crop_name
 
 
-# ════════════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 # 작물/병해충 문서를 farm_knowledge_collection에 이중 저장
 # document_collection에 이미 저장된 청크를 farm_knowledge에도 저장하여
 # farm_id/house_id 기반 검색에서도 작물 관련 문서가 검색되도록 함
-# ════════════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 def _store_crop_chunks_to_farm_knowledge(document_content, metadata, document_type, crop_name, filename, farm_id):
     from agri_ai_core.src.ai.embedder import embed_text
     from agri_ai_core.src.ai.rag.chunker import chunk_document
@@ -203,10 +203,10 @@ def _store_crop_chunks_to_farm_knowledge(document_content, metadata, document_ty
         )
 
 
-# ══════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 # LLM enrichment 백그라운드 실행 (요약 + QA 쌍 생성)
 # 청크 저장 완료 후 비동기로 실행되어 API 응답을 블로킹하지 않음
-# ══════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 def _background_enrich(document_content, metadata, document_type, crop_name, filename):
     try:
         from agri_ai_core.src.ai.rag.document_enricher import enrich_document
@@ -233,9 +233,9 @@ def _background_enrich(document_content, metadata, document_type, crop_name, fil
         logger.warning(f"[문서학습] LLM enrichment 백그라운드 예외 (청크 저장은 유지): {filename} {e}")
 
 
-# ═════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 # 문서 처리하여 ChromaDB에 저장
-# ═════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 def llm_document_process(file_path=None, text_content=None, farm_id=None, original_name=None):
     import time as _time
     _t_doc_start = _time.time()
@@ -403,9 +403,9 @@ def llm_document_process(file_path=None, text_content=None, farm_id=None, origin
         return result
 
 
-# ══════════════════
+# ────────────────────────────────────────────────────────────────────
 # 첨부 파일 처리
-# ══════════════════
+# ────────────────────────────────────────────────────────────────────
 def process_attached_files(file_paths, farm_id):
     if not file_paths:
         return "처리할 첨부 파일이 없습니다."

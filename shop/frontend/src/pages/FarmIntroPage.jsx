@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Container, Row, Col } from 'react-bootstrap';
 import { GeoAlt, Thermometer, Moisture, Activity, ChevronLeft, ChevronRight } from 'react-bootstrap-icons';
 import CameraStream from '../components/camera/CameraStream';
+import IpCamView from '../components/camera/IpCamView';
 
 const farmPhotos = [
   { src: '/images/farm/farm-1.jpg', caption: '자연들에 스마트팜 전경' },
@@ -111,7 +112,9 @@ export default function FarmIntroPage() {
           </div>
           <Row className="justify-content-center">
             <Col lg={10}>
-              <CameraStream farmId={0} houseId={1} label="농장 전경 LIVE" />
+              {/* [2026-05-01] 메인 IP 카메라 (ZY-CAMHIPTZ-A-2M) — PTZ + 오디오 제어
+                  nginx /camera/main/ → jayeondeule.iptime.org:5040(HTTP) + :5540(RTSP) */}
+              <IpCamView base="/camera/main" label="농장 전경 LIVE (PTZ)" />
             </Col>
           </Row>
         </Container>

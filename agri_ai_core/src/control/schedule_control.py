@@ -24,10 +24,10 @@ from agri_ai_core.src.postgresql.reader import read_latest_relay_info
 from agri_ai_core.src.control.control_common import get_pin_map, RELAY_COUNT
 from agri_ai_core.src.control.control_common import (
     sort_houses as _sort_houses,
-    TEMP_LOW, TEMP_HIGH,
-    HUMIDITY_LOW, HUMIDITY_HIGH,
-    CO2_LOW, CO2_HIGH,
-    WATER_TEMP_CRITICAL_LOW, WATER_TEMP_CRITICAL_HIGH,
+)
+# [2026-04-28 rev2] 임계값은 ai_thresholds.get_thresholds() 동적 — 하드코딩 금지
+from agri_ai_core.src.control.ai_thresholds import (
+    get_thresholds as _get_thresholds, get_global_default as _get_default_ts,
 )
 
 logger = setup_logger(__name__)
@@ -35,18 +35,20 @@ logger = setup_logger(__name__)
 _WEEKDAY_NAMES = {1: '월', 2: '화', 3: '수', 4: '목', 5: '금', 6: '토', 7: '일'}
 
 
-# 센서 상태 포맷 (임계값 비교 포함)
-_SENSOR_THRESHOLDS = {
-    'indoor_temperature': ('내부온도', '℃', TEMP_LOW, TEMP_HIGH),
-    'indoor_humidity':    ('내부습도', '%', HUMIDITY_LOW, HUMIDITY_HIGH),
-    'co2':                ('CO2', 'ppm', CO2_LOW, CO2_HIGH),
-    'water_temperature':  ('수온', '℃', WATER_TEMP_CRITICAL_LOW, WATER_TEMP_CRITICAL_HIGH),
-}
-
-
-def _format_sensor_status(sensor):
+# ────────────────────────────────────────────────────────────────────
+# [2026-04-28 rev2] 센서 현황 문자열 — 임계값은 ts(DB 동적) 재배사별 셋팅 우선.
+# 정상 범위 이탈 시 "<low(최저값)" / ">high(최고값)" 표시.
+# ────────────────────────────────────────────────────────────────────
+def _format_sensor_status(sensor, farm_id=None, house_id=None):
+    ts = _get_thresholds(farm_id, house_id) if farm_id is not None else _get_default_ts()
+    sensor_thresholds = {
+        'indoor_temperature': ('내부온도', '℃', ts.temp_low, ts.temp_high),
+        'indoor_humidity':    ('내부습도', '%', ts.humidity_low, ts.humidity_high),
+        'co2':                ('CO2', 'ppm', ts.co2_low, ts.co2_high),
+        'water_temperature':  ('수온', '℃', ts.water_temp_critical_low, ts.water_temp_critical_high),
+    }
     parts = []
-    for key, (name, unit, low, high) in _SENSOR_THRESHOLDS.items():
+    for key, (name, unit, low, high) in sensor_thresholds.items():
         value = sensor.get(key)
         if value is None:
             parts.append(f"{name}: -")
@@ -63,6 +65,9 @@ def _format_sensor_status(sensor):
 # ════════════════════════
 # 주기 기반 실행 여부 확인
 # ════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 주기(interval 일) 기반 실행 여부 판정 — 시작일부터 interval 일 간격마다 True.
+# ────────────────────────────────────────────────────────────────────
 def should_execute_interval(start_date, interval, current_date):
     if not start_date or not interval:
         return False
@@ -77,6 +82,9 @@ def should_execute_interval(start_date, interval, current_date):
 # ════════════════════════
 # 요일 기반 실행 여부 확인
 # ════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 요일 기반 실행 여부 판정 — "1,3,5" 같은 문자열에 현재 요일 포함 시 True.
+# ────────────────────────────────────────────────────────────────────
 def should_execute_weekdays(weekdays_str, current_date):
     if not weekdays_str:
         return False
@@ -97,6 +105,9 @@ def should_execute_weekdays(weekdays_str, current_date):
 # ════════════════════════════════════════
 # 현재 시간이 스케줄 시간 범위 내인지 확인
 # ════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 현재 시간이 [start, finish] 범위 내인지 판정. 자정 횡단(23~01) 처리.
+# ────────────────────────────────────────────────────────────────────
 def is_time_in_range(current_time, start_time, finish_time):
     # 시작 시간과 종료 시간이 같은 날인 경우
     if start_time <= finish_time:
@@ -109,12 +120,16 @@ def is_time_in_range(current_time, start_time, finish_time):
 # ═══════════════════════════════
 # 조명/관수 공통 스케줄 제어 로직
 # ═══════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 조명/관수 공통 스케줄 제어 로직 — 활성 스케줄 판정 후 raw_mode 1회 쓰기.
+# 시간대 내 → ON, 스케줄 있고 시간대 밖 → OFF, 스케줄 없음 → 현재 상태 유지.
+# ────────────────────────────────────────────────────────────────────
 def _handle_schedule_control(farm_id, house_id, setting_type, relay_flag_key, label, action_name):
     try:
         settings = read_light_irrigation_settings(farm_id, house_id, setting_type)
 
         if not settings:
-            logger.debug(f"농장 {farm_id}, 재배사 {house_id}: {label} 스케줄 없음")
+            logger.debug(f"{farm_id}-{house_id}: {label} 스케줄 없음")
             return {"success": True, "action": "none", "message": f"{label} 스케줄이 설정되지 않음"}
 
         now = datetime.now()
@@ -156,7 +171,7 @@ def _handle_schedule_control(farm_id, house_id, setting_type, relay_flag_key, la
                 active_schedules.append(schedule_info)
 
         if active_schedules:
-            logger.debug(f"농장 {farm_id}, 재배사 {house_id}: {label} 활성 스케줄 목록: {active_schedules}")
+            logger.debug(f"{farm_id}-{house_id}: {label} 활성 스케줄 목록: {active_schedules}")
 
         # 스케줄 시간대 내 → ON / 스케줄 있고 시간대 밖 → OFF (스케줄 종료)
         # 스케줄 설정 자체가 없으면 → 현재 상태 유지 (웹 수동 제어값 보존)
@@ -190,11 +205,11 @@ def _handle_schedule_control(farm_id, house_id, setting_type, relay_flag_key, la
                 status = "ON" if new_value else "OFF"
                 sched_str = f" (스케줄: {', '.join(active_schedules)})" if active_schedules else ""
                 suffix = "" if new_value else " (스케줄 종료)"
-                logger.debug(f"농장 {farm_id}, 재배사 {house_id}: {label} {status}{sched_str}{suffix}")
+                logger.debug(f"{farm_id}-{house_id}: {label} {status}{sched_str}{suffix}")
                 return {"success": True, "action": action_name, "status": status,
                         "schedules": active_schedules, "message": f"{label} {status}"}
             else:
-                logger.error(f"농장 {farm_id}, 재배사 {house_id}: {label} 제어 실패 - {result.get('message')}")
+                logger.error(f"{farm_id}-{house_id}: {label} 제어 실패 - {result.get('message')}")
                 return {"success": False, "message": f"{label} 제어 실패: {result.get('message')}"}
         else:
             # 스케줄 설정 없음 → 현재 상태 유지 (웹 수동 제어값 보존)
@@ -207,10 +222,16 @@ def _handle_schedule_control(farm_id, house_id, setting_type, relay_flag_key, la
         return {"success": False, "message": f"오류 발생: {str(e)}"}
 
 
+# ────────────────────────────────────────────────────────────────────
+# 조명 스케줄 제어 — _handle_schedule_control 위임.
+# ────────────────────────────────────────────────────────────────────
 def control_lighting_schedule(farm_id, house_id):
     return _handle_schedule_control(farm_id, house_id, 'light', 'lighting_flag', '조명', 'lighting_controlled')
 
 
+# ────────────────────────────────────────────────────────────────────
+# 관수 스케줄 제어 — _handle_schedule_control 위임.
+# ────────────────────────────────────────────────────────────────────
 def control_irrigation_schedule(farm_id, house_id):
     return _handle_schedule_control(farm_id, house_id, 'water', 'irrigation_flag', '관수', 'irrigation_controlled')
 
@@ -218,6 +239,9 @@ def control_irrigation_schedule(farm_id, house_id):
 # ═════════════════════════════════════
 # 모든 재배사 조명/관수 스케줄 제어
 # ═════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 모든 활성 재배사에 대해 조명/관수 스케줄 제어 일괄 실행.
+# ────────────────────────────────────────────────────────────────────
 def control_all_schedules():
     try:
         with db_session() as database:
@@ -278,7 +302,7 @@ def control_all_schedules():
                 schedule_info = f" (스케줄: {', '.join(all_schedules)})" if all_schedules else ""
                 logger.info("-")
                 logger.info(
-                    f"[{index}/{len(ordered_houses)}] 농장 {farm_id}, 재배사 {house_id}: "
+                    f"[{index}/{len(ordered_houses)}] {farm_id}-{house_id}: "
                     f"{' / '.join(parts)}{schedule_info}"
                 )
 
@@ -287,7 +311,7 @@ def control_all_schedules():
                 if has_control:
                     sensor = read_current_sensor_info(farm_id, house_id)
                     if sensor:
-                        logger.info(f"센서 상태: {_format_sensor_status(sensor)}")
+                        logger.info(f"센서 상태: {_format_sensor_status(sensor, farm_id, house_id)}")
                     log_relay_detail(farm_id, house_id)
 
                 # 결과 집계

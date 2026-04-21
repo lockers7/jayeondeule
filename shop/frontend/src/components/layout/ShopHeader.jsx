@@ -38,9 +38,9 @@ export default function ShopHeader() {
 
   const navItems = [
     { path: '/', label: '홈' },
-    { path: '/farm', label: '농장 소개' },
+    { path: '/farm', label: '농장 소개(실시간)' },
+    { path: '/house', label: '재배사 소개(실시간)' },
     { path: '/story', label: '농장 이야기' },
-    { path: '/house', label: '재배사 소개' },
     { path: '/efficacy', label: '효능효과' },
     { path: '/products', label: '상품' },
     { path: '/inquiry', label: '문의 게시판' },

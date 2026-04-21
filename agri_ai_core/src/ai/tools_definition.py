@@ -8,6 +8,17 @@
 from datetime import datetime
 from typing import List, Dict, Any
 
+# [변경5 · 2026-04-30] 장치명 매핑을 mappers.device_mapping_text() 자동 생성으로 전환.
+from agri_ai_core.config.mappers import (
+    device_mapping_text as _device_mapping_text,
+    device_detail_text as _device_detail_text,
+    SYSTEM_GLOSSARY_TEXT as _SYSTEM_GLOSSARY_TEXT,
+    circulation_modes_text as _circulation_modes_text,
+    growth_stages_enum as _growth_stages_enum,
+    control_modes_enum as _control_modes_enum,
+    circulation_mode_enum as _circulation_mode_enum,
+)
+
 
 # ═════════════════════════════════════════════════════
 # 사용 가능한 도구 목록
@@ -16,6 +27,50 @@ from typing import List, Dict, Any
 # ═════════════════════════════════════════════════════
 def get_available_tools() -> List[Dict[str, Any]]:
     return [
+        {
+            "type": "function",
+            "function": {
+                "name": "save_domain_knowledge",
+                "description": (
+                    "사용자가 채팅으로 알려주는 운영 노하우·룰·도메인 지식을 ChromaDB 도메인 RAG에 영속 저장합니다. "
+                    "저장 즉시 다음 AI 환경제어 사이클부터 LLM이 자동 검색·참조하므로, 사용자가 룰을 채팅 한 번으로 시스템에 가르치는 채널입니다. "
+                    "사용자 발화에 다음 의도가 보이면 반드시 호출: '학습해/기억해/저장해/다음부터 적용/룰로 추가/방침으로/규칙으로'. "
+                    "title은 30자 내 식별용 요약, content는 풀 텍스트(가능한 정확한 임계치·조건·예시 포함). "
+                    "category는 '운영노하우/제어룰/안전룰/생육관리/장치사용법' 등 자유 입력."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {
+                            "type": "string",
+                            "description": "30자 내 식별용 요약 (예: '수온 가열 시 -5℃ 히스테리시스 룰')"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "지식 본문 — 임계치·조건·예시·근거 포함. 길수록 검색 품질 향상."
+                        },
+                        "category": {
+                            "type": "string",
+                            "description": "분류 (예: '운영노하우', '제어룰', '안전룰', '생육관리', '장치사용법'). 기본 '운영노하우'.",
+                            "default": "운영노하우"
+                        },
+                        "farm_id": {
+                            "type": "string",
+                            "description": "특정 농장에만 적용되는 지식이면 농장ID. 전체 적용은 생략."
+                        },
+                        "house_id": {
+                            "type": "string",
+                            "description": "특정 재배사에만 적용되는 지식이면 재배사ID. 전체 적용은 생략."
+                        },
+                        "tags": {
+                            "type": "string",
+                            "description": "쉼표 구분 태그 (검색 보조용, 선택). 예: '수온,히터,포그,히스테리시스'"
+                        }
+                    },
+                    "required": ["title", "content"]
+                }
+            }
+        },
         {
             "type": "function",
             "function": {
@@ -217,7 +272,7 @@ _ADMIN_TOOLS: List[Dict[str, Any]] = [
         "description": "재배사 제어 모드를 수동(manual)/알고리즘(algorithm)/인공지능(ai) 중 하나로 전환합니다. 사용자가 '운용방식/제어모드를 ○○으로 바꿔달라'고 할 때 반드시 이 도구를 호출하세요. control_relay로는 모드 전환이 되지 않습니다.",
         "parameters": {"type": "object", "properties": {
             "house_id": {"type": "string", "description": "'1','2','3' 또는 'all' (전 재배사)"},
-            "mode": {"type": "string", "enum": ["manual", "algorithm", "ai"]},
+            "mode": {"type": "string", "enum": _control_modes_enum()},
             "farm_id": {"type": "string", "description": "농장 ID (생략 시 기본 농장)"}
         }, "required": ["house_id", "mode"]}}},
     {"type": "function", "function": {
@@ -225,7 +280,7 @@ _ADMIN_TOOLS: List[Dict[str, Any]] = [
         "description": "재배사의 생육단계를 변경합니다(발아기/생육기/수확기/휴지기). 사용자 요청이 있을 때만 호출하세요.",
         "parameters": {"type": "object", "properties": {
             "house_id": {"type": "string"},
-            "stage": {"type": "string", "enum": ["발아기", "생육기", "수확기", "휴지기"]},
+            "stage": {"type": "string", "enum": _growth_stages_enum()},
             "farm_id": {"type": "string"}
         }, "required": ["house_id", "stage"]}}},
     {"type": "function", "function": {
@@ -233,7 +288,7 @@ _ADMIN_TOOLS: List[Dict[str, Any]] = [
         "description": "순환모드를 강제합니다(내부순환/외부순환/흡입순환/배기순환/순환정지). 댐퍼+팬 조합을 자동 계산해 즉시 릴레이에 반영합니다. ctrl_type='manual'일 때 영속적입니다 (algorithm/ai 모드는 다음 주기에 재계산됨).",
         "parameters": {"type": "object", "properties": {
             "house_id": {"type": "string"},
-            "mode": {"type": "string", "enum": ["내부순환", "외부순환", "흡입순환", "배기순환", "순환정지"]},
+            "mode": {"type": "string", "enum": _circulation_mode_enum()},
             "farm_id": {"type": "string"}
         }, "required": ["house_id", "mode"]}}},
     {"type": "function", "function": {
@@ -289,8 +344,10 @@ _ADMIN_TOOLS: List[Dict[str, Any]] = [
 ]
 
 
+# ────────────────────────────────────────────────────────────────────
+# 기존 도구 목록에 관리 도구를 병합 (이름 중복 방지).
+# ────────────────────────────────────────────────────────────────────
 def _inject_admin_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """기존 도구 목록에 관리 도구를 병합 (이름 중복 방지)."""
     existing_names = {t.get("function", {}).get("name") for t in tools}
     for t in _ADMIN_TOOLS:
         if t["function"]["name"] not in existing_names:
@@ -380,7 +437,13 @@ def get_system_prompt_with_tools(farm_name: str = None, farm_info: str = None, s
    - **재배사+장치 붙여쓰기 파싱**: "N재배사조명", "N호재배사조명", "N호 관수" 등 숫자+재배사+장치 형태는 재배사 번호와 장치명을 분리하여 house_id(해당 숫자 문자열)와 device_name으로 매핑합니다. "모든재배사조명", "전체조명" → house_id='all', device_name='lighting_flag'로 단 1번 호출.
    - 제어가 필요하면 `control_relay`로 실제 제어를 수행합니다.
    - `control_relay` 결과의 success 값을 확인하고, 성공/실패 여부를 정확히 답변합니다.
-   - 장치명 매핑: 흡입팬=intake_fan_flag, 배출팬=exhaust_fan_flag, 수온히터/칠러=water_heater_flag, 포그생성=fog_occurs_flag, 배수밸브=drainage_motor_flag, 조명=lighting_flag, 관수=irrigation_flag, 실내히터=indoor_heater_flag, 히터밸브=indoor_heater_valve_flag, 순환밸브=air_circulation_valve_flag, 흡입밸브=air_intake_valve_flag, 배출밸브=air_exhaust_valve_flag, 라디에이터=radiator_flag
+   - 장치명 매핑: {_device_mapping_text()}
+   - **시스템 어휘 정의 (장치 desc 해석에 필수)**:
+{_SYSTEM_GLOSSARY_TEXT}
+   - **장치 기능 상세 (제어 판단 시 반드시 참고)**:
+{_device_detail_text()}
+   - **환기 모드 매트릭스 (5장치 조합 — 환기 의사결정 시 반드시 본 표를 따름)**:
+{_circulation_modes_text()}
    - **⚠️ mode 사용 규칙 (절대 준수)**: mode='all_on'/'all_off'/'reverse_all'은 사용자가 명시적으로 "모든 장치(조명·팬 등 구분 없이) 전체 켜기/끄기/반전"을 요청한 경우에만 사용합니다. **조명·관수·팬 등 특정 장치명이 언급된 경우에는 반드시 device_name+action으로 해당 장치만 개별 제어**합니다. 특정 장치를 반전시킬 때는 action='reverse'를 사용하세요. 예: "조명을 모두 켜줘" → `control_relay(device_name='lighting_flag', action='on')`, "조명을 반대로 해줘" → `control_relay(device_name='lighting_flag', action='reverse')` (mode='reverse_all' 금지). mode='reverse_all'은 장치명 없이 "전체 반전"만 요청한 경우에만 사용합니다.
    - **AI 환경 판단 정보 (필수 출력)**: `control_relay` 결과에 `ai_judgment`(현재 센서 기반 AI 권장)와 `ai_conflict`(수동 제어와 AI 권장의 차이)가 포함됩니다. 반드시 다음 형식으로 답변에 포함하세요:
      * "📊 AI 환경 판단: [reason]"

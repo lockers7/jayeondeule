@@ -84,3 +84,24 @@ class SQLControl:
         if data is None:
             return sql_format.BaseRelayFlagFormat(False, False, False, False, True, True, False, False, False, False, False, False, False, False, False, False), gpio_config.USING_RELAY_CNT
         return sql_format.BaseRelayFlagFormat(*data), gpio_config.USING_RELAY_CNT
+
+    #---------------------------------------
+    # [2026-04-27] 다른 재배사의 최근 외부 온습도 평균
+    # 2호 재배사는 외부 센서 부재 — 1·3호의 가장 최근 기록 평균을 차용해 저장.
+    # 5분 이내 유효 데이터(oudr_tprt_valu != 0)만 평균. 데이터 없으면 (0.0, 0.0).
+    #---------------------------------------
+    def get_peer_outdoor_avg(self, peer_house_ids: tuple) -> tuple:
+        try:
+            self.cursor.execute(sql_query.SELECT_PEER_OUTDOOR_AVG_SQL,
+                                (self.farm_id, list(peer_house_ids)))
+            row = self.cursor.fetchone()
+            self.connection.commit()
+            if row and row[0] is not None and row[1] is not None:
+                return float(row[0]), float(row[1])
+        except Exception as e:
+            try:
+                self.connection.rollback()
+            except Exception:
+                pass
+            logger.warning(f"[peer_outdoor_avg] 조회 실패: {e}")
+        return 0.0, 0.0

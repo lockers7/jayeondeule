@@ -16,8 +16,10 @@ _warmup_started = False
 _llm_warmed = False
 
 
+# ────────────────────────────────────────────────────────────────────
+# LLM에 간단한 ping 요청으로 모델을 VRAM에 적재. 프로세스당 1회.
+# ────────────────────────────────────────────────────────────────────
 def _perform_llm_warmup():
-    """LLM에 간단한 ping 요청으로 모델을 VRAM에 적재. 프로세스당 1회."""
     global _llm_warmed
     if _llm_warmed:
         return
@@ -45,8 +47,10 @@ def _perform_llm_warmup():
         logger.warning(f"LLM warm-up failed: {warm_err}")
 
 
+# ────────────────────────────────────────────────────────────────────
+# 백그라운드 스레드로 워밍업 시작. 중복 호출 방지.
+# ────────────────────────────────────────────────────────────────────
 def initialize_background_warmup(farm_id=None, house_id=None, farm_name=None, house_name=None):
-    """백그라운드 스레드로 워밍업 시작. 중복 호출 방지."""
     global _warmup_started
     with _warmup_lock:
         if _warmup_started:

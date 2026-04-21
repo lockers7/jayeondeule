@@ -192,14 +192,18 @@ from agri_ai_core.src.ai.mcp_utils import (
 )
 
 
+# ────────────────────────────────────────────────────────────────────
+# 에러 텍스트에 DNS 관련 키워드가 있으면 DNS 진단을 1회 실행.
+# ────────────────────────────────────────────────────────────────────
 def _check_error_with_dns_diag(error_text: str, context: str = "") -> None:
-    """에러 텍스트에 DNS 관련 키워드가 있으면 DNS 진단을 1회 실행."""
     if _is_dns_resolution_error(error_text):
         _log_dns_diagnostics_once()
 
 
+# ────────────────────────────────────────────────────────────────────
+# 텍스트를 JSON으로 파싱 시도. 실패 시 None 반환.
+# ────────────────────────────────────────────────────────────────────
 def _try_parse_json(text: str) -> Optional[Any]:
-    """텍스트를 JSON으로 파싱 시도. 실패 시 None 반환."""
     stripped = text.strip()
     if not stripped:
         return None

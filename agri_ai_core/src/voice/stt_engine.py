@@ -1,12 +1,11 @@
-# ═════════════════════════════════════════════════════════════════════════════
-# STT(음성→텍스트) 엔진 모듈
-# faster-whisper 기반 음성 인식 (CPU, int8 양자화, VAD 필터) 기능을 제공합니다.
-# 변경: small → medium 모델로 업그레이드 (한국어 인식 정확도 향상, CPU 유지)
+# ════════════════════════════════════════════════════════════════════
+# STT(음성→텍스트) 엔진 — faster-whisper 기반 음성 인식.
+# CPU + int8 양자화 + VAD 필터. medium 모델(한국어 정확도 ↑).
 # --->
-# _get_model: get model
-# _webm_to_wav_bytes: webm to wav bytes
-# transcribe: transcribe
-# ═════════════════════════════════════════════════════════════════════════════
+# _get_model        : faster-whisper 모델 lazy 싱글톤 로더
+# _webm_to_wav_bytes: WebM/Opus → 16kHz mono WAV 변환 (PyAV)
+# transcribe        : 음성 바이트를 한국어 텍스트로 변환
+# ════════════════════════════════════════════════════════════════════
 import io
 import tempfile
 import threading
@@ -20,6 +19,9 @@ _model = None
 _model_lock = threading.Lock()
 
 
+# ────────────────────────────────────────────────────────────────────
+# faster-whisper 모델 lazy 싱글톤 로더 (스레드 안전, double-checked).
+# ────────────────────────────────────────────────────────────────────
 def _get_model():
     global _model
     if _model is None:
@@ -31,9 +33,9 @@ def _get_model():
     return _model
 
 
-# ════════════════════════════════════════════════
-# WebM/Opus 바이트를 WAV 바이트로 변환 (PyAV 사용)
-# ════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# WebM/Opus 바이트를 16kHz mono WAV 바이트로 변환 (PyAV).
+# ────────────────────────────────────────────────────────────────────
 def _webm_to_wav_bytes(audio_bytes: bytes) -> bytes:
     input_buf = io.BytesIO(audio_bytes)
     output_buf = io.BytesIO()
@@ -52,9 +54,9 @@ def _webm_to_wav_bytes(audio_bytes: bytes) -> bytes:
     return output_buf.getvalue()
 
 
-# ═══════════════════════════
-# 음성 바이트를 텍스트로 변환
-# ═══════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 음성 바이트를 한국어 텍스트로 변환. WebM/Opus 자동 감지 → WAV 변환 후 STT.
+# ────────────────────────────────────────────────────────────────────
 def transcribe(audio_bytes: bytes, content_type: str = "audio/webm") -> str:
     model = _get_model()
 

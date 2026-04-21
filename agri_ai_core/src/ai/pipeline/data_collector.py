@@ -53,8 +53,10 @@ class DataCollector:
         self._last_merged_args = {}
         self._executed_tool_keys = set()  # (tool_name, query_key) 중복 실행 방지
 
+    # ────────────────────────────────────────────────────────────────────
+    # 메인 수집 + LLM 검증 루프
+    # ────────────────────────────────────────────────────────────────────
     def collect(self, analysis_result):
-        """메인 수집 + LLM 검증 루프"""
         t0 = time.time()
         required_data = analysis_result.get("required_data", [])
         question_type = analysis_result.get("question_type", "general")
@@ -167,7 +169,6 @@ class DataCollector:
     # 도구 실행
     # ════════════════════════════════════════════════════════════
     def _execute_tasks(self, tasks, user_query):
-        """태스크 리스트를 순차 실행하고 결과를 수집"""
         for task in tasks:
             tool_name = task.get("tool", "")
             tool_args = task.get("args", {})
@@ -223,8 +224,10 @@ class DataCollector:
                 )
                 self._report_progress(done_msg, "data_collecting", tool_name)
 
+    # ────────────────────────────────────────────────────────────────────
+    # 단일 도구 실행 + 결과 정제
+    # ────────────────────────────────────────────────────────────────────
     def _execute_single_tool(self, tool_name, tool_args, user_query):
-        """단일 도구 실행 + 결과 정제"""
         try:
             from agri_ai_core.src.ai.tools_executor import execute_tool
             from agri_ai_core.src.ai.llm_client import _refine_tool_result
@@ -254,8 +257,10 @@ class DataCollector:
             logger.debug(traceback.format_exc())
             return None, None
 
+    # ────────────────────────────────────────────────────────────────────
+    # 도구별 기본 인자와 태스크 인자를 병합
+    # ────────────────────────────────────────────────────────────────────
     def _merge_args(self, tool_name, task_args):
-        """도구별 기본 인자와 태스크 인자를 병합"""
         defaults = self.default_tool_args.get(tool_name, {})
         merged = dict(defaults)
         for key, value in task_args.items():
@@ -279,9 +284,11 @@ class DataCollector:
 
         return merged
 
+    # ────────────────────────────────────────────────────────────────────
+    # 한글 포함 URL을 percent-encoding
+    # ────────────────────────────────────────────────────────────────────
     @staticmethod
     def _encode_url(url):
-        """한글 포함 URL을 percent-encoding"""
         if not url:
             return url
         try:
@@ -299,7 +306,6 @@ class DataCollector:
     # 검색 결과 URL 추출 (LLM 검증에 제공)
     # ════════════════════════════════════════════════════════════
     def _get_search_result_urls(self):
-        """수집된 search_web 결과에서 URL 목록을 추출하여 LLM에 제공"""
         urls = []
         for item in self.collected_data:
             if item.get("tool") != "search_web":
@@ -324,8 +330,10 @@ class DataCollector:
         elif tool_name == "fetch_url_content" and "url" in self._last_merged_args:
             self._add_fetch_source(self._last_merged_args["url"])
 
+    # ────────────────────────────────────────────────────────────────────
+    # search_web 결과의 모든 출처를 수집 (최대 5건)
+    # ────────────────────────────────────────────────────────────────────
     def _extract_all_search_sources(self, raw_result):
-        """search_web 결과의 모든 출처를 수집 (최대 5건)"""
         data = safe_json_load(raw_result) if isinstance(raw_result, str) else raw_result
         if not isinstance(data, dict):
             return
@@ -339,8 +347,10 @@ class DataCollector:
                 self.collected_sources.append({"title": title, "url": url})
                 added += 1
 
+    # ────────────────────────────────────────────────────────────────────
+    # fetch_url 출처 추가
+    # ────────────────────────────────────────────────────────────────────
     def _add_fetch_source(self, url):
-        """fetch_url 출처 추가"""
         if not url:
             return
         title = url
@@ -362,15 +372,6 @@ class DataCollector:
     # multi_house 확장
     # ════════════════════════════════════════════════════════════
     def _expand_multi_house(self, required_data, multi_house, house_ids):
-        """get_farm_realtime_data 의 대상 재배사를 결정하여 fan-out.
-
-        재배사 목록은 농장별로 가변이므로 DB(farmhouse_m_info)에서 동적 조회.
-        우선순위:
-        1) analyzer 가 multi_house=true + house_ids 를 명시 → 해당 ID들(또는 'all'이면 전체)로 fan-out
-        2) task args 에 유효 개별 house_id 가 있으면 단건 유지
-        3) default_tool_args (사이드바 선택) 에 유효 개별 house_id 가 있으면 단건 유지
-        4) 어디에도 유효 house_id 없음 ('0'/'all'/빈값) → 해당 농장의 전 재배사 fan-out
-        """
         from agri_ai_core.src.ai.tools_utils import get_farm_house_ids
 
         rt_default = (self.default_tool_args or {}).get("get_farm_realtime_data", {}) or {}
@@ -456,9 +457,11 @@ class DataCollector:
     # ════════════════════════════════════════════════════════════
     _AUDIT_MASK_KEYS = ("auth_farm_id",)   # 감사 로그에서 보안상 마스킹할 키
 
+    # ────────────────────────────────────────────────────────────────────
+    # 감사 로그용 args 정제 — 보안 키는 '***' 로 마스킹.
+    # ────────────────────────────────────────────────────────────────────
     @classmethod
     def _sanitize_args_for_audit(cls, args: dict) -> dict:
-        """감사 로그용 args 정제 — 보안 키는 '***' 로 마스킹."""
         if not args:
             return {}
         out = {}
@@ -469,8 +472,10 @@ class DataCollector:
                 out[k] = v
         return out
 
+    # ────────────────────────────────────────────────────────────────────
+    # 도구 호출 1건의 감사 엔트리를 기록한다. 결과 파싱 실패해도 호출 자체는 기록.
+    # ────────────────────────────────────────────────────────────────────
     def _record_tool_call(self, tool_name, args, raw_result, elapsed, ok):
-        """도구 호출 1건의 감사 엔트리를 기록한다. 결과 파싱 실패해도 호출 자체는 기록."""
         entry = {
             "tool": tool_name,
             "args": args,
@@ -527,9 +532,11 @@ class DataCollector:
         s = str(text or "").strip()
         return s if len(s) <= n else s[:n] + "…"
 
+    # ────────────────────────────────────────────────────────────────────
+    # house_id를 사용자 친화적 라벨로 변환. 'all' → '전 재배사', '1' → '1호 재배사'.
+    # ────────────────────────────────────────────────────────────────────
     @staticmethod
     def _house_label(house_id):
-        """house_id를 사용자 친화적 라벨로 변환. 'all' → '전 재배사', '1' → '1호 재배사'."""
         s = str(house_id or "").strip()
         if not s or s == "?":
             return "재배사"

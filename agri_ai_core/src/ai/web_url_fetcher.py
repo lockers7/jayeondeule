@@ -19,9 +19,9 @@ logger = setup_logger(__name__)
 _WEB_SEARCH_CONTENT_MAX_CHARS = max(500, int(os.getenv("WEB_SEARCH_CONTENT_MAX_CHARS", "2000")))
 
 
-# ═══════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 # HTML → 텍스트 변환 (script/style 제거)
-# ═══════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 def _strip_html(raw_text: str) -> str:
     text = re.sub(r'<script[^>]*>[\s\S]*?</script>', '', raw_text, flags=re.IGNORECASE)
     text = re.sub(r'<style[^>]*>[\s\S]*?</style>', '', text, flags=re.IGNORECASE)
@@ -30,9 +30,9 @@ def _strip_html(raw_text: str) -> str:
     return text
 
 
-# ══════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 # urllib로 직접 URL을 가져온다 (MCP fallback용).
-# ══════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 def _direct_fetch_url(url: str, timeout: int = 15) -> Dict[str, Any]:
     logger.debug(f"[직접HTTP] 요청 시작 url={url[:120]} timeout={timeout}s")
     from urllib import request as urlrequest, error as urlerror
@@ -54,10 +54,10 @@ def _direct_fetch_url(url: str, timeout: int = 15) -> Dict[str, Any]:
         return {"success": False, "text": str(e)}
 
 
-# ══════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 # 검색 결과 상위 URL의 본문을 병렬로 읽어 item["page_content"]에 주입.
 # 부작용 함수 — 인자로 받은 results 리스트를 직접 변경한다.
-# ══════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 def _auto_fetch_urls(results: list, max_fetch: int = 3) -> None:
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -93,10 +93,10 @@ def _auto_fetch_urls(results: list, max_fetch: int = 3) -> None:
         logger.warning(f"[웹검색] 자동 본문 읽기 중 오류: {e}")
 
 
-# ═════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 # URL의 웹페이지 본문 텍스트를 가져온다 (공개 API).
 # MCP fetch → 실패시 urllib 직접 요청으로 fallback.
-# ═════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 def fetch_url_content(url: str) -> Dict[str, Any]:
     t_start = time.time()
     logger.info(f"[URL본문] 시작 url={url[:120]}")

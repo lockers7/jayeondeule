@@ -3,6 +3,18 @@
 # --->
 # build_answer_system_prompt: 3단계 답변 생성용 시스템 프롬프트 구성
 # ══════════════════════════════════════════════════════════════════
+# [변경5 · 2026-04-30] 장치명 매핑 라인을 mappers.device_mapping_text() 자동
+# 생성으로 전환 — RELAY_FIELD_MAPPING(_E) 변경 시 LLM 프롬프트도 자동 갱신.
+# [변경7 · 2026-04-30] 생육단계·제어모드·순환모드 enum 도 mappers SSOT 헬퍼로
+# 자동 치환 — 새 단계/모드 추가 시 본 프롬프트가 자동 갱신됨.
+# ══════════════════════════════════════════════════════════════════
+from agri_ai_core.config.mappers import (
+    device_mapping_text as _device_mapping_text,
+    growth_stages_enum as _growth_stages_enum,
+    control_modes_enum as _control_modes_enum,
+    circulation_mode_enum as _circulation_mode_enum,
+)
+
 # ═════════════════════════════
 # [1단계] 질문유형분석 프롬프트
 # ═════════════════════════════
@@ -25,15 +37,16 @@ ANALYZER_SYSTEM_PROMPT = """당신은 질문 분석기입니다. 사용자 질�
    ※ 동일 재배사에서 여러 장치를 동시에 제어할 때는 반드시 devices 배열로 1회 호출하세요. 장치별 개별 호출은 금지합니다.
 6. delete_farm_knowledge — args: {"file_name":"파일명","farm_id":"N"} — 학습 데이터 삭제.
 7. search_gas_price — args: {"query_type":"low_price"} — 주유소 가격 조회.
-8. set_house_control_mode — args: {"house_id":"N|all","mode":"manual|algorithm|ai","farm_id":"N"} — 재배사 제어 모드 전환. 사용자가 "운용방식/제어모드를 ○○(수동/알고리즘/AI)로 바꿔달라"고 할 때 반드시 호출. control_relay로는 모드 전환 불가.
-9. set_growth_stage — args: {"house_id":"N","stage":"발아기|생육기|수확기|휴지기","farm_id":"N"} — 생육단계 변경.
-10. set_circulation_mode — args: {"house_id":"N","mode":"내부순환|외부순환|흡입순환|배기순환|순환정지","farm_id":"N"} — 순환모드 강제 (댐퍼+팬 자동 계산).
+8. set_house_control_mode — args: {"house_id":"N|all","mode":"__CONTROL_MODES__","farm_id":"N"} — 재배사 제어 모드 전환. 사용자가 "운용방식/제어모드를 ○○(수동/알고리즘/AI)로 바꿔달라"고 할 때 반드시 호출. control_relay로는 모드 전환 불가.
+9. set_growth_stage — args: {"house_id":"N","stage":"__GROWTH_STAGES__","farm_id":"N"} — 생육단계 변경.
+10. set_circulation_mode — args: {"house_id":"N","mode":"__CIRCULATION_MODES__","farm_id":"N"} — 순환모드 강제 (댐퍼+팬 자동 계산).
 11. set_schedule — args: {"action":"list|add|delete","house_id":"N","unit_type":"light|water","start_time":"HH:MM","end_time":"HH:MM","interval_min":N,"farm_id":"N"} — 조명/관수 스케줄 관리.
 12. override_ai_thresholds — args: {"action":"get|set|reset","key":"TEMP_LOW 등","value":숫자} — AI 제어 임계값 조회/조정.
 13. get_system_status — args: {"farm_id":"N"} — 전체 시스템 상태(재배사별 제어모드/생육단계/AI루프/스케줄러) 조회. "시스템 상황 알려줘" 요청 시 필수.
 14. schedule_monitor — args: {"intent":"의도","start_time":"HH:MM","end_time":"HH:MM","interval_min":30,"house_ids":"all 또는 콤마구분 hous_id","farm_id":"N","alert_on_normal":false} — Agent 모니터링 Job 등록. "○시부터 ○시까지 ○분마다 감시/모니터링/지켜봐", "오늘 밤 재배사 봐줘" 등 시간 기반 관찰을 요청하면 반드시 호출. 이상 감지 시 채팅 알림 자동 발행. 재배사 구성은 농장별 가변이므로 전체 감시에는 "all" 사용.
 15. list_monitors — args: {} — 현재 등록된 Agent 모니터링 목록. "감시 뭐 돌고 있어?"류 질문.
 16. cancel_monitor — args: {"job_id":"agent_monitor_..."} — 특정 Agent 모니터링 취소.
+17. save_domain_knowledge — args: {"title":"30자 내 요약","content":"본문(임계치/조건/예시 포함)","category":"운영노하우|제어룰|안전룰|생육관리|장치사용법","farm_id":"N(선택)","house_id":"N(선택)","tags":"쉼표구분(선택)"} — 사용자가 알려주는 운영 노하우/룰/도메인 지식을 도메인 RAG에 영속 저장. 저장 즉시 다음 AI 환경제어 사이클부터 LLM이 자동 참조. 사용자 발화에 다음 의도가 보이면 반드시 호출: "학습해/기억해/저장해/다음부터 적용/룰로 추가/방침으로/규칙으로/알아둬". 저장 후엔 "방금 저장한 룰을 다음 AI 사이클부터 자동 반영합니다"로 사용자 안내.
 
 유형별 규칙:
 
@@ -45,16 +58,20 @@ weather (날씨/기온/기상/예보):
 
 farm_sensor (센서/온도/습도/릴레이/재배사 상태):
 - get_farm_realtime_data(data_type="all") 필수.
-- "각 재배사/전체/모든 재배사" → multi_house=true, house_ids=["all"] (시스템이 해당 농장의 실제 재배사 목록을 DB에서 조회해 전개)
-- **실시간 모니터링/지켜봐/감시/상태 알려줘 등 특정 재배사를 명시하지 않은 요청** → multi_house=true, house_ids=["all"] (전 재배사 의도)
-- 특정 재배사 명시("1호", "2번재배사") 시 → multi_house=false, house_ids=[], args에 house_id="N"
+- **다중 재배사 키워드 — 아래 표현 중 하나라도 포함되면 반드시 multi_house=true, house_ids=["all"]**:
+  · "각 재배사", "재배사별", "재배사 별", "재배사마다", "재배사 모두"
+  · "전체 재배사", "모든 재배사", "전 재배사", "전체"
+  · "비교", "표로", "리스트로" + 재배사
+  · "실시간 모니터링", "지켜봐", "감시", "상태 알려줘" 등 특정 재배사 미명시 요청
+- 특정 재배사 명시("1호", "2번재배사", "n호 재배사") 시 → multi_house=false, house_ids=[], args에 house_id="N"
+- ⚠ 컨텍스트의 farm_id/house_id는 "기본값" 일 뿐 — 사용자가 위 다중 키워드를 쓰면 컨텍스트 house_id를 무시하고 multi_house=true 로 판정.
 - 재배사 구성은 농장별로 가변이므로 ["1","2","3"] 같은 고정 번호를 직접 지정하지 마세요. "all" 키워드로 전체 의도를 표현하면 시스템이 DB에서 동적 조회해 fan-out합니다.
 - search_farm_knowledge도 권장 (재배 지식 보충).
 
 farm_control (장치 켜기/끄기/제어):
 - get_farm_realtime_data(data_type="relay") priority=1 (현재 상태 먼저 확인)
 - control_relay priority=2
-- 장치명 매핑: 흡입팬=intake_fan_flag, 배출팬=exhaust_fan_flag, 수온히터/칠러=water_heater_flag, 포그생성=fog_occurs_flag, 배수밸브=drainage_motor_flag, 조명=lighting_flag, 관수=irrigation_flag, 실내히터=indoor_heater_flag, 히터밸브=indoor_heater_valve_flag, 순환밸브=air_circulation_valve_flag, 흡입밸브=air_intake_valve_flag, 배출밸브=air_exhaust_valve_flag, 라디에이터=radiator_flag
+- 장치명 매핑: __DEVICE_MAPPING__
 - "전 재배사/모든 재배사" → house_ids=["all"]
 - **다중 장치 동시 제어 (절대 규칙)**: 2개 이상 장치를 동시에 제어할 때는 반드시 devices 배열로 1회 호출.
   예: "흡입팬 ON, 배출팬 ON, 순환밸브 OFF" → control_relay(devices=[{"device_name":"intake_fan_flag","action":"on"},{"device_name":"exhaust_fan_flag","action":"on"},{"device_name":"air_circulation_valve_flag","action":"off"}], house_id="all")
@@ -118,6 +135,19 @@ general (도구 없이 LLM 자체 지식으로 답변 가능한 일반 질문): 
 complex (여러 유형 혼합): 필요한 모든 도구를 required_data에 나열.
 /no_think"""
 
+# 자동 치환 — mappers SSOT 변경 시 본 프롬프트가 자동 갱신.
+#   __DEVICE_MAPPING__    : RELAY_FIELD_MAPPING(_E) 의 한글기능명/별칭 매핑
+#   __GROWTH_STAGES__     : mappers.GROWTH_STAGES 상수 (4종)
+#   __CONTROL_MODES__     : mappers.CONTROL_MODES 상수 (3종)
+#   __CIRCULATION_MODES__ : control_common.CIRCULATION_MODES.keys (5종)
+ANALYZER_SYSTEM_PROMPT = (
+    ANALYZER_SYSTEM_PROMPT
+    .replace('__DEVICE_MAPPING__',    _device_mapping_text())
+    .replace('__GROWTH_STAGES__',     '|'.join(_growth_stages_enum()))
+    .replace('__CONTROL_MODES__',     '|'.join(_control_modes_enum()))
+    .replace('__CIRCULATION_MODES__', '|'.join(_circulation_mode_enum()))
+)
+
 
 # ═══════════════════════════════════
 # [2단계] 데이터 충분성 판단 프롬프트
@@ -161,13 +191,14 @@ sufficient=false일 때 supplement 형식:
 # ═════════════════════════
 # [3단계] 답변작성 프롬프트
 # ═════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# general 유형(단위변환·계산·상식·정의·번역·농업 이론·농장 기본정보 질문) 전용 경량 프롬프트.
+# 
+# 농장 정체성과 기본정보는 유지하고, 수집 데이터/대화 이력/장문 규칙만 생략한다.
+# 시스템 프롬프트 규모: 기존 2745토큰 → 약 600토큰(92% 공백 대비).
+# [변경4] 정체성·농장기본정보 복구 — "너는 누구냐" / "농장 주소는?" 같은 질문에 환각 방지.
+# ────────────────────────────────────────────────────────────────────
 def _build_general_prompt(speech_style: str, farm_name: str = None, farm_info: str = None) -> str:
-    """general 유형(단위변환·계산·상식·정의·번역·농업 이론·농장 기본정보 질문) 전용 경량 프롬프트.
-
-    농장 정체성과 기본정보는 유지하고, 수집 데이터/대화 이력/장문 규칙만 생략한다.
-    시스템 프롬프트 규모: 기존 2745토큰 → 약 600토큰(92% 공백 대비).
-    [변경4] 정체성·농장기본정보 복구 — "너는 누구냐" / "농장 주소는?" 같은 질문에 환각 방지.
-    """
     if speech_style == "female":
         tone = "답변은 반드시 부드러운 해요체(~예요/~해요/~네요)로만 끝내세요. 합쇼체·반말 금지."
     else:
@@ -197,20 +228,20 @@ def _build_general_prompt(speech_style: str, farm_name: str = None, farm_info: s
     )
 
 
+# ────────────────────────────────────────────────────────────────────
+# 3단계 답변 생성용 시스템 프롬프트 구성
+# 
+# Args:
+#     farm_name: 농장명
+#     farm_info: 농장 기본 정보 텍스트
+#     speech_style: "male" (합쇼체) 또는 "female" (해요체)
+#     analysis_result: 1단계 분석 결과 dict (intent, question_type 등)
+#     current_datetime: 현재 시각 문자열
+#     source_list: 번호가 매겨진 출처 리스트 (LLM이 사용한 번호를 선별)
+# ────────────────────────────────────────────────────────────────────
 def build_answer_system_prompt(farm_name, farm_info, speech_style="male",
                                 analysis_result=None, current_datetime=None,
                                 source_list=None):
-    """
-    3단계 답변 생성용 시스템 프롬프트 구성
-
-    Args:
-        farm_name: 농장명
-        farm_info: 농장 기본 정보 텍스트
-        speech_style: "male" (합쇼체) 또는 "female" (해요체)
-        analysis_result: 1단계 분석 결과 dict (intent, question_type 등)
-        current_datetime: 현재 시각 문자열
-        source_list: 번호가 매겨진 출처 리스트 (LLM이 사용한 번호를 선별)
-    """
     # general 유형은 경량 전용 프롬프트를 반환하여 prompt_eval 토큰을 대폭 축소한다.
     # [변경4] 농장 정체성/기본정보는 유지 (환각 방지) + 장문 규칙·대화이력만 생략
     qtype_early = (analysis_result or {}).get("question_type", "")
@@ -337,6 +368,7 @@ def build_answer_system_prompt(farm_name, farm_info, speech_style="male",
             "   - 예: get_farm_realtime_data만 호출했는데 '감시 시작했다'고 말하지 마세요 → 지속 감시는 현재 도구셋이 아닌 AI 순환 루프가 담당합니다.\n"
             "C. 실제 수행되지 않은 작업은 \"해당 기능은 현재 도구로 수행할 수 없습니다\" 또는 \"추가 지시가 필요합니다\"라고 정직하게 답하세요.\n"
             "D. 결과 보고는 도구 결과의 success/changed 필드를 근거로 객관적으로 기술하세요.\n"
+            "E. **control_relay 결과의 `post_state` 우선 적용 (절대 규칙)**: control_relay 응답에 `post_state: {ON:[...], OFF:[...]}` 가 있으면 그 값이 **변경 직후 실제 DB 상태**입니다. 같은 답변 안에 get_farm_realtime_data 의 (control 이전 시점) ON/OFF 가 함께 있어도, 표·요약·상태 보고는 반드시 `post_state` 를 기준으로 작성하세요. control_relay가 'all' 로 호출된 경우 `results[*].post_state` 가 각 재배사별 최종 상태입니다.\n"
         )
 
     prompt = f"""{farm_section}{tone_rules}

@@ -1,11 +1,11 @@
-# ═══════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
 # HTTP JSON 클라이언트 — 범용 HTTP 요청 유틸 (stdlib urllib 기반).
-# AI/MCP 계층에 의존하지 않는 base util. 하위 계층(chroma/postgresql/control 등)
-# 에서 안전하게 import 가능.
+# AI/MCP 계층에 의존하지 않는 base util. 하위 계층(chroma/postgresql/
+# control 등)에서 안전하게 import 가능.
 # --->
-# coerce_json_and_text: 응답 본문을 JSON/text로 정규화
-# http_json_request: JSON body/response HTTP 요청 → (status_code, data, text)
-# ═══════════════════════════════════════════════════════════════════════════
+# coerce_json_and_text : 응답 본문을 (JSON, text) 튜플로 정규화
+# http_json_request    : JSON body/response HTTP 요청 → (status, data, text)
+# ════════════════════════════════════════════════════════════════════
 import json
 from typing import Any, Dict, Optional, Tuple
 from urllib import error as urlerror
@@ -14,8 +14,10 @@ from urllib import request as urlrequest
 from agri_ai_core.src.utils.json_utils import safe_json_load
 
 
+# ────────────────────────────────────────────────────────────────────
+# 응답 본문을 (JSON dict/list, text) 튜플로 정규화.
+# ────────────────────────────────────────────────────────────────────
 def coerce_json_and_text(value: Any) -> Tuple[Optional[Any], str]:
-    """응답 본문을 (JSON dict/list, text) 튜플로 정규화."""
     if isinstance(value, (dict, list)):
         return value, json.dumps(value, ensure_ascii=False)
     if value is None:
@@ -27,6 +29,12 @@ def coerce_json_and_text(value: Any) -> Tuple[Optional[Any], str]:
     return None, text
 
 
+# ────────────────────────────────────────────────────────────────────
+# 직접 HTTP 요청 (urllib). JSON body 송신 + 응답을 (status, data, text) 반환.
+#   2xx/3xx              : (status, parsed_json_or_None, raw_text)
+#   HTTPError            : (status, parsed_body_or_None, body_text)
+#   URLError/기타 예외   : (503/500, None, error_msg)
+# ────────────────────────────────────────────────────────────────────
 def http_json_request(
     method: str,
     url: str,
@@ -34,12 +42,6 @@ def http_json_request(
     timeout: int = 20,
     headers: Optional[Dict[str, str]] = None,
 ) -> Tuple[int, Optional[Any], str]:
-    """직접 HTTP 요청 (urllib). JSON body 송신 + 응답을 (status, data, text)로 반환.
-
-    - 2xx/3xx: (status, parsed_json_or_None, raw_text)
-    - HTTPError: (status, parsed_body_or_None, body_text)
-    - URLError/기타 예외: (503/500, None, error_msg)
-    """
     normalized_method = (method or "GET").upper()
     normalized_headers: Dict[str, str] = dict(headers or {})
     body_bytes = None

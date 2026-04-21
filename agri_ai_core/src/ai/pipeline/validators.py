@@ -16,19 +16,19 @@ from agri_ai_core.src.utils.json_utils import safe_json_load
 logger = setup_logger(__name__)
 
 
+# ────────────────────────────────────────────────────────────────────
+# LLM에게 수집된 데이터가 질문에 답하기에 충분한지 판단을 요청합니다.
+# 
+# Args:
+#     user_query: 사용자 원본 질문
+#     analysis_result: 1단계 분석 결과 (intent, question_type 등)
+#     collected_data_summary: 수집된 데이터 요약 텍스트
+# 
+# Returns:
+#     dict: {"sufficient": bool, "reason": str, "supplement": [{"tool":..., "args":...}]}
+#           LLM 호출 실패 시 {"sufficient": True} 반환 (안전 fallback)
+# ────────────────────────────────────────────────────────────────────
 def validate_with_llm(user_query, analysis_result, collected_data_summary):
-    """
-    LLM에게 수집된 데이터가 질문에 답하기에 충분한지 판단을 요청합니다.
-
-    Args:
-        user_query: 사용자 원본 질문
-        analysis_result: 1단계 분석 결과 (intent, question_type 등)
-        collected_data_summary: 수집된 데이터 요약 텍스트
-
-    Returns:
-        dict: {"sufficient": bool, "reason": str, "supplement": [{"tool":..., "args":...}]}
-              LLM 호출 실패 시 {"sufficient": True} 반환 (안전 fallback)
-    """
     t0 = time.time()
 
     try:
@@ -89,8 +89,10 @@ def validate_with_llm(user_query, analysis_result, collected_data_summary):
         return {"sufficient": True, "reason": f"검증 오류: {e}", "supplement": []}
 
 
+# ────────────────────────────────────────────────────────────────────
+# LLM 응답에서 JSON을 안전하게 추출
+# ────────────────────────────────────────────────────────────────────
 def _parse_validator_json(response_text):
-    """LLM 응답에서 JSON을 안전하게 추출"""
     if not response_text:
         return None
 
@@ -117,11 +119,11 @@ def _parse_validator_json(response_text):
     return None
 
 
+# ────────────────────────────────────────────────────────────────────
+# 수집된 데이터를 LLM 검증용 요약 텍스트로 변환합니다.
+# 전체 데이터를 보내면 토큰이 낭비되므로, 각 도구 결과의 앞부분만 요약.
+# ────────────────────────────────────────────────────────────────────
 def summarize_collected_data(collected_data_list):
-    """
-    수집된 데이터를 LLM 검증용 요약 텍스트로 변환합니다.
-    전체 데이터를 보내면 토큰이 낭비되므로, 각 도구 결과의 앞부분만 요약.
-    """
     if not collected_data_list:
         return "(수집된 데이터 없음)"
 

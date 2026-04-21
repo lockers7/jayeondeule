@@ -1,10 +1,11 @@
-# ════════════════════════════════════════════════════════════════════════════════
-# 설정 모듈 - 환경변수 기반 애플리케이션 설정 로드 (dataclass + lru_cache 싱글톤).
+# ════════════════════════════════════════════════════════════════════
+# 설정 모듈 — 환경변수 기반 애플리케이션 설정 로드.
+# dataclass(frozen) + lru_cache 싱글톤으로 불변성 + 1회 로드 보장.
 # --->
-# _get_int: get int
-# _get_first_env: get first env
-# get_settings: get settings
-# ════════════════════════════════════════════════════════════════════════════════
+# _get_int       : Optional[str] → Optional[int] 안전 변환
+# _get_first_env : 다중 키 중 처음으로 발견된 환경변수 값 반환
+# get_settings   : .env 로드 후 AppSettings 인스턴스 생성 (lru_cache)
+# ════════════════════════════════════════════════════════════════════
 import logging
 import os
 from dataclasses import dataclass
@@ -70,6 +71,9 @@ class AppSettings:
     logging: LoggingSettings
 
 
+# ────────────────────────────────────────────────────────────────────
+# Optional[str] → Optional[int] 안전 변환 — None/빈/비숫자 시 default 반환.
+# ────────────────────────────────────────────────────────────────────
 def _get_int(value: Optional[str], default: Optional[int] = None) -> Optional[int]:
     if value is None:
         return default
@@ -79,6 +83,10 @@ def _get_int(value: Optional[str], default: Optional[int] = None) -> Optional[in
         return default
 
 
+# ────────────────────────────────────────────────────────────────────
+# 다중 환경변수 키 중 처음으로 발견된(non-empty) 값을 반환.
+# 신·구 키 호환(PGDB_HOST/DB_HOST 등) 처리에 사용.
+# ────────────────────────────────────────────────────────────────────
 def _get_first_env(*keys: str, default: Optional[str] = None) -> Optional[str]:
     for key in keys:
         value = os.getenv(key)
@@ -87,6 +95,10 @@ def _get_first_env(*keys: str, default: Optional[str] = None) -> Optional[str]:
     return default
 
 
+# ────────────────────────────────────────────────────────────────────
+# .env 로드 후 AppSettings 인스턴스 생성 — lru_cache 로 1회만 실행.
+# DB/Vector/Model/Collection/Logging 5개 sub-settings 를 합성하여 반환.
+# ────────────────────────────────────────────────────────────────────
 @lru_cache()
 def get_settings() -> AppSettings:
     load_dotenv(override=True)

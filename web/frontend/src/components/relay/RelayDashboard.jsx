@@ -1,6 +1,6 @@
 import {useQuery, useMutation, useQueryClient} from "@tanstack/react-query";
-import {useMemo, useState} from "react";
-import {Row, Col, Card, Form, OverlayTrigger, Tooltip} from "react-bootstrap";
+import {useMemo, useRef, useState} from "react";
+import {Row, Col, Card, Form, OverlayTrigger, Tooltip, Modal, Button} from "react-bootstrap";
 import {InfoCircle} from "react-bootstrap-icons";
 import axios from "axios";
 
@@ -31,6 +31,8 @@ export default function RelayDashboard({farmId, house, setSelectedHouse}) {
     const [showAiModal, setShowAiModal] = useState(false);
     const [aiJudgment, setAiJudgment] = useState(null);
     const [toggledDeviceLabel, setToggledDeviceLabel] = useState("");
+    // [2026-04-27] 인터록 위반(밸브 OFF 차단 / 팬 ON 차단) 팝업 메시지
+    const [interlockMessage, setInterlockMessage] = useState("");
 
     const relayLabels = useMemo(() => {
         if (farmId == 1 && house.housId == 2) {
@@ -46,7 +48,7 @@ export default function RelayDashboard({farmId, house, setSelectedHouse}) {
                 {label: "포그생성(순환모터)(2)", num: 2},
                 {label: "조명(5)", num: 5},
                 {label: "관수(6)", num: 6},
-                {label: "칠러Ⅰ(1)", num: 1},
+                {label: "수온히터(1)", num: 1},
                 {label: "칠러Ⅱ(4)", num: 4},
                 {label: "라디에이터(3)", num: 3},
             ];
@@ -78,10 +80,62 @@ export default function RelayDashboard({farmId, house, setSelectedHouse}) {
         gcTime: 0,
     });
 
+    // ════════════════════════════════════════════════════════════════════════
+    // 흡입팬/배출팬 인터록 잔여시간 폴링 (1초)
+    // 백엔드 GET /api/v1/rpi/interlock/{farm}/{house} → 카운트다운 표시용.
+    // 실패해도 UI 깨지지 않도록 (data 없으면 카드는 잔여시간 미표시).
+    // ════════════════════════════════════════════════════════════════════════
+    const {data: interlockData} = useQuery({
+        queryKey: ["interlock", farmId, house.housId],
+        queryFn: async () => {
+            const res = await axios.get(
+                `${AI_API_BASE}/api/v1/rpi/interlock/${farmId}/${house.housId}`,
+                {timeout: 3000},
+            );
+            return res.data;
+        },
+        refetchInterval: 1000,
+        enabled: !!farmId && !!house.housId,
+        gcTime: 0,
+        retry: false,
+    });
+
+    // relayNum → 인터록 정보 매핑 (흡입팬·배출팬만)
+    const fanInterlockByNum = useMemo(() => {
+        if (!interlockData?.fans) return {};
+        const intakeNum = (farmId == 1 && house.housId == 2) ? 7 : 5;
+        const exhaustNum = (farmId == 1 && house.housId == 2) ? 8 : 6;
+        return {
+            [intakeNum]:  interlockData.fans.intake_fan_flag || null,
+            [exhaustNum]: interlockData.fans.exhaust_fan_flag || null,
+        };
+    }, [interlockData, farmId, house.housId]);
+
+    // 미사용 장치 비활성화 (UI 표시용 — 백엔드 force_off_unmapped_relays 가 항상 OFF 강제).
+    //   1·3호(STANDARD): relay 9(실내히터)·15(히터밸브) 미사용
+    //   2호(E타입):       relay 3(라디에이터)·4(칠러Ⅱ) 미사용 — 1·3호와 동일한 disable 패턴 적용
+    const disabledRelayNums = useMemo(() => {
+        if (farmId == 1 && house.housId == 2) return new Set([3, 4]);
+        return new Set([9, 15]);
+    }, [farmId, house.housId]);
+
+
     // relay toggle mutation
+    // [2026-04-27] 응답에 interlock_violations 가 있으면 차단 팝업 표시 + 낙관적
+    // 업데이트 롤백을 위해 즉시 invalidate (서버가 반환한 corrected 상태로 재조회).
     const toggleRelayMutation = useMutation({
         mutationFn: (updatedStatus) => patchRelayStatus(farmId, house.housId, updatedStatus),
-        onSuccess: () => queryClient.invalidateQueries(["relayStatus", farmId, house.housId]),
+        onSuccess: (response) => {
+            queryClient.invalidateQueries(["relayStatus", farmId, house.housId]);
+            const violations = response?.data?.interlockViolations || [];
+            const blockedReasons = violations
+                .filter(v => v.action === "off_blocked" || v.action === "on_blocked")
+                .map(v => v.reason)
+                .filter(Boolean);
+            if (blockedReasons.length > 0) {
+                setInterlockMessage(blockedReasons.join("\n\n"));
+            }
+        },
     });
 
     const handleToggleRelay = async (relayNum) => {
@@ -161,6 +215,8 @@ export default function RelayDashboard({farmId, house, setSelectedHouse}) {
                         manualMode={!house.mnulCtrlFlag}
                         handleToggle={handleToggleRelay}
                         toggleRelayMutation={toggleRelayMutation}
+                        interlockInfo={fanInterlockByNum[item.num]}
+                        disabledDevice={disabledRelayNums.has(item.num)}
                     />
                 ))}
             </Row>
@@ -172,6 +228,37 @@ export default function RelayDashboard({farmId, house, setSelectedHouse}) {
                 judgment={aiJudgment}
                 toggledDevice={toggledDeviceLabel}
             />
+
+            {/* [2026-04-27] 인터록 위반 차단 팝업 — 닫기 버튼 자동 포커스로
+                스페이스바/Enter 즉시 닫기 가능 */}
+            <InterlockBlockedModal
+                message={interlockMessage}
+                onHide={() => setInterlockMessage("")}
+            />
         </div>
+    );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 인터록 위반(밸브 OFF 차단 / 팬 ON 차단) 안내 모달.
+// onEntered 시점에 닫기 버튼에 포커스 → 사용자가 마우스 없이 스페이스바/Enter
+// 만으로 즉시 닫을 수 있다. ESC 는 react-bootstrap 기본 동작으로 처리.
+// ════════════════════════════════════════════════════════════════════════════
+function InterlockBlockedModal({message, onHide}) {
+    const closeBtnRef = useRef(null);
+    if (!message) return null;
+    return (
+        <Modal show={!!message} onHide={onHide} centered
+               onEntered={() => closeBtnRef.current && closeBtnRef.current.focus()}>
+            <Modal.Header closeButton className="bg-warning bg-opacity-25">
+                <Modal.Title>제어 차단</Modal.Title>
+            </Modal.Header>
+            <Modal.Body style={{whiteSpace: "pre-line"}}>
+                {message}
+            </Modal.Body>
+            <Modal.Footer>
+                <Button ref={closeBtnRef} variant="secondary" onClick={onHide}>닫기</Button>
+            </Modal.Footer>
+        </Modal>
     );
 }

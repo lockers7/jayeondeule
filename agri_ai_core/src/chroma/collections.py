@@ -1,37 +1,37 @@
-# ════════════════════════════════════════════════════
-# ChromaDB 컬렉션 관리: 컬렉션 이름 반환 함수들.
+# ════════════════════════════════════════════════════════════════════
+# ChromaDB 컬렉션 이름 게터 — settings.collections 의 4개 컬렉션 별칭.
 # --->
-# farm_knowledge_collection: farm knowledge collection
-# document_collection: document collection
-# conversation_collection: conversation collection
-# web_knowledge_collection: web knowledge collection
-# ════════════════════════════════════════════════════
+# farm_knowledge_collection : 농장 지식 RAG 컬렉션 이름
+# document_collection       : 업로드된 문서 RAG 컬렉션 이름
+# conversation_collection   : 대화 요약 RAG 컬렉션 (농장주별 관심/패턴)
+# web_knowledge_collection  : 웹 검색 누적 + LLM 지식 캐시 컬렉션
+# ════════════════════════════════════════════════════════════════════
 from agri_ai_core.config import settings
 
 
-# ═══════════════════════
-# 컬렉션 이름 반환 함수들
-# ═══════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 농장 지식 RAG 컬렉션 이름 반환.
+# ────────────────────────────────────────────────────────────────────
 def farm_knowledge_collection():
     return settings.collections.farm_knowledge or ''
 
 
-# ════════════════════════
-# 업로드된 문서 RAG 컬렉션
-# ════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 업로드된 문서 RAG 컬렉션 이름 반환.
+# ────────────────────────────────────────────────────────────────────
 def document_collection():
     return settings.collections.document or ''
 
 
-# ═════════════════════════════════════════
-# 대화 요약 RAG 컬렉션 (농장주별 관심/패턴)
-# ═════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 대화 요약 RAG 컬렉션 이름 반환 (농장주별 관심/패턴).
+# ────────────────────────────────────────────────────────────────────
 def conversation_collection():
     return settings.collections.conversation or ''
 
 
-# ═══════════════════════════════════
-# 웹 검색 누적 + LLM 지식 캐시 컬렉션
-# ═══════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 웹 검색 누적 + LLM 지식 캐시 컬렉션 이름 반환.
+# ────────────────────────────────────────────────────────────────────
 def web_knowledge_collection():
     return settings.collections.web_knowledge or ''

@@ -140,6 +140,66 @@ export default function HouseIntroPage() {
         </Container>
       </section>
 
+      {/* 재배사별 실시간 스트리밍 */}
+      <section className="shop-section">
+        <Container>
+          <div className="text-center mb-4">
+            <span className="section-label">Live Streaming</span>
+            <h2 className="section-title">재배사 실시간 영상</h2>
+            <p className="section-desc">
+              각 재배사의 상황버섯 생육 모습을 실시간으로 확인하세요
+            </p>
+          </div>
+
+          <Nav variant="pills" className="justify-content-center mb-4 gap-2">
+            {houses.map((h, i) => (
+              <Nav.Item key={h.id}>
+                <Nav.Link
+                  active={activeHouse === i}
+                  onClick={() => setActiveHouse(i)}
+                  style={{
+                    background: activeHouse === i ? 'var(--shop-accent)' : 'transparent',
+                    color: activeHouse === i ? '#fff' : 'var(--shop-text)',
+                    border: activeHouse === i ? 'none' : '1px solid var(--shop-border)',
+                    borderRadius: '50px', padding: '10px 28px', fontWeight: 500, cursor: 'pointer',
+                  }}
+                >
+                  {h.name}
+                </Nav.Link>
+              </Nav.Item>
+            ))}
+          </Nav>
+
+          <Row className="align-items-start g-4">
+            <Col lg={7}>
+              <CameraStream
+                key={`${house.farmId}-${house.houseId}`}
+                farmId={house.farmId} houseId={house.houseId}
+                label={`${house.name} LIVE`}
+              />
+            </Col>
+            <Col lg={5}>
+              <div className="p-4" style={{ background: '#fff', borderRadius: '16px', border: '1px solid var(--shop-border)' }}>
+                <h4 className="fw-bold mb-3">{house.name}</h4>
+                <p className="text-muted mb-4">{house.desc}</p>
+                <h6 className="fw-bold mb-3">주요 장비 및 기능</h6>
+                <ul className="list-unstyled">
+                  {house.features.map((f, i) => (
+                    <li key={i} className="d-flex align-items-center gap-2 mb-2">
+                      <span style={{
+                        width: '8px', height: '8px', borderRadius: '50%',
+                        background: 'var(--shop-accent)', flexShrink: 0
+                      }} />
+                      <span className="small">{f}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </Col>
+          </Row>
+        </Container>
+      </section>
+
       {/* 스마트팜 시스템 갤러리 */}
       <section className="shop-section shop-section-warm">
         <Container>
@@ -196,62 +256,6 @@ export default function HouseIntroPage() {
               </Row>
             </div>
           ))}
-        </Container>
-      </section>
-
-      {/* 재배사별 실시간 스트리밍 */}
-      <section className="shop-section">
-        <Container>
-          <div className="text-center mb-4">
-            <span className="section-label">Live Streaming</span>
-            <h2 className="section-title">재배사 실시간 영상</h2>
-            <p className="section-desc">
-              각 재배사의 상황버섯 생육 모습을 실시간으로 확인하세요
-            </p>
-          </div>
-
-          <Nav variant="pills" className="justify-content-center mb-4 gap-2">
-            {houses.map((h, i) => (
-              <Nav.Item key={h.id}>
-                <Nav.Link
-                  active={activeHouse === i}
-                  onClick={() => setActiveHouse(i)}
-                  style={{
-                    background: activeHouse === i ? 'var(--shop-accent)' : 'transparent',
-                    color: activeHouse === i ? '#fff' : 'var(--shop-text)',
-                    border: activeHouse === i ? 'none' : '1px solid var(--shop-border)',
-                    borderRadius: '50px', padding: '10px 28px', fontWeight: 500, cursor: 'pointer',
-                  }}
-                >
-                  {h.name}
-                </Nav.Link>
-              </Nav.Item>
-            ))}
-          </Nav>
-
-          <Row className="align-items-start g-4">
-            <Col lg={7}>
-              <CameraStream farmId={house.farmId} houseId={house.houseId} label={`${house.name} LIVE`} />
-            </Col>
-            <Col lg={5}>
-              <div className="p-4" style={{ background: '#fff', borderRadius: '16px', border: '1px solid var(--shop-border)' }}>
-                <h4 className="fw-bold mb-3">{house.name}</h4>
-                <p className="text-muted mb-4">{house.desc}</p>
-                <h6 className="fw-bold mb-3">주요 장비 및 기능</h6>
-                <ul className="list-unstyled">
-                  {house.features.map((f, i) => (
-                    <li key={i} className="d-flex align-items-center gap-2 mb-2">
-                      <span style={{
-                        width: '8px', height: '8px', borderRadius: '50%',
-                        background: 'var(--shop-accent)', flexShrink: 0
-                      }} />
-                      <span className="small">{f}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </Col>
-          </Row>
         </Container>
       </section>
     </>

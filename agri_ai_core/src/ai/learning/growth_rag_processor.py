@@ -171,17 +171,21 @@ def _get_season(month: int) -> str:
     return _SEASON_MAP.get(month, "겨울")
 
 
+# ────────────────────────────────────────────────────────────────────
+# safe_float 값을 문자열로 포맷한다. (센서 값 포맷 헬퍼)
+# ────────────────────────────────────────────────────────────────────
 def _sv(value, unit: str = "") -> str:
-    """safe_float 값을 문자열로 포맷한다. (센서 값 포맷 헬퍼)"""
     return f"{safe_float(value)}{unit}"
 
 
+# ────────────────────────────────────────────────────────────────────
+# 센서 통계 한 줄을 포맷한다 (평균, 주야간, 표준편차, 범위).
+# ────────────────────────────────────────────────────────────────────
 def _format_sensor_stat_block(
     label: str, unit: str, sensor_stats: Dict, day_night: Dict,
     avg_key: str, std_key: str = "", min_key: str = "", max_key: str = "",
     day_night_key: str = "",
 ) -> str:
-    """센서 통계 한 줄을 포맷한다 (평균, 주야간, 표준편차, 범위)."""
     has_more = std_key or (min_key and max_key)
     parts = [f"- {label}: 평균 {_sv(sensor_stats.get(avg_key))}{unit}"]
     if day_night_key:
@@ -199,13 +203,17 @@ def _format_sensor_stat_block(
     return "".join(parts)
 
 
+# ────────────────────────────────────────────────────────────────────
+# 릴레이 가동 비율을 퍼센트 문자열로 포맷한다.
+# ────────────────────────────────────────────────────────────────────
 def _format_relay_pct(relay_stats: Dict, key: str) -> str:
-    """릴레이 가동 비율을 퍼센트 문자열로 포맷한다."""
     return f"{safe_float(relay_stats.get(key)) * 100:.1f}%"
 
 
+# ────────────────────────────────────────────────────────────────────
+# 이동평균 트렌드 한 줄을 포맷한다.
+# ────────────────────────────────────────────────────────────────────
 def _format_trend_line(label: str, first: Dict, last: Dict, key: str, unit: str, threshold: float) -> str:
-    """이동평균 트렌드 한 줄을 포맷한다."""
     v1 = safe_float(first.get(key))
     v2 = safe_float(last.get(key))
     if abs(v2 - v1) > threshold:

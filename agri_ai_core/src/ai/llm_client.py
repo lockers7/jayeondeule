@@ -101,8 +101,10 @@ _TOOL_DISPLAY_NAMES = {
 }
 
 
+# ────────────────────────────────────────────────────────────────────
+# 도구 호출 시 사용자에게 보여줄 상세 정보 메시지 생성.
+# ────────────────────────────────────────────────────────────────────
 def _build_tool_detail_message(tool_name: str, tool_args: dict) -> str:
-    """도구 호출 시 사용자에게 보여줄 상세 정보 메시지 생성."""
     if tool_name == "get_farm_realtime_data":
         house_id = tool_args.get("house_id", "")
         data_type = tool_args.get("data_type", "all")
@@ -132,9 +134,11 @@ def _build_tool_detail_message(tool_name: str, tool_args: dict) -> str:
     return ""
 
 
+# ────────────────────────────────────────────────────────────────────
+# Tool Use 루프 내부에서 진행 상태를 외부(스트리밍 핸들러)로 보고합니다.
+# ────────────────────────────────────────────────────────────────────
 def _report_progress(progress_queue: Optional[ThreadQueue], message: str, phase: str = "processing",
                      tool_name: str = None, iteration: int = None, max_iterations: int = None):
-    """Tool Use 루프 내부에서 진행 상태를 외부(스트리밍 핸들러)로 보고합니다."""
     if progress_queue is None:
         return
     event = {"message": message, "phase": phase}
@@ -229,9 +233,11 @@ def _normalize_tool_arguments(
             "auto_fetch_max": _pick("auto_fetch_max"),
         }
     # 시스템관리자 farm_id 결정: LLM 대화에서 구체적 농장 지정 → 해당 농장, 미지정 → 세션 선택 농장
+    # ────────────────────────────────────────────────────────────────────
+    # 시스템관리자(세션=0)일 때 LLM 판단값으로 farm_id 결정.
+    # 숫자 → 그대로, 농장명 → DB 역조회, 무효 → 세션값 유지.
+    # ────────────────────────────────────────────────────────────────────
     def _resolve_admin_farm_id(session_fid, llm_fid_raw):
-        """시스템관리자(세션=0)일 때 LLM 판단값으로 farm_id 결정.
-        숫자 → 그대로, 농장명 → DB 역조회, 무효 → 세션값 유지."""
         if str(session_fid) != "0":
             return session_fid  # 농장사용자는 세션값 강제
         _llm_fid = str(llm_fid_raw or "").strip()
@@ -319,17 +325,18 @@ def _normalize_tool_arguments(
 
 
 
+# ────────────────────────────────────────────────────────────────────
+# 도구 호출 실행, 결과 정제, 메시지 병합을 처리.
+# - 동일 반복 내 중복 호출 제거 (같은 함수+인자 캐시)
+# - 결과를 1개 tool 메시지로 병합 (컨텍스트 절약)
+# - search_web 출처 수집
+# ────────────────────────────────────────────────────────────────────
 def _execute_and_merge_tools(
     tool_calls: list, messages: list, default_tool_args: dict,
     user_query: str, tools_used: list, collected_sources: list,
     execute_tool, iteration: int, max_tool_iterations: int,
     progress_queue=None,
 ):
-    """도구 호출 실행, 결과 정제, 메시지 병합을 처리.
-    - 동일 반복 내 중복 호출 제거 (같은 함수+인자 캐시)
-    - 결과를 1개 tool 메시지로 병합 (컨텍스트 절약)
-    - search_web 출처 수집
-    """
     logger.info(f"[Tool Use] 도구호출 {len(tool_calls)}건 감지 (반복{iteration + 1})")
     _results = []
     _dedup_cache = {}

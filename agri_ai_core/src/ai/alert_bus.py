@@ -1,12 +1,18 @@
-# ══════════════════════════════════════════════════════════════════════════════
-# 알림 버스 — AI 순환 루프/비상 제어에서 감지한 이벤트를 구독자(SSE)에게 push.
-# 메모리 기반 ring buffer + asyncio.Queue 구독자 목록.
+# ════════════════════════════════════════════════════════════════════
+# 알림 버스 — AI 순환 루프/비상 제어에서 감지한 이벤트를 구독자(SSE)에 push.
+# 메모리 기반 ring buffer + asyncio.Queue 구독자 목록 + 옵션 DB 영속화.
 # --->
-# publish: 이벤트 1건 발행 (모든 구독자에게 전파)
-# subscribe: 구독자 등록 (asyncio.Queue 반환)
-# unsubscribe: 구독자 해제
-# get_recent: 최근 N건 조회 (신규 구독자가 놓친 이벤트 복구용)
-# ══════════════════════════════════════════════════════════════════════════════
+# bind_event_loop      : FastAPI 메인 이벤트 루프 바인딩 (sync→async 브리지)
+# publish              : 이벤트 1건 발행 (모든 구독자에게 전파 + DB 영속화)
+# _safe_put            : Queue 만석 시 오래된 항목 drop 후 신규 삽입
+# _ensure_alert_table  : alert_l_log 테이블 lazy 생성
+# _persist_event       : 비상 알림을 DB 에 INSERT (레벨 필터 + 예외 흡수)
+# subscribe            : 신규 구독자 등록 → asyncio.Queue 반환
+# get_events_since     : Last-Event-ID 이후 이벤트 복원 (SSE 재연결)
+# get_stats            : 관측성용 통계 스냅샷 반환
+# unsubscribe          : 구독자 해제
+# get_recent           : 최근 N건 조회 (신규 구독자 복구용, level 필터)
+# ════════════════════════════════════════════════════════════════════
 import asyncio
 import json
 import os
@@ -43,13 +49,26 @@ _table_ready = False
 _table_ready_lock = threading.Lock()
 
 
+# ────────────────────────────────────────────────────────────────────
+# FastAPI 시작 시 메인 이벤트 루프를 바인딩.
+# manual_control(sync 스레드)에서 publish 할 때 call_soon_threadsafe 용.
+# ────────────────────────────────────────────────────────────────────
 def bind_event_loop(loop: asyncio.AbstractEventLoop) -> None:
-    """FastAPI 시작 시 메인 이벤트 루프를 바인딩. manual_control(sync 스레드)에서 publish 할 때 사용."""
     global _loop_ref
     _loop_ref = loop
     logger.info("[alert_bus] FastAPI 이벤트 루프 바인딩 완료")
 
 
+# ────────────────────────────────────────────────────────────────────
+# 알림 발행. sync 컨텍스트(AI 순환 루프 스레드) 호출 안전.
+#   level    : 'info' | 'warning' | 'critical'
+#   category : 'temp' | 'humidity' | 'co2' | 'water' | 'control' | 'system'
+#   farm_id, house_id : 대상 식별자
+#   title    : 짧은 제목 (50자 이내)
+#   message  : 설명문 (1~3줄)
+#   data     : 추가 구조화 데이터 (선택)
+# 반환: 발행된 이벤트 dict.
+# ────────────────────────────────────────────────────────────────────
 def publish(
     level: str,
     category: str,
@@ -59,19 +78,6 @@ def publish(
     message: str,
     data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """알림 발행. sync 컨텍스트(AI 순환 루프 스레드)에서 호출해도 안전.
-
-    Args:
-        level: 'info' | 'warning' | 'critical'
-        category: 'temp' | 'humidity' | 'co2' | 'water' | 'control' | 'system'
-        farm_id, house_id: 대상 식별자
-        title: 짧은 제목 (50자 이내)
-        message: 설명문 (1~3줄)
-        data: 추가 구조화 데이터 (선택)
-
-    Returns:
-        발행된 이벤트 dict
-    """
     evt = {
         "id": f"alt_{int(time.time()*1000)}",
         "timestamp": datetime.now().isoformat(),
@@ -111,6 +117,9 @@ def publish(
     return evt
 
 
+# ────────────────────────────────────────────────────────────────────
+# 구독자 Queue 에 이벤트 push. 만석이면 가장 오래된 것 drop 후 삽입 + 통계.
+# ────────────────────────────────────────────────────────────────────
 def _safe_put(queue: asyncio.Queue, evt: Dict[str, Any]) -> None:
     try:
         queue.put_nowait(evt)
@@ -147,8 +156,11 @@ CREATE INDEX IF NOT EXISTS idx_alert_l_log_farm_level ON alert_l_log(farm_id, le
 """
 
 
+# ────────────────────────────────────────────────────────────────────
+# alert_l_log 테이블 lazy 생성 (한번 성공 시 캐시).
+# 실패해도 메모리 버퍼 경로는 영향 없음.
+# ────────────────────────────────────────────────────────────────────
 def _ensure_alert_table():
-    """alert_l_log 테이블 lazy 생성. 실패해도 메모리 버퍼 경로는 영향 없음."""
     global _table_ready
     if _table_ready:
         return True
@@ -167,8 +179,11 @@ def _ensure_alert_table():
             return False
 
 
+# ────────────────────────────────────────────────────────────────────
+# 비상 알림을 DB 에 INSERT. 레벨 필터 + 예외 흡수.
+# DB 실패가 알림 발행을 막아서는 안 됨 (기존 프로세스 훼손 금지).
+# ────────────────────────────────────────────────────────────────────
 def _persist_event(evt: Dict[str, Any]) -> None:
-    """비상 알림을 DB 에 INSERT. 레벨 필터 + 예외 흡수."""
     if not _PERSIST_ENABLED:
         return
     evt_level = (evt.get("level") or "info").lower()
@@ -202,8 +217,10 @@ def _persist_event(evt: Dict[str, Any]) -> None:
         logger.debug(f"[alert_bus] DB INSERT 실패: {e}")
 
 
+# ────────────────────────────────────────────────────────────────────
+# 신규 구독자 등록. 반환된 Queue 를 SSE handler 가 consume.
+# ────────────────────────────────────────────────────────────────────
 def subscribe(maxsize: int = 100) -> asyncio.Queue:
-    """신규 구독자 등록. 반환된 Queue를 SSE handler가 consume."""
     q: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
     with _lock:
         _subscribers.add(q)
@@ -213,11 +230,12 @@ def subscribe(maxsize: int = 100) -> asyncio.Queue:
     return q
 
 
-# [Wave 10] SSE 재연결 지원 — Last-Event-ID 이후 이벤트 복원
+# ────────────────────────────────────────────────────────────────────
+# [Wave 10] SSE 재연결 지원 — Last-Event-ID 이후 이벤트 복원.
+# last_event_id 가 None 이거나 버퍼에서 못 찾으면 빈 리스트 반환.
+# SSE 클라이언트 재연결 시 Last-Event-ID 헤더 값을 그대로 넘겨 사용.
+# ────────────────────────────────────────────────────────────────────
 def get_events_since(last_event_id: Optional[str], max_items: int = 50) -> List[Dict[str, Any]]:
-    """주어진 event_id 이후의 이벤트들을 메모리 ring buffer 에서 복원.
-    last_event_id 가 None 이거나 버퍼에서 못 찾으면 빈 리스트 반환.
-    SSE 클라이언트 재연결 시 Last-Event-ID 헤더 값을 그대로 넘겨 받아 사용."""
     if not last_event_id:
         return []
     with _lock:
@@ -233,8 +251,10 @@ def get_events_since(last_event_id: Optional[str], max_items: int = 50) -> List[
     return items[found_idx + 1:][:max_items]
 
 
+# ────────────────────────────────────────────────────────────────────
+# 관측성용 통계 스냅샷 반환 — published, dropped, subscribers, buffer_size.
+# ────────────────────────────────────────────────────────────────────
 def get_stats() -> Dict[str, Any]:
-    """관측성용 통계 스냅샷 반환."""
     with _stats_lock:
         snap = dict(_stats)
     with _lock:
@@ -243,14 +263,19 @@ def get_stats() -> Dict[str, Any]:
     return snap
 
 
+# ────────────────────────────────────────────────────────────────────
+# 구독자 해제 (Queue 제거).
+# ────────────────────────────────────────────────────────────────────
 def unsubscribe(queue: asyncio.Queue) -> None:
     with _lock:
         _subscribers.discard(queue)
     logger.info(f"[alert_bus] 구독자 해제 (남은 {len(_subscribers)}명)")
 
 
+# ────────────────────────────────────────────────────────────────────
+# 최근 알림 N건 조회. level 지정 시 해당 수준 이상만 반환.
+# ────────────────────────────────────────────────────────────────────
 def get_recent(limit: int = 50, level: Optional[str] = None) -> List[Dict[str, Any]]:
-    """최근 알림 N건 조회. level 지정 시 해당 수준 이상만."""
     with _lock:
         items = list(_buffer)
     if level:

@@ -1,25 +1,26 @@
-# ═══════════════════════════════════════════════════════════════
-# PostgreSQL 연결 관리: 커넥션 풀 싱글톤 및 세션 컨텍스트 매니저.
+# ════════════════════════════════════════════════════════════════════
+# PostgreSQL 연결 관리 — 커넥션 풀 싱글톤, MCP/direct 듀얼 경로,
+# 세션 컨텍스트 매니저. 환경변수 USE_MCP_POSTGRES 로 MCP 우선 사용 토글.
 # --->
-# db_session: db session
-# __init__: init
-# _safe_positive_int: safe positive int
-# _to_sql_literal: to sql literal
-# _bind_sql: bind sql
-# _execute_mcp_query: execute mcp query
-# _log_mcp_fallback: log mcp fallback
-# _ensure_pool: ensure pool
-# _getconn: getconn
-# _putconn: putconn
-# connect: connect
-# close: close
-# get_connection: get connection
-# _run_direct: run direct
-# execute_query: execute query
-# fetch_all: fetch all
-# fetch_one: fetch one
-# _replace: replace
-# ═══════════════════════════════════════════════════════════════
+# set_mcp_query_fn       : 상위 계층의 MCP postgres 실행기 주입 (의존성 역전)
+# DatabaseHandler        : 싱글톤 DB 핸들러 (MCP/direct 듀얼 경로)
+#   __new__              : 싱글톤 인스턴스 보장
+#   __init__             : 1회 한정 초기화 (호스트/포트/풀/MCP 옵션)
+#   _safe_positive_int   : 환경변수 양의 정수 파싱 (실패 시 default)
+#   _to_sql_literal      : 파라미터 값을 SQL 리터럴로 변환 (MCP 경로용)
+#   _bind_sql            : %s 자리표시자 → SQL 리터럴 치환
+#   _execute_mcp_query   : MCP 실행기로 쿼리 실행 + 복구 감지
+#   _log_mcp_fallback    : MCP 실패 시 direct fallback 로그 (1회 경고)
+#   _ensure_pool         : ThreadedConnectionPool 지연 초기화
+#   get_pool_stats       : 현재 풀 사용 상태 스냅샷 (관측성)
+#   _getconn / _putconn  : 풀에서 커넥션 획득/반환
+#   connect / close      : 풀 초기화/종료
+#   get_connection       : 컨텍스트 매니저로 self 노출
+#   _run_direct          : direct DB 쿼리 실행 공통 래퍼
+#   execute_query        : INSERT/UPDATE/DELETE 등 commit 쿼리
+#   fetch_all / fetch_one: SELECT 쿼리 (전체/단일 행)
+# db_session             : db.get_connection() 의 모듈 레벨 컨텍스트 매니저
+# ════════════════════════════════════════════════════════════════════
 import os
 import re
 import threading
@@ -48,12 +49,12 @@ logger = setup_logger(__name__)
 _mcp_query_fn = None
 
 
+# ────────────────────────────────────────────────────────────────────
+# 상위 계층이 MCP postgres 실행기를 주입 (의존성 역전).
+# 이 훅이 없으면 MCP 경로는 비활성 — postgresql 패키지가 AI 계층을 역참조
+# 하지 않도록 함.
+# ────────────────────────────────────────────────────────────────────
 def set_mcp_query_fn(fn) -> None:
-    """상위 계층이 MCP postgres 실행기를 주입한다 (의존성 역전).
-
-    이 훅이 없으면 MCP postgres 경로는 비활성 — postgresql 패키지가 AI 계층을
-    역참조하지 않도록 하기 위함.
-    """
     global _mcp_query_fn
     _mcp_query_fn = fn
 
@@ -63,6 +64,9 @@ class DatabaseHandler:
     _instance = None
     _instance_lock = threading.Lock()
 
+    # ────────────────────────────────────────────────────────────────
+    # 싱글톤 인스턴스 보장 — 첫 호출에서만 객체 생성.
+    # ────────────────────────────────────────────────────────────────
     def __new__(cls):
         if cls._instance is None:
             with cls._instance_lock:
@@ -71,6 +75,9 @@ class DatabaseHandler:
                     cls._instance._initialized = False
         return cls._instance
 
+    # ────────────────────────────────────────────────────────────────
+    # 1회 한정 초기화 — 호스트/포트/풀/MCP 옵션 로드.
+    # ────────────────────────────────────────────────────────────────
     def __init__(self):
         if self._initialized:
             return
@@ -94,6 +101,9 @@ class DatabaseHandler:
         )
         self._mcp_fallback_logged = False
 
+    # ────────────────────────────────────────────────────────────────
+    # 환경변수 양의 정수 파싱 — 0 이하/비정수면 default.
+    # ────────────────────────────────────────────────────────────────
     @staticmethod
     def _safe_positive_int(value: Any, default: int) -> int:
         try:
@@ -104,6 +114,9 @@ class DatabaseHandler:
 
     _PLACEHOLDER_PATTERN = re.compile(r"%[sd]")
 
+    # ────────────────────────────────────────────────────────────────
+    # 파라미터 값을 SQL 리터럴 문자열로 변환 (MCP 경로 prepared 미지원 대응).
+    # ────────────────────────────────────────────────────────────────
     @staticmethod
     def _to_sql_literal(value: Any) -> str:
         if value is None:
@@ -117,6 +130,9 @@ class DatabaseHandler:
         text = str(value).replace("'", "''")
         return f"'{text}'"
 
+    # ────────────────────────────────────────────────────────────────
+    # %s/%d 자리표시자를 _to_sql_literal 결과로 치환한 SQL 문자열 생성.
+    # ────────────────────────────────────────────────────────────────
     def _bind_sql(self, query: str, vals: Optional[Tuple[Any, ...]] = None) -> str:
         if not vals:
             return query
@@ -124,6 +140,9 @@ class DatabaseHandler:
         values = list(vals)
         idx = 0
 
+        # ────────────────────────────────────────────────────────────
+        # 정규식 매치 1건 → 다음 vals 항목의 SQL 리터럴로 치환.
+        # ────────────────────────────────────────────────────────────
         def _replace(_: re.Match) -> str:
             nonlocal idx
             if idx >= len(values):
@@ -134,6 +153,10 @@ class DatabaseHandler:
 
         return self._PLACEHOLDER_PATTERN.sub(_replace, query)
 
+    # ────────────────────────────────────────────────────────────────
+    # MCP 실행기로 쿼리 전송. 성공 시 rows 반환, 실패 시 RuntimeError.
+    # 복구 감지 시 fallback 플래그 해제 + 복구 로그.
+    # ────────────────────────────────────────────────────────────────
     def _execute_mcp_query(self, query: str, vals: Optional[Tuple[Any, ...]] = None) -> list:
         if _mcp_query_fn is None:
             raise RuntimeError("MCP postgres 실행기가 주입되지 않음 (set_mcp_query_fn 미호출)")
@@ -151,6 +174,9 @@ class DatabaseHandler:
             return rows
         return []
 
+    # ────────────────────────────────────────────────────────────────
+    # MCP 실패 시 direct DB fallback 로그 — 첫 실패는 warning, 이후 debug.
+    # ────────────────────────────────────────────────────────────────
     def _log_mcp_fallback(self, err: Exception) -> None:
         if not self._mcp_fallback_logged:
             self.logger.warning(f"MCP postgres 실행 실패 -> direct DB fallback: {err}")
@@ -158,10 +184,10 @@ class DatabaseHandler:
         else:
             self.logger.debug(f"MCP postgres 실패 지속 -> direct DB fallback 유지: {err}")
 
-    # ------------------------------------------------------------------
-    # 커넥션 풀 관리
-    # ThreadedConnectionPool을 지연 초기화 (스레드 안전)
-    # ------------------------------------------------------------------
+    # ────────────────────────────────────────────────────────────────
+    # ThreadedConnectionPool 지연 초기화 (스레드 안전, double-checked).
+    # 환경변수 PGDB_POOL_MIN/MAX 로 풀 크기 튜닝 가능.
+    # ────────────────────────────────────────────────────────────────
     def _ensure_pool(self):
         if self._pool is not None:
             return True
@@ -196,11 +222,12 @@ class DatabaseHandler:
                 self.logger.error(f"DB 커넥션 풀 초기화 실패: {e}")
                 return False
 
-    # [Wave 11] 커넥션 풀 관측성
+    # ────────────────────────────────────────────────────────────────
+    # [Wave 11] 현재 풀 사용 상태 스냅샷 (관측성).
+    # ThreadedConnectionPool 내부 자료구조를 best-effort 로 추출 — 공식
+    # API 가 없어 _used / _pool 속성을 직접 읽음. 실패해도 기본 metadata 반환.
+    # ────────────────────────────────────────────────────────────────
     def get_pool_stats(self) -> dict:
-        """현재 풀 사용 상태 스냅샷.
-        ThreadedConnectionPool 내부 자료구조를 직접 읽어야 하는데 공식 API 가 없어
-        접근 가능한 속성을 best-effort 로 추출. 실패해도 기본 metadata 반환."""
         if self._pool is None:
             return {"initialized": False, "min": getattr(self, "_pool_min", 1),
                     "max": getattr(self, "_pool_max", 5),
@@ -224,9 +251,9 @@ class DatabaseHandler:
             pass
         return info
 
-    # ============================================================
-    # 풀에서 커넥션 획득
-    # ============================================================
+    # ────────────────────────────────────────────────────────────────
+    # 풀에서 커넥션 획득. 풀 초기화 실패 또는 획득 실패 시 None.
+    # ────────────────────────────────────────────────────────────────
     def _getconn(self):
         if not self._ensure_pool():
             return None
@@ -236,9 +263,9 @@ class DatabaseHandler:
             self.logger.error(f"풀에서 커넥션 획득 실패: {e}")
             return None
 
-    # ============================================================
-    # 풀에 커넥션 반환
-    # ============================================================
+    # ────────────────────────────────────────────────────────────────
+    # 풀에 커넥션 반환. 반환 실패 시 close() 폴백.
+    # ────────────────────────────────────────────────────────────────
     def _putconn(self, conn):
         if self._pool is not None and conn is not None:
             try:
@@ -250,12 +277,17 @@ class DatabaseHandler:
                 except Exception:
                     pass
 
+    # ────────────────────────────────────────────────────────────────
+    # 풀 초기화 트리거. MCP 우선 모드에서는 소켓 연결 선행하지 않음.
+    # ────────────────────────────────────────────────────────────────
     def connect(self):
-        # MCP 우선 모드에서는 소켓 연결을 선행하지 않는다.
         if self.use_mcp_postgres:
             return True
         return self._ensure_pool()
 
+    # ────────────────────────────────────────────────────────────────
+    # 풀의 모든 커넥션 닫기 (시스템 종료 시 호출).
+    # ────────────────────────────────────────────────────────────────
     def close(self):
         try:
             if self._pool is not None:
@@ -265,6 +297,9 @@ class DatabaseHandler:
         except Exception as e:
             self.logger.error(f"DatabaseHandler.close -> Pool Close ERR Desc: [{e}]")
 
+    # ────────────────────────────────────────────────────────────────
+    # 컨텍스트 매니저로 self(DatabaseHandler) 노출. db_session() 의 백엔드.
+    # ────────────────────────────────────────────────────────────────
     @contextmanager
     def get_connection(self):
         connected = self.connect()
@@ -272,9 +307,10 @@ class DatabaseHandler:
             raise Exception("Failed to connect to database")
         yield self
 
-    # ============================================================
-    # 직접 DB 연결로 쿼리 실행 공통 래퍼.
-    # ============================================================
+    # ────────────────────────────────────────────────────────────────
+    # direct DB 연결로 쿼리 실행 공통 래퍼.
+    # commit=True: INSERT/UPDATE/DELETE, fetch_mode='all'/'one': SELECT.
+    # ────────────────────────────────────────────────────────────────
     def _run_direct(self, op_name, query, vals, error_default, cursor_factory=None, fetch_mode=None, commit=False):
         conn = self._getconn()
         if conn is None:
@@ -303,6 +339,9 @@ class DatabaseHandler:
         finally:
             self._putconn(conn)
 
+    # ────────────────────────────────────────────────────────────────
+    # INSERT/UPDATE/DELETE 등 commit 쿼리 실행. MCP 우선 → direct fallback.
+    # ────────────────────────────────────────────────────────────────
     def execute_query(self, query, vals=None):
         self.logger.debug(f"[SQL-EXECUTE] 실행할 쿼리: \n{query} \n파라미터: \n{vals}\n")
 
@@ -315,6 +354,10 @@ class DatabaseHandler:
 
         return self._run_direct("execute_query", query, vals, False, commit=True)
 
+    # ────────────────────────────────────────────────────────────────
+    # SELECT 전체 행 조회. as_dict=True 면 RealDictCursor 로 dict list 반환.
+    # MCP 우선 → direct fallback.
+    # ────────────────────────────────────────────────────────────────
     def fetch_all(self, query: str, vals: Optional[Tuple[Any, ...]] = None, as_dict: bool = False):
         self.logger.debug(f"[SQL-FETCH_ALL] 실행할 쿼리: \n{query} \n파라미터: \n{vals}\n")
 
@@ -334,6 +377,9 @@ class DatabaseHandler:
         return self._run_direct("fetch_all", query, vals, [],
                                 cursor_factory=RealDictCursor if as_dict else None, fetch_mode="all")
 
+    # ────────────────────────────────────────────────────────────────
+    # SELECT 단일 행 조회 (RealDictCursor). MCP 우선 → direct fallback.
+    # ────────────────────────────────────────────────────────────────
     def fetch_one(self, query, vals=None):
         self.logger.debug(f"[SQL-FETCH_ONE] 실행할 쿼리: \n{query} \n파라미터: \n{vals}\n")
 
@@ -359,9 +405,10 @@ class DatabaseHandler:
 db = DatabaseHandler()
 
 
-# ═════════════════════════════════
-# 데이터베이스 세션 컨텍스트 매니저
-# ═════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# DatabaseHandler 의 모듈 레벨 컨텍스트 매니저 — db_session() 으로 사용.
+# 예외 발생 시 traceback 로깅 후 재발생.
+# ────────────────────────────────────────────────────────────────────
 @contextmanager
 def db_session():
     with db.get_connection() as connection:

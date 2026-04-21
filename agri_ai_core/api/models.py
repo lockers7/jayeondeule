@@ -1,6 +1,13 @@
-# ═════════════════════════════════
-# API 요청/응답 Pydantic 모델 정의.
-# ═════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
+# API 요청/응답 Pydantic 모델 정의 — REST 레이어와 도메인 레이어의 경계.
+# --->
+# QueryRequest    : /query · /query/stream 요청 body
+# SourceItem      : 웹 검색 결과 출처 한 건 (title + url)
+# QueryResponse   : LLM 질의 응답 (response/sources/tools_used/...)
+# MessageItem     : 대화 한 턴 (role + content)
+# RagSaveRequest  : /rag/save 요청 body — 대화 메시지 묶음 + 메타
+# RagResponse     : /rag/perform · /rag/save 공통 응답 (success/message/time)
+# ════════════════════════════════════════════════════════════════════
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 

@@ -14,16 +14,20 @@ from typing import Any, Dict, List, Optional
 from agri_ai_core.src.utils.json_utils import safe_json_load
 
 
+# ────────────────────────────────────────────────────────────────────
+# JSON-RPC 2.0 요청 payload 빌더.
+# ────────────────────────────────────────────────────────────────────
 def build_jsonrpc(id_value: int, method: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """JSON-RPC 2.0 요청 payload 빌더."""
     payload = {"jsonrpc": "2.0", "id": id_value, "method": method}
     if params is not None:
         payload["params"] = params
     return payload
 
 
+# ────────────────────────────────────────────────────────────────────
+# stdout의 여러 줄 JSON 중 id가 response_id인 메시지를 찾아 반환.
+# ────────────────────────────────────────────────────────────────────
 def find_response_line(stdout: str, response_id: int) -> Optional[Dict[str, Any]]:
-    """stdout의 여러 줄 JSON 중 id가 response_id인 메시지를 찾아 반환."""
     for line in stdout.splitlines():
         line = line.strip()
         if not line:
@@ -36,8 +40,10 @@ def find_response_line(stdout: str, response_id: int) -> Optional[Dict[str, Any]
     return None
 
 
+# ────────────────────────────────────────────────────────────────────
+# MCP 도구 응답의 result.content 배열에서 type='text' 블록만 텍스트로 수집.
+# ────────────────────────────────────────────────────────────────────
 def extract_text_blocks(result: Dict[str, Any]) -> List[str]:
-    """MCP 도구 응답의 result.content 배열에서 type='text' 블록만 텍스트로 수집."""
     contents = result.get("content")
     if not isinstance(contents, list):
         return []
@@ -52,14 +58,18 @@ def extract_text_blocks(result: Dict[str, Any]) -> List[str]:
     return texts
 
 
+# ────────────────────────────────────────────────────────────────────
+# 웹 검색 결과 항목을 표준 dict 형태로 생성.
+# ────────────────────────────────────────────────────────────────────
 def format_search_result(title: str, snippet: str, url: str, source: str = "web_search") -> Dict[str, Any]:
-    """웹 검색 결과 항목을 표준 dict 형태로 생성."""
     return {"title": title, "snippet": snippet, "url": url, "source": source}
 
 
+# ────────────────────────────────────────────────────────────────────
+# 마크다운 표 텍스트를 헤더 기반 list[dict]로 파싱.
+# 구분선(---)은 자동 감지하여 skip. 헤더/데이터 컬럼 수 불일치 행은 제외.
+# ────────────────────────────────────────────────────────────────────
 def parse_markdown_table(text: str) -> List[Dict[str, Any]]:
-    """마크다운 표 텍스트를 헤더 기반 list[dict]로 파싱.
-    구분선(---)은 자동 감지하여 skip. 헤더/데이터 컬럼 수 불일치 행은 제외."""
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     table_lines = [line for line in lines if line.startswith("|") and line.endswith("|")]
     if len(table_lines) < 2:

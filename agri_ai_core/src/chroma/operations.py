@@ -1,18 +1,17 @@
-# ════════════════════════════════════════════════════════════════
-# ChromaDB 데이터 작업 계층
-# 문서 저장/조회/삭제/업서트 + 벡터 유사도 검색.
-# 임베딩은 필요 시 자동 생성되며, ID/문서/메타데이터는 JSON-safe로 정제한다.
+# ════════════════════════════════════════════════════════════════════
+# ChromaDB 데이터 작업 계층 — 문서 저장/조회/삭제/업서트 + 벡터 유사도 검색.
+# 임베딩은 필요 시 자동 생성되며, ID/문서/메타데이터는 JSON-safe 로 정제.
 # --->
-# _http_post: ChromaDB POST 통신 래퍼 (MCP 경유)
-# _build_embedding_from_text: 텍스트 → 임베딩 벡터 (embedder 호출)
-# add_document: 단일 문서 추가 (임베딩 자동 생성)
-# get_documents: ID 또는 where 조건으로 문서 조회
-# delete_document: ID 리스트로 문서 삭제
-# upsert_collection_data: 저수준 컬렉션 데이터 업서트 (여러 문서 일괄)
-# upsert_documents_with_embedding: 텍스트→임베딩→업서트 통합
-# query_documents: 벡터 유사도 기반 Top-K 검색
-# flatten, _flatten: 중첩 리스트/dict 평탄화 유틸
-# ════════════════════════════════════════════════════════════════
+# _http_post                       : ChromaDB POST 통신 래퍼
+# set_embed_fn                     : 상위 계층의 임베딩 함수 주입 (의존성 역전)
+# _build_embedding_from_text       : 텍스트 → 임베딩 벡터 (embedder 호출)
+# add_document                     : 단일 문서 추가 (임베딩 자동 생성)
+# get_documents                    : ID 또는 where 조건으로 문서 조회
+# delete_document                  : ID 리스트로 문서 삭제
+# upsert_collection_data           : 저수준 컬렉션 데이터 업서트 (여러 문서 일괄)
+# upsert_documents_with_embedding  : 텍스트 → 임베딩 → 업서트 통합
+# query_documents                  : 벡터 유사도 기반 Top-K 검색
+# ════════════════════════════════════════════════════════════════════
 import os
 import time
 import traceback
@@ -36,6 +35,9 @@ from agri_ai_core.src.chroma.utils import (
 logger = setup_logger(__name__)
 
 
+# ────────────────────────────────────────────────────────────────────
+# ChromaDB POST 통신 래퍼. (status_code, data, raw_text) 반환.
+# ────────────────────────────────────────────────────────────────────
 def _http_post(url: str, payload: dict, timeout: int = 30):
     logger.debug(f"[ChromaDB-POST] url={url}, payload_keys={list(payload.keys()) if isinstance(payload, dict) else type(payload)}, timeout={timeout}")
     status_code, data, text = http_json_request(
@@ -56,12 +58,17 @@ _AUTO_EMBED_ON_UPSERT = is_true(os.getenv("AUTO_EMBED_ON_UPSERT", "true"))
 _embed_fn = None
 
 
+# ────────────────────────────────────────────────────────────────────
+# 상위 계층(startup.py 등)에서 임베딩 함수를 주입 (의존성 역전).
+# ────────────────────────────────────────────────────────────────────
 def set_embed_fn(fn) -> None:
-    """상위 계층이 임베딩 함수를 주입한다 (의존성 역전)."""
     global _embed_fn
     _embed_fn = fn
 
 
+# ────────────────────────────────────────────────────────────────────
+# 텍스트 → 임베딩 벡터 변환. 자동 임베딩 비활성/주입 미설정/실패 시 None.
+# ────────────────────────────────────────────────────────────────────
 def _build_embedding_from_text(text):
     if not _AUTO_EMBED_ON_UPSERT or not text or _embed_fn is None:
         return None
@@ -74,9 +81,9 @@ def _build_embedding_from_text(text):
     return None
 
 
-# ═════════════════════
-# 문서 추가 (단일 문서)
-# ═════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 단일 문서 추가. embedding 미지정 시 제로벡터 사용 (실서비스에선 주입 권장).
+# ────────────────────────────────────────────────────────────────────
 def add_document(collection_name, doc_id, text, metadata, embedding=None):
     logger.debug(f" add_document: collection_name: {collection_name}, doc_id: {doc_id}")
 
@@ -112,10 +119,10 @@ def add_document(collection_name, doc_id, text, metadata, embedding=None):
         return {"error": f"{status_code}: {text}"}
 
 
-# ═════════════════════
-# 문서 읽기 (복수 문서)
-# 문서 조회
-# ═════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 문서 조회 — ids 또는 where 조건으로 복수 문서 가져오기.
+# 메타데이터의 _is_json 플래그를 자동 복원하여 원형 dict/list 반환.
+# ────────────────────────────────────────────────────────────────────
 def get_documents(collection_name, ids=None, where=None, limit=None, offset=None, sort=None, where_document=None, include=None):
     collection_id = get_collection_id_from_name(collection_name)
     if not collection_id:
@@ -149,6 +156,9 @@ def get_documents(collection_name, ids=None, where=None, limit=None, offset=None
         if not isinstance(result, dict):
             return {"error": "Chroma get 응답 파싱 실패"}
 
+        # ────────────────────────────────────────────────────────────
+        # 단일 쿼리 결과의 [[...]] 중첩을 [...] 로 평탄화.
+        # ────────────────────────────────────────────────────────────
         def flatten(field_name):
             value = result.get(field_name)
             if isinstance(value, list) and len(value) == 1 and isinstance(value[0], list):
@@ -178,9 +188,9 @@ def get_documents(collection_name, ids=None, where=None, limit=None, offset=None
         return {"error": str(e)}
 
 
-# ══════════════════
-# 문서 삭제
-# ══════════════════
+# ────────────────────────────────────────────────────────────────────
+# 문서 삭제 — ID 리스트(단일 str 도 허용)로 컬렉션에서 제거.
+# ────────────────────────────────────────────────────────────────────
 def delete_document(collection_name, ids):
     logger.debug(f" delete_document: collection_name: {collection_name}, ids: {ids}")
 
@@ -208,10 +218,10 @@ def delete_document(collection_name, ids):
         return {"error": str(e)}
 
 
-# ══════════════════════════════════════════
-# 문서 업서트 (있으면 업데이트, 없으면 추가)
-# 문서 업서트
-# ══════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 저수준 컬렉션 업서트 라우터 — document 형식(str/list[str]/list[dict])별
+# 정규화 + delete-then-add 또는 upsert_documents_with_embedding 으로 위임.
+# ────────────────────────────────────────────────────────────────────
 def upsert_collection_data(calledby, collection, doc_id, document, metadata):
     logger.info(f" upsert_collection_data: calledby: {calledby}, collection: {collection}, doc_id: {doc_id}")
 
@@ -280,9 +290,10 @@ def upsert_collection_data(calledby, collection, doc_id, document, metadata):
         return {"error": "문서 형식 오류 - str, list[str], list[dict] 중 하나여야 함"}
 
 
-# ══════════════════════════════
-# 복수 문서 업서트 (임베딩 포함)
-# ══════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 복수 문서 업서트 (임베딩 포함). docs 의 각 항목은 doc_id/text/metadata
+# /embedding(옵션) 키를 가져야 하며, 임베딩 누락 시 자동 생성/제로벡터 폴백.
+# ────────────────────────────────────────────────────────────────────
 def upsert_documents_with_embedding(collection_name, docs):
     logger.info(f" upsert_documents_with_embedding: collection_name: {collection_name}")
 
@@ -333,9 +344,10 @@ def upsert_documents_with_embedding(collection_name, docs):
         return {"error": str(e)}
 
 
-# ══════════════════
-# 벡터 검색
-# ══════════════════
+# ────────────────────────────────────────────────────────────────────
+# 벡터 유사도 기반 Top-K 검색. 재시도 2회·타임아웃 10초.
+# query_embeddings 단일 리스트도 자동 [[...]] 형태로 변환.
+# ────────────────────────────────────────────────────────────────────
 def query_documents(collection_name, query_embeddings=None, n_results=5, where=None, include=None, where_document=None):
     try:
         collection = get_collection(collection_name)
@@ -365,6 +377,9 @@ def query_documents(collection_name, query_embeddings=None, n_results=5, where=N
         if where_document:
             payload["where_document"] = _sanitize_for_json(where_document)
 
+        # ────────────────────────────────────────────────────────────
+        # 단일 쿼리 결과의 [[...]] 중첩을 [...] 로 평탄화 (내부 헬퍼).
+        # ────────────────────────────────────────────────────────────
         def _flatten(result_dict, field_name):
             value = result_dict.get(field_name)
             if isinstance(value, list) and len(value) == 1 and isinstance(value[0], list):

@@ -1,17 +1,17 @@
-# ═════════════════════════════════════════════════════════════════════
-# Opinet 유가정보 수집기: 무료 API 데이터 수집 → PostgreSQL 저장.
+# ════════════════════════════════════════════════════════════════════
+# Opinet 유가정보 수집기 — 무료 API 데이터 수집 → PostgreSQL 저장.
 # --->
-# _init_tables: 테이블 생성 (존재하면 무시)
-# _api_call: Opinet API 호출, 결과 OIL 리스트 반환
-# collect_area_codes: 시도/시군구 코드 수집 저장
-# collect_avg_national: 전국 평균가격 수집 (전유종)
-# collect_avg_sido: 시도별 평균가격 수집 (전유종)
-# collect_avg_sigun: 시군구별 평균가격 수집
-# collect_recent_7days: 최근 7일 전국 일일 평균가격 수집 (초기 적재용)
-# collect_low_price: 최저가 주유소 Top20 수집
-# collect_all: 전체 무료 API 데이터 수집
-# collect_initial: 초기 적재: 최근 N일 데이터 (최근7일 API + 당일 상세)
-# ═════════════════════════════════════════════════════════════════════
+# _init_tables          : 테이블 생성 (존재하면 무시) — area_code/avg_price/low_price
+# _api_call             : Opinet API 호출 → 결과 OIL 리스트 반환
+# collect_area_codes    : 시도/시군구 코드 수집 저장
+# collect_avg_national  : 전국 평균가격 수집 (전유종)
+# collect_avg_sido      : 시도별 평균가격 수집 (전유종)
+# collect_avg_sigun     : 시군구별 평균가격 수집
+# collect_recent_7days  : 최근 7일 전국 일일 평균가격 수집 (초기 적재용)
+# collect_low_price     : 최저가 주유소 Top20 수집
+# collect_all           : 전체 무료 API 데이터 수집 (스케줄러/CLI)
+# collect_initial       : 초기 적재 — 최근 N일 데이터 (최근7일 API + 당일 상세)
+# ════════════════════════════════════════════════════════════════════
 import os
 import sys
 import time
@@ -92,8 +92,10 @@ CREATE INDEX IF NOT EXISTS idx_opinet_low_dt ON opinet_low_price (trade_dt);
 """
 
 
+# ────────────────────────────────────────────────────────────────────
+# 필요 테이블(area_code/avg_price/low_price) 생성. 존재하면 무시.
+# ────────────────────────────────────────────────────────────────────
 def _init_tables():
-    """테이블 생성 (존재하면 무시)"""
     with db_session() as db:
         for ddl in [_DDL_AREA_CODE, _DDL_AVG_PRICE, _DDL_LOW_PRICE]:
             for stmt in ddl.strip().split(";"):
@@ -104,11 +106,10 @@ def _init_tables():
     logger.info("[Opinet] 테이블 초기화 완료")
 
 
-# ══════════════════
-# API 호출
-# ══════════════════
+# ────────────────────────────────────────────────────────────────────
+# Opinet API 호출 → RESULT.OIL 리스트 반환. 실패/HTML 에러 페이지 시 None.
+# ────────────────────────────────────────────────────────────────────
 def _api_call(endpoint: str, params: dict = None) -> Optional[List[Dict]]:
-    """Opinet API 호출, 결과 OIL 리스트 반환"""
     url = f"{_API_BASE}/{endpoint}.do"
     p = {"out": "json", "code": _API_KEY}
     if params:
@@ -129,11 +130,10 @@ def _api_call(endpoint: str, params: dict = None) -> Optional[List[Dict]]:
         return None
 
 
-# ══════════════════
-# 데이터 수집 함수
-# ══════════════════
+# ────────────────────────────────────────────────────────────────────
+# 시도/시군구 코드 수집 저장. 시도 1회 + 시도별 시군구 N회 호출.
+# ────────────────────────────────────────────────────────────────────
 def collect_area_codes():
-    """시도/시군구 코드 수집 저장"""
     # 시도
     sido_list = _api_call("areaCode")
     if not sido_list:
@@ -164,8 +164,10 @@ def collect_area_codes():
     return count
 
 
+# ────────────────────────────────────────────────────────────────────
+# 전국 평균가격 수집 (전유종). area_cd='00' 으로 일괄 저장.
+# ────────────────────────────────────────────────────────────────────
 def collect_avg_national(trade_dt: str = None):
-    """전국 평균가격 수집 (전유종)"""
     oils = _api_call("avgAllPrice")
     if not oils:
         return 0
@@ -186,8 +188,10 @@ def collect_avg_national(trade_dt: str = None):
     return count
 
 
+# ────────────────────────────────────────────────────────────────────
+# 시도별 평균가격 수집 (전유종). PROD_CODES 5종 × 시도 다중 호출.
+# ────────────────────────────────────────────────────────────────────
 def collect_avg_sido(trade_dt: str = None):
-    """시도별 평균가격 수집 (전유종)"""
     count = 0
     for prod_cd in PROD_CODES:
         oils = _api_call("avgSidoPrice", {"prodcd": prod_cd})
@@ -214,8 +218,10 @@ def collect_avg_sido(trade_dt: str = None):
     return count
 
 
+# ────────────────────────────────────────────────────────────────────
+# 시군구별 평균가격 수집. sido_cd 미지정 시 전체 시도 순회.
+# ────────────────────────────────────────────────────────────────────
 def collect_avg_sigun(sido_cd: str = None, trade_dt: str = None):
-    """시군구별 평균가격 수집"""
     # sido 목록 조회
     if sido_cd:
         sido_list = [{"AREA_CD": sido_cd}]
@@ -248,8 +254,10 @@ def collect_avg_sigun(sido_cd: str = None, trade_dt: str = None):
     return count
 
 
+# ────────────────────────────────────────────────────────────────────
+# 최근 7일 전국 일일 평균가격 수집 (초기 적재용). avgRecentPrice 사용.
+# ────────────────────────────────────────────────────────────────────
 def collect_recent_7days():
-    """최근 7일 전국 일일 평균가격 수집 (초기 적재용)"""
     count = 0
     for prod_cd in PROD_CODES:
         oils = _api_call("avgRecentPrice", {"prodcd": prod_cd})
@@ -273,8 +281,10 @@ def collect_recent_7days():
     return count
 
 
+# ────────────────────────────────────────────────────────────────────
+# 최저가 주유소 Top20 수집. 휘발유/경유만, 전국+시도별로 lowTop10 호출.
+# ────────────────────────────────────────────────────────────────────
 def collect_low_price(area_cd: str = None, trade_dt: str = None):
-    """최저가 주유소 Top20 수집"""
     dt = trade_dt or datetime.now().strftime("%Y%m%d")
     dt_date = f"{dt[:4]}-{dt[4:6]}-{dt[6:8]}"
 
@@ -309,14 +319,12 @@ def collect_low_price(area_cd: str = None, trade_dt: str = None):
     return count
 
 
-# ════════════════════════
-# 전체 수집 (스케줄러/CLI)
-# ════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 전체 무료 API 데이터 수집 (스케줄러/CLI 진입점).
+#   target_date : YYYYMMDD 형식. None 이면 오늘.
+# 순서: area_codes → avg_national → avg_sido → avg_sigun → low_price.
+# ────────────────────────────────────────────────────────────────────
 def collect_all(target_date: str = None):
-    """전체 무료 API 데이터 수집
-    Args:
-        target_date: YYYYMMDD 형식. None이면 오늘
-    """
     start = time.time()
     dt = target_date or datetime.now().strftime("%Y%m%d")
     logger.info(f"[Opinet] ===== 전체 수집 시작 ({dt}) =====")
@@ -335,11 +343,11 @@ def collect_all(target_date: str = None):
     return total
 
 
+# ────────────────────────────────────────────────────────────────────
+# 초기 적재 — 최근 N일 데이터 (최근7일 API + 당일 상세).
+#   days : 수집 일수 (기본 7일, 최근7일 API 가 7일까지만 지원).
+# ────────────────────────────────────────────────────────────────────
 def collect_initial(days: int = 7):
-    """초기 적재: 최근 N일 데이터 (최근7일 API + 당일 상세)
-    Args:
-        days: 수집 일수 (기본 7일, 최근7일 API가 7일까지만 지원)
-    """
     start = time.time()
     logger.info(f"[Opinet] ===== 초기 적재 시작 (최근 {days}일) =====")
 

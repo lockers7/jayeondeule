@@ -1,15 +1,15 @@
-# ═══════════════════════════════════════════════════════════════
-# 텍스트 임베딩 생성: Ollama 기반 벡터 변환 및 캐시 관리.
+# ════════════════════════════════════════════════════════════════════
+# 텍스트 임베딩 생성 — Ollama 기반 벡터 변환 + LRU 캐시 + 헬스체크.
 # --->
-# _disable_embedding: disable embedding
-# _mcp_get_status: mcp get status
-# _extract_embedding_from_payload: extract embedding from payload
-# _get_expected_dim: get expected dim
-# check_ollama_health: check ollama health
-# get_dynamic_timeout: get dynamic timeout
-# generate_dummy_embedding: generate dummy embedding
-# embed_text: embed text
-# ═══════════════════════════════════════════════════════════════
+# _disable_embedding              : 임베딩 서비스 비활성화 마킹
+# _mcp_get_status                 : MCP 경유 HTTP HEAD 상태 조회
+# _extract_embedding_from_payload : Ollama 응답에서 embedding 벡터 추출
+# _get_expected_dim               : settings.embedding_dim 반환 (기본 차원)
+# check_ollama_health             : Ollama 서버 헬스체크 (TTL 캐시)
+# get_dynamic_timeout             : 부하/길이 기반 동적 타임아웃 산출
+# generate_dummy_embedding        : 실패 시 사용할 결정적 더미 벡터 생성
+# embed_text                      : 텍스트 → 벡터 (캐시·재시도·폴백)
+# ════════════════════════════════════════════════════════════════════
 import os
 import time
 import hashlib
@@ -34,9 +34,9 @@ _cache_lock = threading.Lock()
 _embed_state = {"disabled": False, "reason": None}
 
 
-# ══════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 # 임베딩 서비스 비활성화 (global 없이 상태 변경)
-# ══════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 def _disable_embedding(reason):
     _embed_state["disabled"] = True
     _embed_state["reason"] = reason
@@ -75,16 +75,16 @@ def _extract_embedding_from_payload(data: Any):
     return embedding
 
 
-# ═══════════════════════
+# ────────────────────────────────────────────────────────────────────
 # 설정된 임베딩 차원 반환
-# ═══════════════════════
+# ────────────────────────────────────────────────────────────────────
 def _get_expected_dim() -> int:
     return getattr(settings, "embedding_dim", None) or 1024
 
 
-# ═════════════════════
+# ────────────────────────────────────────────────────────────────────
 # Ollama 서버 상태 확인
-# ═════════════════════
+# ────────────────────────────────────────────────────────────────────
 def check_ollama_health():
     now = time.time()
     if now - _health_cache["ts"] < _HEALTH_TTL:
@@ -103,16 +103,16 @@ def check_ollama_health():
     return result
 
 
-# ═════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 # 텍스트 길이에 따른 동적 타임아웃 계산
-# ═════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 def get_dynamic_timeout(text_length, base_timeout=60):
     return min(180, max(base_timeout, 30 + (text_length // 100)))
 
 
-# ════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 # 일관성 있는 더미 임베딩 생성
-# ════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 def generate_dummy_embedding(text):
     try:
         text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
@@ -131,9 +131,9 @@ def generate_dummy_embedding(text):
         return [0.0] * expected_dim
 
 
-# ═══════════════════════════
+# ────────────────────────────────────────────────────────────────────
 # 텍스트를 임베딩 벡터로 변환
-# ═══════════════════════════
+# ────────────────────────────────────────────────────────────────────
 def embed_text(text, timeout=60, max_retries=5):
     _t_embed_start = time.time()
 

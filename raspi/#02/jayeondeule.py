@@ -76,14 +76,27 @@ auto_record_data.hous_id   = house_id
 #------------------------------------------
 # 센서 측정 값 읽기 
 #------------------------------------------
+#----------------------------------------------------------------------
+# [2026-04-27] 2호 재배사 외부 온습도 — 자체 BME280/BMP280 부재
+# 1·3호의 최근 기록 평균을 DB에서 차용해 자기 행에 저장.
+# (1·3호가 자기 사이클에 외부값을 먼저 기록 → 2호가 평균 조회 → 저장 순서)
+#----------------------------------------------------------------------
+PEER_HOUSE_IDS_FOR_OUTDOOR = (1, 3)
+
 def get_each_sensor_value():
     KST = timezone(timedelta(hours=9))
     readings = sensor.get_all_sensor_value()
     if readings:
         auto_record_data.indr_tprt_valu  = round(readings['indr_tprt_valu'], 3)
         auto_record_data.indr_hmdt_valu  = round(readings['indr_hmdt_valu'], 3)
-        auto_record_data.oudr_tprt_valu  = round(readings['oudr_tprt_valu'], 3)
-        auto_record_data.oudr_hmdt_valu  = round(readings['oudr_hmdt_valu'], 3)
+        # 외부 온습도 — 2호는 자체 센서 없음 → 피어 평균 차용, 그 외는 자체 측정값
+        if int(auto_record_data.hous_id) == 2:
+            avg_tprt, avg_hmdt = db.get_peer_outdoor_avg(PEER_HOUSE_IDS_FOR_OUTDOOR)
+            auto_record_data.oudr_tprt_valu = round(avg_tprt, 3)
+            auto_record_data.oudr_hmdt_valu = round(avg_hmdt, 3)
+        else:
+            auto_record_data.oudr_tprt_valu = round(readings['oudr_tprt_valu'], 3)
+            auto_record_data.oudr_hmdt_valu = round(readings['oudr_hmdt_valu'], 3)
         auto_record_data.co2_valu        = round(readings['co2_valu'], 3)
         auto_record_data.watr_tprt_valu  = round(readings['watr_tprt_valu'], 3)
         auto_record_data.ligt_level_valu = round(readings['ligt_level_valu'], 3)

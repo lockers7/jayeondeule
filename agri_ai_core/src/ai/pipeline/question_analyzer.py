@@ -22,24 +22,40 @@ logger = setup_logger(__name__)
 
 # ══════════════════════════════════════════
 # 극히 명확한 패턴만 규칙 분류 (인사/잡담만)
+# 일상 인사 변형 ("안녕하세요", "안녕 (1)" 등)도 LLM 호출 없이 즉시 분류해
+# question_analyzer LLM 호출(2300토큰 prompt_eval ≈ 36s) 회피.
+# 끝부분에 한글 허용 안 함 → "안녕하세요. 1호 온도 알려줘" 같은 복합 질의는
+# 매치되지 않아 LLM 분석으로 정상 진입.
 # ══════════════════════════════════════════
 _GREETING_RE = re.compile(
-    r'^[\s]*(안녕|감사합니다|고마워|ㅎㅎ+|ㅋㅋ+|반갑|수고|잘\s*자|좋은\s*아침|좋은\s*하루|네|예|아니요|아뇨)[\s!~.ㅎㅋ]*$',
+    r'^[\s]*'
+    r'(안녕(하세요|하십니까|히\s*가세요|히\s*계세요)?|'
+    r'반갑(다|네요|습니다|군요)?|'
+    r'감사(합니다|해요|드립니다)?|'
+    r'고마(워|워요|와요|웠어)?|'
+    r'수고(하세요|많으셨|많으세요)?|'
+    r'잘\s*(자|자요|있어|있어요|가|가요|지내|지내요)|'
+    r'좋은\s*(아침|하루|저녁|밤|꿈|주말)|'
+    r'굿\s*(모닝|나잇|애프터눈|이브닝)|'
+    r'hi|hello|hey|bye|'
+    r'네|예|아니요|아뇨|어|응|오케이|ok|'
+    r'ㅎㅎ+|ㅋㅋ+|ㅠㅠ+|ㅜㅜ+)'
+    r'[\s!~.,?ㅎㅋ\-()0-9]*$',
     re.IGNORECASE
 )
 
 
+# ────────────────────────────────────────────────────────────────────
+# 극히 명확한 인사/잡담만 규칙으로 분류. 그 외는 None → LLM 분석.
+# ────────────────────────────────────────────────────────────────────
 def fast_classify(query):
-    """
-    극히 명확한 인사/잡담만 규칙으로 분류. 그 외는 None → LLM 분석.
-    """
     if not query or not query.strip():
         return "greeting"
 
     stripped = query.strip()
 
-    # 짧은 인사만 (20자 미만 + 인사 패턴)
-    if len(stripped) < 20 and _GREETING_RE.match(stripped):
+    # 짧은 인사만 (30자 미만 + 인사 패턴). 끝부분에 한글 본문이 붙으면 매치 실패.
+    if len(stripped) < 30 and _GREETING_RE.match(stripped):
         return "greeting"
 
     return None  # LLM 분석 필요
@@ -48,11 +64,11 @@ def fast_classify(query):
 # ══════════════════════
 # LLM 응답에서 JSON 추출
 # ══════════════════════
+# ────────────────────────────────────────────────────────────────────
+# LLM 응답에서 JSON을 안전하게 추출.
+# 마크다운 코드블록, 앞뒤 텍스트 등을 처리.
+# ────────────────────────────────────────────────────────────────────
 def _parse_analysis_json(response_text):
-    """
-    LLM 응답에서 JSON을 안전하게 추출.
-    마크다운 코드블록, 앞뒤 텍스트 등을 처리.
-    """
     if not response_text:
         return None
 
@@ -101,11 +117,15 @@ _VALID_TOOLS = {
     "set_schedule", "override_ai_thresholds", "get_system_status",
     # [Phase 4] Agent 모니터링 도구
     "schedule_monitor", "list_monitors", "cancel_monitor",
+    # [2026-05-01] 사용자 채팅 → 도메인 RAG 영속 저장 도구
+    "save_domain_knowledge",
 }
 
 
+# ────────────────────────────────────────────────────────────────────
+# 분석 결과 유효성 검증. 필수 필드와 도구명 확인.
+# ────────────────────────────────────────────────────────────────────
 def _validate_analysis(analysis):
-    """분석 결과 유효성 검증. 필수 필드와 도구명 확인."""
     if not isinstance(analysis, dict):
         return False
 
@@ -133,10 +153,6 @@ def _validate_analysis(analysis):
 # LLM 분석 실패 시 최소한의 fallback
 # ══════════════════════════════════
 def _build_safe_fallback(query, farm_id, house_id):
-    """
-    LLM 분석이 완전히 실패한 경우의 안전한 기본 계획.
-    search_web + fetch_url은 대부분의 질문에 범용적으로 동작.
-    """
     now = datetime.now()
     return {
         "question_type": "web_search",
@@ -154,23 +170,23 @@ def _build_safe_fallback(query, farm_id, house_id):
 # ══════════════════
 # 메인: 질문유형분석
 # ══════════════════
+# ────────────────────────────────────────────────────────────────────
+# 1단계: 질문유형분석
+# 
+# 1) 극히 명확한 인사만 규칙 분류 (LLM 절약)
+# 2) 그 외 모든 질문 → LLM 호출하여 분석
+# 3) LLM 실패 시 안전한 fallback
+# 
+# Args:
+#     user_query: 사용자 질문
+#     conversation_context: 직전 대화 컨텍스트
+#     farm_id: 농장 ID
+#     house_id: 재배사 ID
+# 
+# Returns:
+#     dict: 분석 결과 (question_type, intent, required_data, ...)
+# ────────────────────────────────────────────────────────────────────
 def analyze_question(user_query, conversation_context=None, farm_id=None, house_id=None):
-    """
-    1단계: 질문유형분석
-
-    1) 극히 명확한 인사만 규칙 분류 (LLM 절약)
-    2) 그 외 모든 질문 → LLM 호출하여 분석
-    3) LLM 실패 시 안전한 fallback
-
-    Args:
-        user_query: 사용자 질문
-        conversation_context: 직전 대화 컨텍스트
-        farm_id: 농장 ID
-        house_id: 재배사 ID
-
-    Returns:
-        dict: 분석 결과 (question_type, intent, required_data, ...)
-    """
     t0 = time.time()
     now = datetime.now()
     current_dt = now.strftime("%Y년 %m월 %d일 %A %H시 %M분")

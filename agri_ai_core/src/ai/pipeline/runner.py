@@ -13,15 +13,15 @@ from agri_ai_core.logs import setup_logger
 logger = setup_logger(__name__)
 
 
+# ────────────────────────────────────────────────────────────────────
+# 3단계 분리형 파이프라인 실행 (동기 함수 — asyncio.to_thread()로 호출)
+# 1단계: 질문유형분석 → 2단계: 데이터수집+검증 → 3단계: 답변작성
+# 
+# 기존 Tool Use 루프를 대체하며, 실패 시 기존 루프로 fallback.
+# ────────────────────────────────────────────────────────────────────
 def run_3stage_pipeline_sync(user_query, full_query, farm_id, house_id, farm_name,
                               default_tool_args, conversation_history, speech_style,
                               progress_queue=None):
-    """
-    3단계 분리형 파이프라인 실행 (동기 함수 — asyncio.to_thread()로 호출)
-    1단계: 질문유형분석 → 2단계: 데이터수집+검증 → 3단계: 답변작성
-
-    기존 Tool Use 루프를 대체하며, 실패 시 기존 루프로 fallback.
-    """
     from agri_ai_core.src.ai.pipeline.question_analyzer import analyze_question
     from agri_ai_core.src.ai.pipeline.data_collector import DataCollector
     from agri_ai_core.src.ai.pipeline.answer_generator import generate_answer
@@ -56,7 +56,8 @@ def run_3stage_pipeline_sync(user_query, full_query, farm_id, house_id, farm_nam
         #   - greeting/conversation_ref/general: 도구 불필요 유형
         #   - required_data=[]: LLM이 도구가 필요 없다고 판단한 모든 경우
         _skip_types = ("greeting", "conversation_ref", "general")
-        if question_type in _skip_types or not required_data:
+        _is_light = question_type in _skip_types or not required_data
+        if _is_light:
             logger.info(
                 f"[3단계파이프라인] 2단계 스킵 "
                 f"(type={question_type}, 도구 {len(required_data)}개, LLM 자체 지식으로 답변)"
@@ -81,8 +82,16 @@ def run_3stage_pipeline_sync(user_query, full_query, farm_id, house_id, farm_nam
             )
 
         # [3단계] 답변 작성
+        # 인사/일반/데이터 미수집 케이스는 light 분기로 진입 메시지·heartbeat 풀을 별도 운영
+        # → 인사에 "수집된 데이터로", "📊 표 구성" 류 부적절 메시지 노출 차단
         logger.info("[3단계파이프라인] === 3단계: 답변작성 시작 ===")
-        _progress("수집된 데이터로 답변을 작성하고 있습니다...", "llm_generating")
+        if _is_light:
+            if question_type == "greeting":
+                _progress("인사 답변을 준비하고 있습니다...", "llm_generating_light")
+            else:
+                _progress("답변을 작성하고 있습니다...", "llm_generating_light")
+        else:
+            _progress("수집된 데이터로 답변을 작성하고 있습니다...", "llm_generating")
 
         farm_info = _build_farm_info_text()
 

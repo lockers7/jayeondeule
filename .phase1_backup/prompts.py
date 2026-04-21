@@ -42,7 +42,7 @@ farm_sensor (센서/온도/습도/릴레이/재배사 상태):
 farm_control (장치 켜기/끄기/제어):
 - get_farm_realtime_data(data_type="relay") priority=1 (현재 상태 먼저 확인)
 - control_relay priority=2
-- 장치명 매핑: 흡입팬=intake_fan_flag, 배출팬=exhaust_fan_flag, 수온히터/칠러=water_heater_flag, 포그생성=fog_occurs_flag, 배수밸브=drainage_motor_flag, 조명=lighting_flag, 관수=irrigation_flag, 실내히터=indoor_heater_flag, 히터밸브=indoor_heater_valve_flag, 순환밸브=air_circulation_valve_flag, 흡입밸브=air_intake_valve_flag, 배출밸브=air_exhaust_valve_flag, 라디에이터=radiator_flag
+- 장치명 매핑: 흡입팬=intake_fan_flag, 배출팬=exhaust_fan_flag, 수온히터/칠러=water_heater_flag, 포그생성=fog_occurs_flag, 배수밸브=drainage_motor_flag, 조명=lighting_flag, 관수=irrigation_flag, 순환밸브=air_circulation_valve_flag, 흡입밸브=air_intake_valve_flag, 배출밸브=air_exhaust_valve_flag, 라디에이터=radiator_flag
 - "전 재배사/모든 재배사" → house_ids=["all"]
 - **다중 장치 동시 제어 (절대 규칙)**: 2개 이상 장치를 동시에 제어할 때는 반드시 devices 배열로 1회 호출.
   예: "흡입팬 ON, 배출팬 ON, 순환밸브 OFF" → control_relay(devices=[{"device_name":"intake_fan_flag","action":"on"},{"device_name":"exhaust_fan_flag","action":"on"},{"device_name":"air_circulation_valve_flag","action":"off"}], house_id="all")

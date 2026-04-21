@@ -251,9 +251,6 @@ def _merge_search_results(
     secondary: List[Dict[str, Any]],
     max_count: int = 10,
 ) -> List[Dict[str, Any]]:
-    """primary(Naver) 와 secondary(SearXNG) 를 인터리브 병합.
-    URL 중복 제거 후 primary 1건 → secondary 1건 순으로 교차 삽입.
-    """
     seen_urls: set = set()
     merged: List[Dict[str, Any]] = []
 

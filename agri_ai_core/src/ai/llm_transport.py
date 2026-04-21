@@ -53,8 +53,10 @@ os.environ['OLLAMA_NUM_PARALLEL'] = '2'
 os.environ['OLLAMA_KEEP_ALIVE'] = '-1'
 
 
+# ────────────────────────────────────────────────────────────────────
+# Ollama /api/ps에서 GPU 탑재 비율 조회 (TTL 캐시 60초).
+# ────────────────────────────────────────────────────────────────────
 def _get_model_gpu_ratio(model_name: str) -> float:
-    """Ollama /api/ps에서 GPU 탑재 비율 조회 (TTL 캐시 60초)."""
     now = time.time()
     if model_name in _gpu_ratio_cache:
         ratio, cached_at = _gpu_ratio_cache[model_name]
@@ -84,8 +86,10 @@ def _get_model_gpu_ratio(model_name: str) -> float:
     return 0.0
 
 
+# ────────────────────────────────────────────────────────────────────
+# nvidia-smi로 여유 VRAM(MiB) 반환. 실패 시 0.
+# ────────────────────────────────────────────────────────────────────
 def _get_free_vram_mib() -> int:
-    """nvidia-smi로 여유 VRAM(MiB) 반환. 실패 시 0."""
     try:
         import subprocess
         result = subprocess.run(
@@ -100,8 +104,10 @@ def _get_free_vram_mib() -> int:
         return 0
 
 
+# ────────────────────────────────────────────────────────────────────
+# num_ctx 고정(16384) — GPU 100% 유지.
+# ────────────────────────────────────────────────────────────────────
 def _get_model_ctx_options(model_name: str, num_predict: int) -> dict:
-    """num_ctx 고정(16384) — GPU 100% 유지."""
     return {"num_ctx": NUM_CTX, "num_predict": num_predict}
 
 
@@ -157,6 +163,9 @@ def _extract_model_names(models_list) -> List[str]:
 # ═════════════════════
 # chat payload 빌더
 # ═════════════════════
+# ────────────────────────────────────────────────────────────────────
+# Ollama chat API용 공통 payload 빌드.
+# ────────────────────────────────────────────────────────────────────
 def _build_chat_payload(
     model: str,
     messages: List[Dict[str, Any]],
@@ -165,7 +174,6 @@ def _build_chat_payload(
     keep_alive: Optional[str] = None,
     think: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    """Ollama chat API용 공통 payload 빌드."""
     payload: Dict[str, Any] = {"model": model, "messages": messages, "stream": False}
     if options:
         payload["options"] = options
@@ -192,8 +200,10 @@ def _pkg_ollama_list_models() -> List[str]:
 
 _LLM_TIMEOUT_SEC = 300  # 최장 5분 — hang 방지
 
+# ────────────────────────────────────────────────────────────────────
+# ollama 패키지 chat 호출 (timeout 300초). hang 시 자동 RuntimeError.
+# ────────────────────────────────────────────────────────────────────
 def _pkg_ollama_chat(model, messages, options=None, tools=None, keep_alive=None, think=None) -> Any:
-    """ollama 패키지 chat 호출 (timeout 300초). hang 시 자동 RuntimeError."""
     if not _use_ollama_package():
         raise RuntimeError("ollama package unavailable")
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
@@ -292,8 +302,10 @@ def _mcp_ollama_chat(model, messages, options=None, tools=None,
 # ═══════════════════════════
 # 모델 목록 + 모델 선택
 # ═══════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 사용 가능한 Ollama 전송에서 모델 목록 조회.
+# ────────────────────────────────────────────────────────────────────
 def _get_available_models() -> List[str]:
-    """사용 가능한 Ollama 전송에서 모델 목록 조회."""
     if _use_ollama_package():
         try:
             return _pkg_ollama_list_models()
@@ -312,16 +324,26 @@ def _get_available_models() -> List[str]:
     return []
 
 
+# ────────────────────────────────────────────────────────────────────
+# 현재 사용할 모델명 결정 (캐시 + 설정 + 자동 선택).
+# 스레드 안전: _model_cache_lock으로 보호.
+# [변경9 · 2026-04-30] preferred 가 변경되면 _cached_model_name 자동 invalidate.
+# .env MODEL_NAME 변경(웹 UI 의 change_model API 등) 이 모든 프로세스에 즉시
+# 반영되도록 — config.get_model_name() 이 .env 매번 read + mtime 캐시.
+# ────────────────────────────────────────────────────────────────────
 def _get_model_name() -> str:
-    """현재 사용할 모델명 결정 (캐시 + 설정 + 자동 선택).
-    스레드 안전: _model_cache_lock으로 보호.
-    """
     global _cached_model_name
     preferred = _config_get_model_name()
 
     with _model_cache_lock:
-        if _cached_model_name:
+        # 캐시가 현재 선호 모델과 동일한 경우만 재사용 — preferred 가 바뀌면 invalidate.
+        if _cached_model_name == preferred:
             return _cached_model_name
+        if _cached_model_name and _cached_model_name != preferred:
+            logger.info(
+                f"[모델선택] 선호 모델 변경 감지: 캐시={_cached_model_name} → 새 선호={preferred}"
+            )
+            _cached_model_name = None
 
     available = _get_available_models()
     if not available:
@@ -363,8 +385,10 @@ from agri_ai_core.src.ai.llm_message_utils import (
 )
 
 
+# ────────────────────────────────────────────────────────────────────
+# LLM 호출 전 요청 payload JSON 로그.
+# ────────────────────────────────────────────────────────────────────
 def _log_llm_request_json(model, messages, options, tools, keep_alive):
-    """LLM 호출 전 요청 payload JSON 로그."""
     try:
         payload = _build_chat_payload(model, _serialize_for_log(messages),
                                        _serialize_for_log(options) if options else None,
@@ -378,8 +402,10 @@ def _log_llm_request_json(model, messages, options, tools, keep_alive):
         logger.warning(f"[LLM 요청 JSON 로깅 실패] {log_err}")
 
 
+# ────────────────────────────────────────────────────────────────────
+# LLM 응답 JSON 로그 + 성능 메트릭.
+# ────────────────────────────────────────────────────────────────────
 def _log_llm_response_json(result, transport, elapsed):
-    """LLM 응답 JSON 로그 + 성능 메트릭."""
     try:
         if isinstance(result, dict):
             response_json = result
@@ -414,6 +440,10 @@ def _log_llm_response_json(result, transport, elapsed):
         logger.warning(f"[LLM 응답 JSON 로깅 실패] {log_err}")
 
 
+# ────────────────────────────────────────────────────────────────────
+# 3가지 전송(package/MCP/direct) 중 가용한 것으로 Ollama chat 호출.
+# 전송 실패 시 다음 전송으로 폴백. 모두 실패 시 RuntimeError.
+# ────────────────────────────────────────────────────────────────────
 def _ollama_chat(
     model: str,
     messages: list,
@@ -421,8 +451,6 @@ def _ollama_chat(
     tools: list = None,
     keep_alive: str = None,
 ):
-    """3가지 전송(package/MCP/direct) 중 가용한 것으로 Ollama chat 호출.
-    전송 실패 시 다음 전송으로 폴백. 모두 실패 시 RuntimeError."""
     think_value = None
     if options and "think" in options:
         think_value = options.pop("think")

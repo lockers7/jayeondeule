@@ -22,9 +22,9 @@ RERANK_MIN_SCORE = int(os.getenv("RERANK_MIN_SCORE", "4"))
 RERANK_MAX_RETRIES = int(os.getenv("RERANK_MAX_RETRIES", "1"))
 
 
-# ══════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 # Reranking 프롬프트 생성 — 각 문서에 관련성 점수(1-10) 요청
-# ══════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
 def _build_rerank_prompt(query: str, documents: List[Dict[str, Any]]) -> str:
     doc_texts = []
     for i, doc in enumerate(documents):
@@ -50,9 +50,9 @@ def _build_rerank_prompt(query: str, documents: List[Dict[str, Any]]) -> str:
     )
 
 
-# ═══════════════════════════
+# ────────────────────────────────────────────────────────────────────
 # LLM 응답에서 점수 배열 파싱
-# ═══════════════════════════
+# ────────────────────────────────────────────────────────────────────
 def _parse_scores(response_text: str, expected_count: int) -> List[int]:
     if not response_text:
         return []
@@ -82,9 +82,9 @@ def _parse_scores(response_text: str, expected_count: int) -> List[int]:
     return []
 
 
-# ═══════════════════════════
+# ────────────────────────────────────────────────────────────────────
 # LLM 기반 Reranker 메인 함수
-# ═══════════════════════════
+# ────────────────────────────────────────────────────────────────────
 def rerank_results(
     query: str,
     results: List[Dict[str, Any]],

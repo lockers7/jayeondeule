@@ -36,18 +36,6 @@ _META_QUERY_KEYWORDS = ("파일", "학습", "목록", "리스트", "자료", "�
 # ChromaDB where 조건 빌더 (순수 함수, 단위테스트 용이)
 # ═════════════════════════════════════════════════════════════════════
 def _build_chroma_where_conditions(query, farm_id, house_id, auth_farm_id, meta_hint):
-    """검색 대상 farm_id/house_id 조합을 ChromaDB where 조건 리스트로 변환.
-
-    규칙:
-    1) farm_id가 시스템 농장("0")이면 → [None] (전체 검색, 관리자 모드)
-    2) 그 외 농장이면 → str/int farm_id+house_id 조건 2가지 후보
-    3) 일반 농장 사용자라면 시스템 농장(0) 학습 데이터도 함께 포함
-       단, 파일 목록 질의(메타)는 자기 농장만 (시스템 농장 파일 노출 방지)
-    4) 후보가 비면 [None] (필터 없음) 폴백
-
-    Returns:
-        list: ChromaDB where 조건 후보 (None 또는 dict)
-    """
     if farm_id is not None and str(farm_id) == _SYSTEM_FARM_ID:
         logger.info("[VectorDB검색] 시스템 농장 모드: 전체 농장 데이터 검색")
         return [None]
@@ -124,9 +112,11 @@ def delete_farm_knowledge(file_name: str, farm_id: str = None, auth_farm_id: str
         deleted_files = []
         failed_files = []
 
+        # ────────────────────────────────────────────────────────────────────
+        # 특정 파일명에 대한 삭제 대상 ID 수집
+        # (공백↔밑줄 자동 변환 + str/int farm_id + 시스템 농장 폴백)
+        # ────────────────────────────────────────────────────────────────────
         def _collect_ids_for_file(coll, target_name):
-            """특정 파일명에 대한 삭제 대상 ID 수집
-            (공백↔밑줄 자동 변환 + str/int farm_id + 시스템 농장 폴백)"""
             ids = set()
             name_variants = [target_name]
             if " " in target_name:
@@ -735,18 +725,6 @@ def get_farm_realtime_data(house_id: str = None, farm_id: str = None, data_type:
 # [Phase 1-3] get_system_status — LLM이 자신의 시스템을 파악할 수 있는 종합 조회
 # ══════════════════════════════════════════════════════════════════════════════
 def get_system_status(farm_id: str = None) -> Dict[str, Any]:
-    """현재 시스템 운영 상태를 종합 반환 (재배사별 제어모드·생육단계·AI루프·스케줄러 Job).
-
-    LLM이 '내 시스템은 현재 어떻게 되어 있나?' 질문에 정확히 답할 수 있도록 구조화 데이터 반환.
-    Returns:
-        {
-          success, farm_id,
-          houses: [{house_id, name, ctrl_type, mnul_ctrl_flag, growth_stage, snsr_refresh, sensor_last_time}],
-          ai_control_loop: {running, delay_sec, ai_houses},
-          scheduler: {jobs: [{id, next_run, trigger}]},
-          farm_info: {name, address, crop, memo},
-        }
-    """
     from agri_ai_core.src.postgresql.connection import db_session
     from agri_ai_core.src.ai.tools_utils import normalize_id as _normalize_id
 

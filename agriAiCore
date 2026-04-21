@@ -485,6 +485,181 @@ shop_build() {
     fi
 }
 
+# ──────────────────────────────────────────────────────────────────────
+# --- RPi 카메라 원격 관리 (5199 USB Camera) ---
+# 메인 서버에 카메라 서비스를 두지 않고, RPi 측 camera_stream.service +
+# camera_tunnel.service 를 SSH 로 원격 제어. autossh -R 8095:localhost:8090 으로
+# 메인 서버 :8095 에 카메라 reverse tunnel 자동 유지. nginx /camera/0/99/ 가
+# :8095 로 프록시. 메인 서버에 별도 데몬/포트 추가 없음.
+# ──────────────────────────────────────────────────────────────────────
+RPI_CAM_SSH_HOST="jayeondeule@jayeondeule.iptime.org"
+RPI_CAM_SSH_PORT="5199"
+RPI_CAM_SSH_KEY="/home/jayeondeule/.ssh/id_rsa_rpi"
+RPI_CAM_SVCS="camera_stream.service camera_tunnel.service"
+RPI_CAM_LOCAL_PORT="8095"
+
+# ────────────────────────────────────────────────────────────────────
+# RPi 5199 에 SSH 명령 실행 (sudo 필요 명령 sshpass 자동 처리).
+# ────────────────────────────────────────────────────────────────────
+_rpi_cam_ssh() {
+    ssh -i "$RPI_CAM_SSH_KEY" \
+        -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+        -o BatchMode=yes -o ConnectTimeout=8 \
+        -p "$RPI_CAM_SSH_PORT" "$RPI_CAM_SSH_HOST" "$@"
+}
+
+# ────────────────────────────────────────────────────────────────────
+# RPi 카메라 서비스 시작 (camera_stream + camera_tunnel).
+# ────────────────────────────────────────────────────────────────────
+rpi_camera_start() {
+    log_msg "${BLUE}[RPi Camera]${NC} 시작 중 (5199 → 메인 :$RPI_CAM_LOCAL_PORT)..."
+    _rpi_cam_ssh "echo 'Wkdusemfdp1@' | sudo -S systemctl start $RPI_CAM_SVCS" 2>&1 | tail -3
+    sleep 2
+    if curl -s -m 5 "http://127.0.0.1:$RPI_CAM_LOCAL_PORT/health" | grep -q OK; then
+        log_msg "${GREEN}[RPi Camera]${NC} 시작 완료 (USB 카메라 OK)"
+    else
+        log_msg "${YELLOW}[RPi Camera]${NC} 시작했으나 :$RPI_CAM_LOCAL_PORT 응답 없음 (tunnel 재연결 대기 ~10초)"
+    fi
+}
+
+# ────────────────────────────────────────────────────────────────────
+# RPi 카메라 서비스 중지.
+# ────────────────────────────────────────────────────────────────────
+rpi_camera_stop() {
+    log_msg "${BLUE}[RPi Camera]${NC} 중지 중..."
+    _rpi_cam_ssh "echo 'Wkdusemfdp1@' | sudo -S systemctl stop $RPI_CAM_SVCS" 2>&1 | tail -3
+    log_msg "${GREEN}[RPi Camera]${NC} 중지 완료"
+}
+
+# ────────────────────────────────────────────────────────────────────
+# RPi 카메라 서비스 재시작 — USB 카메라 인식 변경/코드 갱신 후 실행.
+# ────────────────────────────────────────────────────────────────────
+rpi_camera_restart() {
+    log_msg "${BLUE}[RPi Camera]${NC} 재시작 중..."
+    _rpi_cam_ssh "echo 'Wkdusemfdp1@' | sudo -S systemctl restart $RPI_CAM_SVCS" 2>&1 | tail -3
+    sleep 3
+    if curl -s -m 5 "http://127.0.0.1:$RPI_CAM_LOCAL_PORT/health" | grep -q OK; then
+        log_msg "${GREEN}[RPi Camera]${NC} 재시작 완료 (USB 카메라 OK)"
+    else
+        log_msg "${YELLOW}[RPi Camera]${NC} 재시작했으나 :$RPI_CAM_LOCAL_PORT 응답 없음 (tunnel 재연결 대기 ~10초)"
+    fi
+}
+
+# ────────────────────────────────────────────────────────────────────
+# RPi 카메라 상태 — RPi 측 systemctl 상태 + 메인 측 :8095 헬스 양면 확인.
+# ────────────────────────────────────────────────────────────────────
+rpi_camera_status() {
+    local rpi_state
+    rpi_state=$(_rpi_cam_ssh "for s in $RPI_CAM_SVCS; do printf '%-25s ' \$s; systemctl is-active \$s; done" 2>/dev/null)
+    if [ -n "$rpi_state" ]; then
+        echo "  ──── RPi 측 서비스 ────"
+        echo "$rpi_state" | sed 's/^/  /'
+    else
+        echo -e "  ${RED}● RPi SSH 응답 없음${NC} (network/SSH key)"
+    fi
+    echo "  ──── 메인 측 :$RPI_CAM_LOCAL_PORT 응답 ────"
+    local body
+    body=$(curl -s -m 5 "http://127.0.0.1:$RPI_CAM_LOCAL_PORT/health" 2>/dev/null)
+    if [ "$body" = "OK" ]; then
+        echo -e "  ${GREEN}● /health OK${NC} (USB 카메라 정상)"
+    elif [ "$body" = "NO_CAMERA" ]; then
+        echo -e "  ${YELLOW}● /health NO_CAMERA${NC} (RPi 에 USB 카메라 미인식)"
+    else
+        echo -e "  ${RED}● 응답 없음${NC} (reverse tunnel 미연결)"
+    fi
+    # 캡처 단발 테스트
+    local t0 size
+    t0=$(date +%s.%N)
+    size=$(curl -s -m 10 -o /dev/null -w '%{size_download}' "http://127.0.0.1:$RPI_CAM_LOCAL_PORT/snapshot" 2>/dev/null)
+    if [ -n "$size" ] && [ "$size" -gt 1000 ]; then
+        local t1
+        t1=$(date +%s.%N)
+        local dt
+        dt=$(awk -v a="$t1" -v b="$t0" 'BEGIN{printf "%.2f", a-b}')
+        echo -e "  /snapshot 캡처: ${GREEN}${size} bytes${NC} (${dt}s)"
+    fi
+}
+
+# ────────────────────────────────────────────────────────────────────
+# RPi 카메라 로그 (camera_stream.service journalctl tail).
+# ────────────────────────────────────────────────────────────────────
+rpi_camera_logs() {
+    log_msg "${BLUE}[RPi Camera]${NC} 로그 (Ctrl+C 종료)..."
+    _rpi_cam_ssh "echo 'Wkdusemfdp1@' | sudo -S journalctl -u camera_stream.service -u camera_tunnel.service -f -n 50"
+}
+
+
+# ──────────────────────────────────────────────────────────────────────
+# --- 카메라 아카이브 (시간별 캡처/조회/정리) ---
+# Scheduler 가 매시간 정각에 capture_all_active_houses 자동 호출.
+# 본 명령은 운영 점검용 — 즉시 캡처/이력 조회/보존정책 수동 실행.
+# ──────────────────────────────────────────────────────────────────────
+
+# ────────────────────────────────────────────────────────────────────
+# 즉시 단발 캡처 (모든 활성 호기) — 테스트/검증용.
+# ────────────────────────────────────────────────────────────────────
+camera_archive_capture_now() {
+    log_msg "${BLUE}[카메라아카이브]${NC} 즉시 캡처 (모든 활성 호기)..."
+    cd "$BASE_DIR"
+    "$PYTHON_BIN" -c "
+from agri_ai_core.src.control.ai_camera_archive import capture_all_active_houses
+import json
+res = capture_all_active_houses()
+print(json.dumps(res, ensure_ascii=False))
+" 2>&1 | tail -10
+}
+
+# ────────────────────────────────────────────────────────────────────
+# 최근 24시간 이력 조회 — farm/house 인자 (기본 0/99).
+# ────────────────────────────────────────────────────────────────────
+camera_archive_status() {
+    local farm="${1:-0}"
+    local house="${2:-99}"
+    log_msg "${BLUE}[카메라아카이브]${NC} 최근 24시간 이력 — farm=$farm house=$house"
+    cd "$BASE_DIR"
+    "$PYTHON_BIN" -c "
+from agri_ai_core.src.control.ai_camera_archive import read_recent_history, format_image_history_block
+recs = read_recent_history($farm, $house, hours=24)
+print(f'  최근 24시간: {len(recs)}건')
+if recs:
+    print()
+    print(format_image_history_block(recs))
+" 2>&1 | tail -20
+}
+
+# ────────────────────────────────────────────────────────────────────
+# 보존정책 즉시 실행 (CAMERA_IMAGE_RETENTION_DAYS, 기본 365일).
+# ────────────────────────────────────────────────────────────────────
+camera_archive_cleanup() {
+    log_msg "${BLUE}[카메라아카이브]${NC} 보존정책 정리 시작..."
+    cd "$BASE_DIR"
+    "$PYTHON_BIN" -c "
+from agri_ai_core.src.control.ai_camera_archive import cleanup_old_images
+import json
+print(json.dumps(cleanup_old_images(), ensure_ascii=False))
+" 2>&1 | tail -5
+}
+
+# ────────────────────────────────────────────────────────────────────
+# 디스크 사용량 + 호기별 이미지 수 요약.
+# ────────────────────────────────────────────────────────────────────
+camera_archive_disk_usage() {
+    local root="${UPLOAD_PATH:-/workspace/jayeondeule/upload}/camera"
+    log_msg "${BLUE}[카메라아카이브]${NC} 저장소: $root"
+    if [ ! -d "$root" ]; then
+        log_msg "  (디렉토리 없음 — 캡처 미실행)"
+        return 0
+    fi
+    du -sh "$root" 2>/dev/null | sed 's/^/  전체  /'
+    find "$root" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | while read -r d; do
+        local count size
+        count=$(find "$d" -name '*.jpg' 2>/dev/null | wc -l)
+        size=$(du -sh "$d" 2>/dev/null | awk '{print $1}')
+        printf "  %-40s %5d장  %s\n" "${d#$root/}" "$count" "$size"
+    done
+}
+
+
 # --- Nginx ---
 nginx_start() {
     log_msg "${BLUE}[Nginx]${NC} 시작 중..."
@@ -793,6 +968,21 @@ show_status() {
     echo -e "${YELLOW}● 빌드 전용${NC}"
     printf "  %-4s %-16s %-8s " "12" "ALL Build" "-"
     echo -e "${YELLOW}● 빌드 전용${NC}"
+    echo -e "  ${CYAN}[RPi 원격 — SSH wrapper]${NC}"
+    printf "  %-4s %-16s %-8s " "13" "RPi Camera" "8095"
+    if curl -s -m 3 "http://127.0.0.1:8095/health" 2>/dev/null | grep -q OK; then
+        echo -e "${GREEN}● 정상 (USB)${NC}"
+    else
+        echo -e "${RED}○ 응답 없음${NC}"
+    fi
+    printf "  %-4s %-16s %-8s " "14" "Camera Archive" "-"
+    if [ -d "${UPLOAD_PATH:-/workspace/jayeondeule/upload}/camera" ]; then
+        local _cnt
+        _cnt=$(find "${UPLOAD_PATH:-/workspace/jayeondeule/upload}/camera" -name '*.jpg' 2>/dev/null | wc -l)
+        echo -e "${GREEN}● 활성${NC} (저장 ${_cnt}장)"
+    else
+        echo -e "${YELLOW}○ 미캡처${NC}"
+    fi
     echo -e "  ──────────────────────────────────────────────────────"
     echo ""
 }
@@ -815,6 +1005,8 @@ show_menu() {
     echo -e "  ${CYAN}10${NC}. Web Build        (농장관리 React + Spring Boot 빌드)"
     echo -e "  ${CYAN}11${NC}. Shop Build       (쇼핑몰 React + Spring Boot 빌드)"
     echo -e "  ${CYAN}12${NC}. ALL Build        (Web + Shop 전체 빌드)"
+    echo -e "  ${CYAN}13${NC}. RPi Camera       (5199 USB 카메라 원격 — port 8095)"
+    echo -e "  ${CYAN}14${NC}. Camera Archive   (시간별 캡처 + 24시간 이력 + 보존정책)"
     echo ""
     echo -n -e "  번호 입력 (q=종료): "
 }
@@ -921,6 +1113,23 @@ execute_service() {
                 logs)    journalctl -u nginx.service -n 100 --no-pager -f ;;
             esac
             ;;
+        13) # RPi Camera (5199 USB) — 원격 SSH wrapper
+            case "$action" in
+                start)   rpi_camera_start ;;
+                stop)    rpi_camera_stop ;;
+                restart) rpi_camera_restart ;;
+                status)  rpi_camera_status ;;
+                logs)    rpi_camera_logs ;;
+            esac
+            ;;
+        14) # Camera Archive — 시간별 캡처 + 이력 + 보존정책
+            case "$action" in
+                start|restart) camera_archive_capture_now ;;
+                status)  camera_archive_status ;;
+                stop)    camera_archive_cleanup ;;
+                logs)    tail -n 100 -f "$LOG_DIR/scheduler.log" 2>/dev/null ;;
+            esac
+            ;;
         10) # Web Build (농장관리 React + Spring Boot)
             case "$action" in
                 start|restart) web_build ;;
@@ -982,6 +1191,8 @@ usage() {
     echo -e "   10. Web Build       (농장관리 빌드)"
     echo -e "   11. Shop Build      (쇼핑몰 빌드)"
     echo -e "   12. ALL Build       (Web + Shop 전체 빌드)"
+    echo -e "   13. RPi Camera      (5199 USB 카메라 원격 — port 8095)"
+    echo -e "   14. Camera Archive  (시간별 캡처/이력/보존정책)"
     echo ""
     echo -e "  ${BOLD}예시:${NC}"
     echo -e "    agriAiCore restart        # 메뉴에서 서비스 선택"
@@ -1060,7 +1271,7 @@ if [ "$choice" = "q" ] || [ "$choice" = "Q" ]; then
     exit 0
 fi
 
-if ! [[ "$choice" =~ ^[0-9]$ ]]; then
+if ! [[ "$choice" =~ ^(0|00|[0-9]|1[0-4])$ ]]; then
     echo -e "  ${RED}잘못된 입력입니다.${NC}"
     exit 1
 fi

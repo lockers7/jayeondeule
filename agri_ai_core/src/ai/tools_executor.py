@@ -44,15 +44,31 @@ from agri_ai_core.src.ai.tools_agent import (
 logger = setup_logger(__name__)
 
 
-# ══════════════════
+# ────────────────────────────────────────────────────────────────────
 # 도구 실행기 (메인)
-# ══════════════════
+# ────────────────────────────────────────────────────────────────────
 def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
     t_start = time.time()
     logger.info(f"[도구실행] 시작 tool={tool_name} args={tool_args}")
 
     try:
-        if tool_name == "delete_farm_knowledge":
+        if tool_name == "save_domain_knowledge":
+            # [2026-05-01] 사용자 채팅 → 도메인 RAG 영속 저장 → 다음 AI 사이클 자동 참조
+            from agri_ai_core.src.control.ai_doc_rag import save_domain_knowledge
+            tags_raw = tool_args.get("tags")
+            tags_list = None
+            if tags_raw:
+                tags_list = [t.strip() for t in str(tags_raw).split(",") if t.strip()]
+            result = save_domain_knowledge(
+                title=tool_args.get("title", "").strip(),
+                content=tool_args.get("content", "").strip(),
+                category=(tool_args.get("category") or "운영노하우").strip() or "운영노하우",
+                farm_id=tool_args.get("farm_id"),
+                house_id=tool_args.get("house_id"),
+                tags=tags_list,
+            )
+
+        elif tool_name == "delete_farm_knowledge":
             result = delete_farm_knowledge(
                 file_name=tool_args.get("file_name"),
                 farm_id=tool_args.get("farm_id"),

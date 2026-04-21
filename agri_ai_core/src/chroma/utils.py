@@ -1,13 +1,13 @@
-# ══════════════════════════════════════════════════════════════
-# ChromaDB 유틸리티: 메타데이터 변환, JSON 직렬화, 문서 ID 생성.
+# ════════════════════════════════════════════════════════════════════
+# ChromaDB 유틸리티 — 메타데이터 변환, JSON 직렬화, 문서 ID 생성.
 # --->
-# _embedding_dim: embedding dim
-# _sanitize_for_json: sanitize for json
-# prepare_metadata_for_chroma: prepare metadata for chroma
-# clean_metadata: clean metadata
-# restore_metadata_from_chroma: restore metadata from chroma
-# generate_doc_id: generate doc id
-# ══════════════════════════════════════════════════════════════
+# _embedding_dim                : 임베딩 차원 반환 (settings.embedding_dim)
+# _sanitize_for_json            : 값을 JSON 직렬화 가능한 형태로 변환
+# prepare_metadata_for_chroma   : 메타데이터를 ChromaDB 호환 형식으로 변환
+# clean_metadata                : prepare_metadata_for_chroma 별칭
+# restore_metadata_from_chroma  : ChromaDB 메타데이터를 원래 형태로 복원
+# generate_doc_id               : kind/farm_id/house_id/timestamp 기반 doc_id 생성
+# ════════════════════════════════════════════════════════════════════
 import json
 import pandas as pd
 from decimal import Decimal
@@ -20,23 +20,18 @@ from agri_ai_core.src.utils.json_utils import safe_json_load
 logger = setup_logger(__name__)
 
 
-# ══════════════════
-# 임베딩 차원 반환
-# ══════════════════
+# ────────────────────────────────────────────────────────────────────
+# 임베딩 차원 반환 (settings.embedding_dim).
+# ────────────────────────────────────────────────────────────────────
 def _embedding_dim() -> int:
     return settings.embedding_dim
 
 
-# ═══════════════════════════════════
-# JSON 직렬화를 위한 데이터 정리
-# 값을 JSON 직렬화 가능한 형태로 변환
-#
-# Args:
-#     value: 변환할 값
-#
-# Returns:
-#     JSON 직렬화 가능한 값
-# ═══════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 값을 JSON 직렬화 가능한 형태로 변환.
+#   Decimal/datetime/Timestamp → 문자열 또는 숫자
+#   dict/list/tuple/set        → 재귀 변환
+# ────────────────────────────────────────────────────────────────────
 def _sanitize_for_json(value):
     if isinstance(value, Decimal):
         return int(value) if value == int(value) else float(value)
@@ -51,18 +46,11 @@ def _sanitize_for_json(value):
     return value
 
 
-# ═════════════════════════════════════════════════
-# 메타데이터를 ChromaDB 호환 형식으로 변환
-# 메타데이터를 ChromaDB 호환 형식으로 변환
-# 문자열, 숫자, 불린값은 그대로 유지
-# 복잡한 객체(dict, list 등)는 JSON 문자열로 직렬화
-#
-# Args:
-#     metadata: 원본 메타데이터
-#
-# Returns:
-#     dict: ChromaDB 호환 메타데이터
-# ═════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 메타데이터를 ChromaDB 호환 형식으로 변환.
+# 문자열·숫자·불린은 그대로 유지하고, 복잡한 객체(dict/list 등)는
+# JSON 문자열로 직렬화하며 `<key>_is_json` 플래그를 함께 저장.
+# ────────────────────────────────────────────────────────────────────
 def prepare_metadata_for_chroma(metadata: dict) -> dict:
     if not isinstance(metadata, dict):
         return {}
@@ -92,23 +80,17 @@ def prepare_metadata_for_chroma(metadata: dict) -> dict:
     return clean_metadata
 
 
-# ══════════════════════════════════════════════════
-# 메타데이터 정리 (prepare_metadata_for_chroma 별칭)
-# ══════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 메타데이터 정리 (prepare_metadata_for_chroma 의 의미 명확 별칭).
+# ────────────────────────────────────────────────────────────────────
 def clean_metadata(metadata: dict) -> dict:
     return prepare_metadata_for_chroma(metadata)
 
 
-# ═════════════════════════════════════════════════
-# ChromaDB에서 조회한 metadata를 원래 형태로 복원
-# ChromaDB에서 조회한 메타데이터를 원래 형태로 복원
-#
-# Args:
-#     metadata: ChromaDB 메타데이터
-#
-# Returns:
-#     dict: 복원된 메타데이터
-# ═════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# ChromaDB 에서 조회한 메타데이터를 원래 형태로 복원.
+# `<key>_is_json` 플래그가 있는 항목은 JSON 역직렬화 후 원래 dict/list 반환.
+# ────────────────────────────────────────────────────────────────────
 def restore_metadata_from_chroma(metadata: dict) -> dict:
     if not isinstance(metadata, dict):
         return {}
@@ -134,19 +116,14 @@ def restore_metadata_from_chroma(metadata: dict) -> dict:
     return restored_metadata
 
 
-# ═══════════════════════════════════════════════════════════════════════════════════════════
-# 문서 ID 생성기
-# 문서 ID 생성
-#
-# Args:
-#     kind: 문서 종류 (farm, units, crops, stats, optimal, settings, learned, document, last)
-#     farm_id: 농장 ID
-#     house_id: 재배사 ID
-#     timestamp: 타임스탬프
-#
-# Returns:
-#     str: 생성된 문서 ID
-# ═══════════════════════════════════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 문서 ID 생성 — kind 별 시간 버킷팅 + 식별자 결합.
+#   kind      : farm/units/crops/stats/optimal/settings/learned/document/last
+#   farm_id   : 농장 ID
+#   house_id  : 재배사 ID
+#   timestamp : 기준 시각 (None=now). units=3분 / stats류=10분 단위 버킷팅.
+# 반환: 'kind_farmId_houseId_YYYYMMDDHHMMSS' 형태 문자열.
+# ────────────────────────────────────────────────────────────────────
 def generate_doc_id(kind=None, farm_id=None, house_id=None, timestamp=None):
     try:
         if timestamp is None:

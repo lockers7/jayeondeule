@@ -282,7 +282,7 @@ def get_system_prompt_with_tools(farm_name: str = None, farm_info: str = None, s
    - **재배사+장치 붙여쓰기 파싱**: "1재배사조명", "1호재배사조명", "2재배사 조명", "3호 관수" 등은 재배사 번호와 장치명을 분리하여 house_id와 device_name으로 매핑합니다. 예: "1재배사조명" → house_id='1', device_name='lighting_flag'. "모든재배사조명", "전체조명" → house_id='all', device_name='lighting_flag'로 단 1번 호출.
    - 제어가 필요하면 `control_relay`로 실제 제어를 수행합니다.
    - `control_relay` 결과의 success 값을 확인하고, 성공/실패 여부를 정확히 답변합니다.
-   - 장치명 매핑: 흡입팬=intake_fan_flag, 배출팬=exhaust_fan_flag, 수온히터/칠러=water_heater_flag, 포그생성=fog_occurs_flag, 배수밸브=drainage_motor_flag, 조명=lighting_flag, 관수=irrigation_flag, 실내히터=indoor_heater_flag, 히터밸브=indoor_heater_valve_flag, 순환밸브=air_circulation_valve_flag, 흡입밸브=air_intake_valve_flag, 배출밸브=air_exhaust_valve_flag, 라디에이터=radiator_flag
+   - 장치명 매핑: 흡입팬=intake_fan_flag, 배출팬=exhaust_fan_flag, 수온히터/칠러=water_heater_flag, 포그생성=fog_occurs_flag, 배수밸브=drainage_motor_flag, 조명=lighting_flag, 관수=irrigation_flag, 순환밸브=air_circulation_valve_flag, 흡입밸브=air_intake_valve_flag, 배출밸브=air_exhaust_valve_flag, 라디에이터=radiator_flag
    - **⚠️ mode 사용 규칙 (절대 준수)**: mode='all_on'/'all_off'/'reverse_all'은 사용자가 명시적으로 "모든 장치(조명·팬 등 구분 없이) 전체 켜기/끄기/반전"을 요청한 경우에만 사용합니다. **조명·관수·팬 등 특정 장치명이 언급된 경우에는 반드시 device_name+action으로 해당 장치만 개별 제어**합니다. 특정 장치를 반전시킬 때는 action='reverse'를 사용하세요. 예: "조명을 모두 켜줘" → `control_relay(device_name='lighting_flag', action='on')`, "조명을 반대로 해줘" → `control_relay(device_name='lighting_flag', action='reverse')` (mode='reverse_all' 금지). mode='reverse_all'은 장치명 없이 "전체 반전"만 요청한 경우에만 사용합니다.
    - **AI 환경 판단 정보 (필수 출력)**: `control_relay` 결과에 `ai_judgment`(현재 센서 기반 AI 권장)와 `ai_conflict`(수동 제어와 AI 권장의 차이)가 포함됩니다. 반드시 다음 형식으로 답변에 포함하세요:
      * "📊 AI 환경 판단: [reason]"

@@ -1,21 +1,22 @@
-# ════════════════════════════════════════════════════════════════
-# 로그 모듈 — 공용 로거 생성 + 일별 로테이션 + 오래된 로그 자동 정리
+# ════════════════════════════════════════════════════════════════════
+# 로그 모듈 — 공용 로거 생성 + 일별 로테이션 + 오래된 로그 자동 정리.
 # 모든 설정값(레벨/포맷/보관기간)은 settings.logging 에서 로드한다.
 # --->
-# _setup_logger_impl: 실제 로거 설정 구현 (일반/web/api 공통)
-# setup_logger: 일반 모듈용 로거 (ai_YYYY-MM-DD.log)
-# setup_web_logger: 웹 요청 로거 (web_YYYY-MM-DD.log)
-# setup_api_logger: API 호출 로거 (api.log, 별도 로테이션)
-# _write_temp_and_replace: 파일 트리밍 시 원자적 교체 (임시파일 → rename)
-# delete_old_daily_logs: N일 이전 일별 로그 파일 삭제
-# trim_old_log_entries: 큰 로그의 오래된 entry 제거 (날짜 기준)
-# trim_large_plain_logs: 크기 초과 평범 로그 파일 앞부분 제거
-# cleanup_all_logs: 모든 로그 정리 (스케줄러에서 매일 호출)
-# DailyRotatingFileHandler.__init__: 핸들러 초기화
-# DailyRotatingFileHandler._get_log_filename: 현재 날짜 기준 파일명
-# DailyRotatingFileHandler._open: 파일 오픈 (권한 설정 포함)
-# DailyRotatingFileHandler.emit: 로그 기록 (날짜 변경 시 파일 전환)
-# ════════════════════════════════════════════════════════════════
+# _normalize_log_file_permissions : 로그 파일 권한(0o664) + 그룹(jayeondeule) 정규화
+# DailyRotatingFileHandler.__init__       : 핸들러 초기화 (현재 날짜 기준 파일명)
+# DailyRotatingFileHandler._get_log_filename : 현재 날짜 기반 로그 파일명
+# DailyRotatingFileHandler._open          : 파일 오픈 + 권한 정규화
+# DailyRotatingFileHandler.emit           : 로그 기록 (날짜 변경 시 파일 전환)
+# _setup_logger_impl  : 실제 로거 설정 구현 (일반/web/api 공통)
+# setup_logger        : 일반 모듈용 로거 (ai_YYYY-MM-DD.log)
+# setup_web_logger    : 웹 요청 로거 (web_YYYY-MM-DD.log)
+# setup_api_logger    : API 호출 로거 (api.log, 별도 로테이션)
+# _write_temp_and_replace : 파일 트리밍 시 원자적 교체 (임시파일 → rename)
+# delete_old_daily_logs   : N일 이전 일별 로그 파일 삭제
+# trim_old_log_entries    : 큰 로그의 오래된 entry 제거 (날짜 기준)
+# trim_large_plain_logs   : 크기 초과 평범 로그 파일 앞부분 제거
+# cleanup_all_logs        : 모든 로그 정리 (스케줄러에서 매일 호출)
+# ════════════════════════════════════════════════════════════════════
 import os
 import re
 import sys
@@ -36,9 +37,11 @@ _LOG_FILE_GROUP = os.getenv("LOG_FILE_GROUP", "jayeondeule")
 _LOG_FILE_MODE  = 0o664
 
 
+# ────────────────────────────────────────────────────────────────────
+# 로그 파일 생성/오픈 시 공유 권한(0o664) + 지정 그룹 으로 정규화.
+# 실패(권한 부족·그룹 없음)는 조용히 무시 — 기존 동작과 하위 호환 유지.
+# ────────────────────────────────────────────────────────────────────
 def _normalize_log_file_permissions(path):
-    """로그 파일 생성/오픈 시 공유 권한(0o664) + 지정 그룹 으로 정규화.
-    실패(권한 부족·그룹 없음)는 조용히 무시 — 기존 동작과 하위 호환 유지."""
     try:
         os.chmod(path, _LOG_FILE_MODE)
     except OSError:
@@ -50,9 +53,9 @@ def _normalize_log_file_permissions(path):
         pass
 
 
-# ═══════════════════════════
+# ════════════════════════════════════════════════════════════════════
 # LOG CONFIGURATION CONSTANTS
-# ═══════════════════════════
+# ════════════════════════════════════════════════════════════════════
 
 # 로그 포맷
 DEFAULT_LOG_FORMAT = '[%(asctime)s] [%(levelname)s] [%(name)-39s] -> %(message)s'
@@ -63,28 +66,40 @@ LOG_RETENTION_DAYS = 100
 MAX_PLAIN_LOG_LINES = 50000
 
 
-# ═════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
 # DAILY ROTATING FILE HANDLER
 # 날짜가 바뀌면 새로운 로그 파일을 자동으로 생성하는 핸들러
-# ═════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
 class DailyRotatingFileHandler(logging.FileHandler):
+    # ────────────────────────────────────────────────────────────────
+    # 핸들러 초기화 — filename_pattern(strftime 포맷) 으로 현재 날짜
+    # 기준 베이스 파일명을 결정 후 a 모드로 오픈.
+    # ────────────────────────────────────────────────────────────────
     def __init__(self, filename_pattern, encoding=None):
         self.filename_pattern = filename_pattern
         self.current_date = datetime.now().date()
         self.baseFilename = self._get_log_filename()
         logging.FileHandler.__init__(self, self.baseFilename, 'a', encoding)
 
-    # 현재 날짜 기반 로그 파일명 반환
+    # ────────────────────────────────────────────────────────────────
+    # 현재 날짜 기준 로그 파일명 반환 (filename_pattern strftime 적용).
+    # ────────────────────────────────────────────────────────────────
     def _get_log_filename(self):
         return datetime.now().strftime(self.filename_pattern)
 
-    # 파일 열기 (root/일반 유저 혼재 환경에서 권한 충돌 방지)
+    # ────────────────────────────────────────────────────────────────
+    # 파일 오픈 — 부모 _open() 호출 후 권한 정규화 (root/일반 유저 혼재
+    # 환경에서 그룹 쓰기 권한 보장).
+    # ────────────────────────────────────────────────────────────────
     def _open(self):
         stream = super()._open()
         _normalize_log_file_permissions(self.baseFilename)
         return stream
 
-    # 로그 레코드 출력 (날짜 변경시 새 파일로 전환)
+    # ────────────────────────────────────────────────────────────────
+    # 로그 레코드 출력 — 날짜 경계를 넘으면 파일을 닫고 신규 일자
+    # 파일로 전환한 뒤 기록.
+    # ────────────────────────────────────────────────────────────────
     def emit(self, record):
         now = datetime.now()
         current_date = now.date()
@@ -98,9 +113,14 @@ class DailyRotatingFileHandler(logging.FileHandler):
         super().emit(record)
 
 
-# ═════════════════════
+# ════════════════════════════════════════════════════════════════════
 # LOGGER SETUP FUNCTION
-# ═════════════════════
+# ════════════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 실제 로거 설정 구현 — setup_logger / setup_web_logger / setup_api_logger
+# 의 공통 백엔드. 캐시 키 단위로 핸들러 1회만 추가, 레벨 변경은 즉시 반영.
+# use_plain_file=True 시 일별 로테이션 없이 단일 파일로 기록.
+# ────────────────────────────────────────────────────────────────────
 def _setup_logger_impl(cache_key, logger_name, file_pattern, error_label, use_plain_file=False):
     log_level_str = (os.getenv("LOG_LEVEL") or settings.logging.level or "INFO").strip().upper()
     log_level = getattr(logging, log_level_str, logging.INFO)
@@ -155,23 +175,36 @@ def _setup_logger_impl(cache_key, logger_name, file_pattern, error_label, use_pl
     return logger
 
 
+# ────────────────────────────────────────────────────────────────────
+# 일반 모듈용 로거 — ai_YYYY-MM-DD.log 일별 파일.
+# ────────────────────────────────────────────────────────────────────
 def setup_logger(name=None):
     return _setup_logger_impl(name, name, "ai_%Y-%m-%d.log", "로그")
 
 
+# ────────────────────────────────────────────────────────────────────
+# 웹 요청 로거 — web_YYYY-MM-DD.log 일별 파일. JSON 직렬화된 요청·응답 기록용.
+# ────────────────────────────────────────────────────────────────────
 def setup_web_logger(name=None):
     cache_key = f"_web_{name}"
     return _setup_logger_impl(cache_key, cache_key, "web_%Y-%m-%d.log", "웹 로그")
 
 
+# ────────────────────────────────────────────────────────────────────
+# API 호출 로거 — api.log 단일 파일(일별 분할 안 함, trim 으로 크기 관리).
+# ────────────────────────────────────────────────────────────────────
 def setup_api_logger(name=None):
     cache_key = f"_api_{name}"
     return _setup_logger_impl(cache_key, cache_key, "api.log", "API 로그", use_plain_file=True)
 
 
-# ═════════════════════
+# ════════════════════════════════════════════════════════════════════
 # LOG CLEANUP FUNCTIONS
-# ═════════════════════
+# ════════════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 파일 트리밍 시 원자적 교체 — 임시 파일에 쓴 뒤 os.replace 로 rename.
+# 동시 읽기/쓰기 중에도 partial write 노출 방지.
+# ────────────────────────────────────────────────────────────────────
 def _write_temp_and_replace(filepath, lines):
     dir_name = os.path.dirname(filepath)
     filename = os.path.basename(filepath)
@@ -184,9 +217,10 @@ def _write_temp_and_replace(filepath, lines):
     os.replace(tmp_path, filepath)
 
 
-# ════════════════════════════════════════════════════════
-# ai_*.log, web_*.log, shop_*.log 중 지정일 이전 파일 삭제
-# ════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# ai_*.log, web_*.log, shop_*.log 중 days 일 이전 파일 삭제.
+# 파일명 패턴 ai_YYYY-MM-DD.log 의 날짜 부분으로 만료 판정.
+# ────────────────────────────────────────────────────────────────────
 def delete_old_daily_logs(log_dir, days=LOG_RETENTION_DAYS):
     cutoff = datetime.now() - timedelta(days=days)
     deleted_count = 0
@@ -208,9 +242,11 @@ def delete_old_daily_logs(log_dir, days=LOG_RETENTION_DAYS):
     return deleted_count
 
 
-# ═══════════════════════════════════════════════════════
-# 타임스탬프 기반으로 단일 로그 파일에서 오래된 항목 제거
-# ═══════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 타임스탬프 기반으로 단일 로그 파일에서 오래된 항목 제거.
+# scheduler.log / api.log / service.log 의 [YYYY-MM-DD ... 헤더 기준
+# cutoff 이전 라인을 잘라낸다 (선행 비-타임스탬프 라인은 보존).
+# ────────────────────────────────────────────────────────────────────
 def trim_old_log_entries(log_dir, days=LOG_RETENTION_DAYS):
     cutoff = datetime.now() - timedelta(days=days)
     cutoff_str = cutoff.strftime("%Y-%m-%d")
@@ -271,9 +307,10 @@ def trim_old_log_entries(log_dir, days=LOG_RETENTION_DAYS):
     return trimmed_count
 
 
-# ════════════════════════════════════════════════════════
-# 타임스탬프 없는 로그 파일의 크기를 제한 (최근 줄만 유지)
-# ════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 타임스탬프 없는 로그 파일의 크기 제한 — 최근 max_lines 줄만 유지.
+# ollama.log / react_build.log 등 외부 프로세스 출력 대상.
+# ────────────────────────────────────────────────────────────────────
 def trim_large_plain_logs(log_dir, max_lines=MAX_PLAIN_LOG_LINES):
     target_files = ["ollama.log", "react_build.log"]
     trimmed_count = 0
@@ -302,9 +339,10 @@ def trim_large_plain_logs(log_dir, max_lines=MAX_PLAIN_LOG_LINES):
     return trimmed_count
 
 
-# ════════════════════════════════════
-# 전체 로그 정리 (앱 시작 시 1회 호출)
-# ════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 전체 로그 정리 — 일별 파일 삭제 + 단일 파일 trim + 대용량 파일 trim.
+# 스케줄러에서 매일 호출. 쇼핑몰 로그는 60일 별도 보관.
+# ────────────────────────────────────────────────────────────────────
 def cleanup_all_logs():
     log_dir = settings.logging.path or "logs"
     if not os.path.isdir(log_dir):
@@ -329,9 +367,9 @@ def cleanup_all_logs():
         print("[로그정리] 완료 (정리할 항목 없음)")
 
 
-# ══════════════════
+# ════════════════════════════════════════════════════════════════════
 # EXPORTS
-# ══════════════════
+# ════════════════════════════════════════════════════════════════════
 
 __all__ = [
     "setup_logger",

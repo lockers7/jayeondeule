@@ -1,11 +1,9 @@
-import React from "react";
+import React, {useRef} from "react";
 import {Modal, Button, Table, Badge} from "react-bootstrap";
 
 const DEVICE_LABELS = {
     water_heater_flag: "수온히터",
     fog_occurs_flag: "포그생성",
-    indoor_heater_flag: "실내히터",
-    indoor_heater_valve_flag: "히터밸브",
 };
 
 function DeviceBadges({devices}) {
@@ -25,10 +23,19 @@ function DeviceBadges({devices}) {
 }
 
 export default function AiJudgmentModal({show, onHide, judgment, toggledDevice}) {
+    // [2026-04-27] 팝업 표시 직후 닫기 버튼에 포커스 — 사용자가 마우스 클릭
+    // 없이 스페이스바/Enter 만으로 즉시 닫을 수 있게 한다. ESC 는 react-bootstrap
+    // Modal 의 기본 keyboard prop(true) 으로 이미 동작. (useRef 는 조건부 호출
+    // 금지 규칙 때문에 early-return 보다 위에 둔다.)
+    const closeBtnRef = useRef(null);
+    const focusCloseBtn = () => {
+        if (closeBtnRef.current) closeBtnRef.current.focus();
+    };
+
     if (!judgment) return null;
 
     return (
-        <Modal show={show} onHide={onHide} centered size="lg">
+        <Modal show={show} onHide={onHide} centered size="lg" onEntered={focusCloseBtn}>
             <Modal.Header closeButton className="bg-info bg-opacity-10">
                 <Modal.Title>
                     AI가 추천하는 알고리즘 제어
@@ -75,7 +82,7 @@ export default function AiJudgmentModal({show, onHide, judgment, toggledDevice})
                 </Table>
             </Modal.Body>
             <Modal.Footer>
-                <Button variant="secondary" onClick={onHide}>닫기</Button>
+                <Button ref={closeBtnRef} variant="secondary" onClick={onHide}>닫기</Button>
             </Modal.Footer>
         </Modal>
     );

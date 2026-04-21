@@ -1,10 +1,10 @@
-# ═══════════════════════════════════════════════════════════
-# ChromaDB 데이터 로더: 미학습 데이터 조회 및 학습 상태 관리.
+# ════════════════════════════════════════════════════════════════════
+# ChromaDB 데이터 로더 — 미학습 데이터 조회 및 학습 상태 관리.
 # --->
-# update_learned_last_status: update learned last status
-# _parse_after_date: parse after date
-# get_unlearned_data: get unlearned data
-# ═══════════════════════════════════════════════════════════
+# update_learned_last_status : 학습 완료 시점을 ai_learning_status 에 기록
+# _parse_after_date          : 시작 일자 문자열/datetime 정규화
+# get_unlearned_data         : PostgreSQL 에서 미학습 센서/릴레이/작물 데이터 조회
+# ════════════════════════════════════════════════════════════════════
 import traceback
 from datetime import datetime, timedelta
 
@@ -15,10 +15,9 @@ from agri_ai_core.src.postgresql import queries as dbQry
 logger = setup_logger(__name__)
 
 
-# ═════════════════════════════════════════════════
-# 최종 학습 완료 시간 저장 (PostgreSQL)
-# 학습 완료 시점을 ai_learning_status 테이블에 기록
-# ═════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 최종 학습 완료 시간 저장 — ai_learning_status 테이블에 현재 시각 upsert.
+# ────────────────────────────────────────────────────────────────────
 def update_learned_last_status():
     current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -36,10 +35,10 @@ def update_learned_last_status():
     return current_datetime
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# 미학습 데이터 가져오기 (PostgreSQL 직접 조회)
-# PostgreSQL에서 마지막 학습 시점 이후의 센서/릴레이/작물 데이터를 직접 조회
-# ══════════════════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 시작 일자 정규화 — 문자열/datetime/None 모두 datetime 으로 변환.
+# 미지정 시 ai_learning_status 의 last_learned_datetime 또는 3년 전 fallback.
+# ────────────────────────────────────────────────────────────────────
 def _parse_after_date(after_date) -> datetime:
     _DEFAULT_RANGE = timedelta(days=365 * 3)
 
@@ -79,6 +78,10 @@ def _parse_after_date(after_date) -> datetime:
         return datetime.now() - _DEFAULT_RANGE
 
 
+# ────────────────────────────────────────────────────────────────────
+# PostgreSQL 에서 마지막 학습 시점 이후 센서/릴레이/작물 데이터를 조회.
+# top_cnt=0 또는 음수면 500건 fetch 후 잘라내지 않음.
+# ────────────────────────────────────────────────────────────────────
 def get_unlearned_data(after_date=None, top_cnt=0):
     try:
         logger.info(f"미학습 데이터 읽기 시작 (PostgreSQL 직접 조회) - 시작일자: {after_date}, 건수: {top_cnt}")

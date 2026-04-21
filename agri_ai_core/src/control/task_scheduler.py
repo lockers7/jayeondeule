@@ -35,6 +35,9 @@ _scheduler = None
 # ══════════════════
 # 스케줄러 설정
 # ══════════════════
+# ────────────────────────────────────────────────────────────────────
+# BackgroundScheduler 인스턴스 생성/설정 — 1회만 초기화 (idempotent).
+# ────────────────────────────────────────────────────────────────────
 def setup_scheduler():
     global _scheduler
 
@@ -63,6 +66,9 @@ def setup_scheduler():
 # ══════════════════
 # 스케줄러 시작
 # ══════════════════
+# ────────────────────────────────────────────────────────────────────
+# 스케줄러 시작 — 미설정 시 자동 setup. 이미 실행 중이면 무시.
+# ────────────────────────────────────────────────────────────────────
 def start_scheduler():
     global _scheduler
 
@@ -91,6 +97,9 @@ def start_scheduler():
 # ══════════════════
 # 스케줄러 중지
 # ══════════════════
+# ────────────────────────────────────────────────────────────────────
+# 스케줄러 정지 — graceful shutdown(wait=True).
+# ────────────────────────────────────────────────────────────────────
 def stop_scheduler():
     global _scheduler
 
@@ -113,6 +122,10 @@ def stop_scheduler():
 # ══════════════════
 # 작업 추가
 # ══════════════════
+# ────────────────────────────────────────────────────────────────────
+# 크론/인터벌 작업 등록 — job_id 중복 시 기존 제거 후 신규 등록.
+# trigger_type: "interval" | "cron".
+# ────────────────────────────────────────────────────────────────────
 def add_job(job_id, func, trigger_type="interval", **trigger_kwargs):
     global _scheduler
 
@@ -159,6 +172,9 @@ def add_job(job_id, func, trigger_type="interval", **trigger_kwargs):
 # ══════════════════
 # 작업 제거
 # ══════════════════
+# ────────────────────────────────────────────────────────────────────
+# 등록된 작업 제거. 존재하지 않으면 False.
+# ────────────────────────────────────────────────────────────────────
 def remove_job(job_id):
     global _scheduler
 
@@ -186,6 +202,9 @@ def remove_job(job_id):
 # ═════════════════════════
 # 매일 00:00 로그 정리 작업
 # ═════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 매일 00:00 로그 정리 — 100일 이전 파일 삭제 + 단일 파일 트리밍.
+# ────────────────────────────────────────────────────────────────────
 def _daily_log_cleanup():
     try:
         from agri_ai_core.logs import cleanup_all_logs
@@ -199,6 +218,10 @@ def _daily_log_cleanup():
 # [Wave 11] PostgreSQL 커넥션 풀 상태 주기 로깅 (기본 5분)
 # 사용률 경고 임계(기본 80%) 초과 시 WARNING 레벨, 정상은 INFO.
 # ═══════════════════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# [Wave 11] PostgreSQL 커넥션 풀 상태 주기 로깅 (기본 5분).
+# 사용률 ≥ 80% 시 WARNING, 정상은 INFO. 풀 미초기화 시 조용히 skip.
+# ────────────────────────────────────────────────────────────────────
 def _pg_pool_heartbeat():
     try:
         from agri_ai_core.src.postgresql.connection import db as _db
@@ -227,6 +250,9 @@ def _pg_pool_heartbeat():
 # ════════════════════════════════════════════════════════════════════════════
 # 매일 03:00에 실행 — farm_knowledge 컬렉션에서 180일 이상 된 오래된 청크 삭제
 # ════════════════════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 매일 03:00 RAG 청크 정리 — farm_knowledge 컬렉션의 180일 초과 데이터 삭제.
+# ────────────────────────────────────────────────────────────────────
 def _chunk_cleanup_job():
     try:
         from datetime import datetime, timedelta
@@ -277,6 +303,10 @@ def _chunk_cleanup_job():
         logger.error(traceback.format_exc())
 
 
+# ────────────────────────────────────────────────────────────────────
+# 기본 스케줄 작업 일괄 등록 — 학습/통계/환경제어/RAG/로그/PG풀/외부수집 등.
+# 호출자가 주입한 callable 만 실제 등록되며, 미주입 항목은 자동 skip.
+# ────────────────────────────────────────────────────────────────────
 def setup_default_jobs(learning_func=None, stats_func=None,
                        manual_control_func=None, growth_rag_func=None,
                        opinet_collect_func=None, lotto_collect_func=None):
@@ -301,14 +331,16 @@ def setup_default_jobs(learning_func=None, stats_func=None,
             )
 
         # 수동/알고리즘 환경제어 + AI 비상모니터링 (매 5초)
-        # 스케줄제어(조명/관수) + 수동/알고리즘 환경제어 + AI 비상제어
-        # max_instances=1 설정으로 이전 실행 미완료 시 다음 실행 스킵
+        # [변경11 · 2026-04-30] 잡 주기는 5초 유지 — manual 사용자 토글 즉시 반영용.
+        # algorithm 모드만 control_all_manual 내부에서 _ALGO_THROTTLE_SEC(기본 180초)
+        # throttle 적용 — 사용자 설정 변경 시 trigger_algorithm_now() 로 즉시 1회 실행.
+        # AI 모드는 별도 _ai_control_loop 운영. 본 잡은 AI 비상제어/모니터링만 5초 주기.
         if manual_control_func:
             add_job(
                 job_id="relay_control_job",
                 func=manual_control_func,
                 trigger_type="interval",
-                seconds=5
+                seconds=5,
             )
 
         # AI 인공지능 환경제어: 별도 순환 루프 스레드로 운영 (startup.py에서 시작)
@@ -379,6 +411,30 @@ def setup_default_jobs(learning_func=None, stats_func=None,
                 hour=10,
                 minute=0
             )
+
+        # ─── [변경8 · 2026-04-30] 재배사 카메라 시간별 아카이브 ───
+        # 매시간 정각(:00)에 활성 호기 캡처 + 휴리스틱 + Vision LLM + RAG 임베딩.
+        # max_instances=1 — 캡처가 1시간 이상 걸리는 경우 다음 실행 스킵.
+        try:
+            from agri_ai_core.src.control.ai_camera_archive import (
+                capture_all_active_houses, cleanup_old_images,
+            )
+            add_job(
+                job_id="camera_archive_hourly",
+                func=capture_all_active_houses,
+                trigger_type="cron",
+                minute=0,
+            )
+            # 보존 정책 정리 (매일 04:00)
+            add_job(
+                job_id="camera_archive_cleanup",
+                func=cleanup_old_images,
+                trigger_type="cron",
+                hour=4,
+                minute=0,
+            )
+        except ImportError as _cam_e:
+            logger.warning(f"[스케줄] 카메라 아카이브 모듈 import 실패: {_cam_e}")
 
         # 로또 당첨번호 수집 (매주 토요일 22:00) — 상위 계층이 주입
         if lotto_collect_func:

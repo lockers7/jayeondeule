@@ -141,11 +141,12 @@ _REFORMAT_RE = re.compile(
 )
 
 
+# ────────────────────────────────────────────────────────────────────
+# 요구/지시가 아닌 순수 일반 대화인지 판단한다.
+# True: 인사·감탄·짧은 반응·이전 대화 참조·재포맷 요청 등 → 직전 대화 맥락 포함 가능
+# False(기본): 데이터 조회·장치 제어·정보 요청 등 → 최신 도구 데이터 우선, assistant 맥락 불포함
+# ────────────────────────────────────────────────────────────────────
 def _is_conversational_query(query: str) -> bool:
-    """요구/지시가 아닌 순수 일반 대화인지 판단한다.
-    True: 인사·감탄·짧은 반응·이전 대화 참조·재포맷 요청 등 → 직전 대화 맥락 포함 가능
-    False(기본): 데이터 조회·장치 제어·정보 요청 등 → 최신 도구 데이터 우선, assistant 맥락 불포함
-    """
     q = (query or "").strip()
     if not q:
         return True
@@ -210,14 +211,15 @@ def _build_farm_info_text() -> str:
         logger.debug(f"[농장정보] 조회 실패: {e}")
         return None
 
+# ────────────────────────────────────────────────────────────────────
+# LLM 답변을 검증하고, 재시도가 필요하면 재시도 메시지를 반환. 불필요하면 None.
+# retry_state: 각 유형별 중복 방지 플래그 딕셔너리 (호출자에서 관리)
+# ────────────────────────────────────────────────────────────────────
 def _check_answer_retry(
     final_answer: str, user_query: str, tools_used: List[str],
     iteration: int, max_iterations: int, done_reason: str,
     had_tools: bool, retry_state: dict,
 ) -> Optional[str]:
-    """LLM 답변을 검증하고, 재시도가 필요하면 재시도 메시지를 반환. 불필요하면 None.
-    retry_state: 각 유형별 중복 방지 플래그 딕셔너리 (호출자에서 관리)
-    """
     _stripped = final_answer.strip()
     _can_retry = iteration < max_iterations - 1
 
@@ -297,13 +299,14 @@ def _check_answer_retry(
     return None  # 재시도 불필요
 
 
+# ────────────────────────────────────────────────────────────────────
+# 하이브리드 대화 컨텍스트를 messages 리스트에 주입.
+# - system 메시지(관련 과거 대화): 400자 제한, 참고용 명시
+# - 최근 턴: system role로 묶어 참고용 맥락 주입 (user/assistant role 오염 방지)
+# - 요구/지시 쿼리: assistant 이전 응답 제외 (최신 도구 데이터 우선)
+# - 유사 중복 턴 자동 제거
+# ────────────────────────────────────────────────────────────────────
 def _build_conversation_context(messages: list, conversation_history: list, user_query: str):
-    """하이브리드 대화 컨텍스트를 messages 리스트에 주입.
-    - system 메시지(관련 과거 대화): 400자 제한, 참고용 명시
-    - 최근 턴: system role로 묶어 참고용 맥락 주입 (user/assistant role 오염 방지)
-    - 요구/지시 쿼리: assistant 이전 응답 제외 (최신 도구 데이터 우선)
-    - 유사 중복 턴 자동 제거
-    """
     system_context = [t for t in conversation_history if t.get("role") == "system"]
     actual_turns = [t for t in conversation_history if t.get("role") != "system"]
     filtered_turns = _filter_greeting_turns(actual_turns)

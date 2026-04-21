@@ -19,15 +19,15 @@ from agri_ai_core.src.ai.pipeline.prompts import build_answer_system_prompt
 logger = setup_logger(__name__)
 
 
+# ────────────────────────────────────────────────────────────────────
+# 3단계: 수집된 데이터 기반 정교한 답변 생성
+# 
+# LLM이 답변 본문 + 사용한 출처 번호(<USED_SOURCES>)를 출력합니다.
+# 시스템은 출처 번호를 파싱하여 실제 사용된 출처만 반환합니다.
+# ────────────────────────────────────────────────────────────────────
 def generate_answer(user_query, analysis_result, collected_result,
                     conversation_history=None, farm_name=None, farm_info=None,
                     speech_style=None, progress_callback=None):
-    """
-    3단계: 수집된 데이터 기반 정교한 답변 생성
-
-    LLM이 답변 본문 + 사용한 출처 번호(<USED_SOURCES>)를 출력합니다.
-    시스템은 출처 번호를 파싱하여 실제 사용된 출처만 반환합니다.
-    """
     t0 = time.time()
     question_type = analysis_result.get("question_type", "general")
 
@@ -51,8 +51,13 @@ def generate_answer(user_query, analysis_result, collected_result,
     # 수집 데이터를 번호 매긴 텍스트로 포맷
     data_text = _format_collected_data(collected_result)
 
+    # 수집 데이터 유무·is_general 여부에 따라 light/heavy phase 분기
+    # → general(단위변환/상식 등)·도구 미사용 케이스는 "수집된 데이터" 표현이 부적절
     if progress_callback:
-        progress_callback("수집된 데이터를 종합하여 답변을 작성하고 있습니다...", "llm_generating")
+        if is_general or not collected_result.get("data"):
+            progress_callback("답변을 작성하고 있습니다...", "llm_generating_light")
+        else:
+            progress_callback("수집된 데이터를 종합하여 답변을 작성하고 있습니다...", "llm_generating")
 
     try:
         from agri_ai_core.src.ai.llm_client import (
@@ -174,12 +179,6 @@ def generate_answer(user_query, analysis_result, collected_result,
 # LLM 응답에서 <USED_SOURCES> 태그 파싱
 # ═════════════════════════════════════
 def _extract_used_sources(raw_answer):
-    """
-    LLM 응답에서 <USED_SOURCES>1,3,5</USED_SOURCES> 태그를 파싱합니다.
-
-    Returns:
-        list[int] or None: 0-based 인덱스 리스트, 태그 없으면 None
-    """
     if not raw_answer:
         return None
 
@@ -200,8 +199,10 @@ def _extract_used_sources(raw_answer):
     return indices
 
 
+# ────────────────────────────────────────────────────────────────────
+# 응답에서 <USED_SOURCES> 태그와 내용을 제거
+# ────────────────────────────────────────────────────────────────────
 def _remove_source_tags(text):
-    """응답에서 <USED_SOURCES> 태그와 내용을 제거"""
     if not text:
         return text
     return re.sub(r'\s*<USED_SOURCES>.*?</USED_SOURCES>\s*', '', text, flags=re.IGNORECASE | re.DOTALL).strip()

@@ -1,25 +1,33 @@
-# ═══════════════════════════════════════════════════════════════════════════════════
-# FastAPI 애플리케이션: REST API 서버, LLM 질의, RAG 엔드포인트.
+# ════════════════════════════════════════════════════════════════════
+# FastAPI 애플리케이션 — REST API 서버, LLM 질의, RAG·알림 SSE 엔드포인트.
 # --->
-# verify_api_key: verify api key
-# _try_parse_json: try parse json
-# lifespan: lifespan
-# _is_private_ip: is private ip
-# _to_korean: to korean
-# geo_location: 클라이언트 IP 기반 지역 정보 반환 (한글, 최소 구/시/군 단위)
-# health_check: health check
-# get_ai_judgment: 현재 센서값 기반 AI 환경 판단 조회 (실제 제어 없음)
-# get_stats: get stats
-# query_llm: query llm
-# query_llm_stream: query llm stream
-# rag_perform: rag perform
-# rag_save: rag save
-# get_conversation_history: 세션의 최근 대화 이력을 반환합니다 (최대 limit 개 Q&A 쌍)
-# get_available_models: Ollama에 설치된 모델 목록과 현재 선택된 모델을 반환합니다
-# change_model: 관리자 전용:
-# dispatch: dispatch
-# event_generator: event generator
-# ═══════════════════════════════════════════════════════════════════════════════════
+# verify_api_key             : X-API-Key 헤더 검증 (선택적 인증)
+# _try_parse_json            : 바이트/문자열 JSON 파싱, 실패 시 fallback
+# JsonLoggingMiddleware.dispatch : /api/* 요청·응답을 web/api 로그에 기록
+# lifespan                   : 앱 lifecycle — 시작/종료 시 DB·스케줄러 등 초기화
+# _is_private_ip             : 사설 IP 여부 판정 (geo 조회용)
+# _to_korean                 : 영문 region/city → 한국어 명칭 매핑
+# geo_location               : GET  /geo                          — 클라이언트 IP 기반 지역
+# health_check               : GET  /health                       — 헬스체크
+# alerts_recent              : GET  /api/v1/alerts/recent         — 최근 알림 목록
+# alerts_publish             : POST /api/v1/alerts/publish        — 운영/디버그용 알림 수동 발행
+# alerts_stream              : GET  /api/v1/alerts/stream         — SSE 알림 스트림 (Last-Event-ID 지원)
+# alerts_stats               : GET  /api/v1/alerts/stats          — alert_bus 관측성 통계
+# pg_pool_stats              : GET  /api/v1/system/pg_pool        — PG 커넥션 풀 상태
+# get_ai_judgment            : GET  /api/v1/ai-judgment/{f}/{h}   — 현재 센서값 기반 AI 환경 판단
+# get_stats                  : GET  /api/v1/stats                 — 통계 수집기 스냅샷
+# query_llm                  : POST /api/v1/query                 — 단발 LLM 질의 (4단계 step 로그)
+# query_llm_stream           : POST /api/v1/query/stream          — SSE 토큰 스트림 LLM 질의
+# rag_perform                : POST /api/v1/rag/perform           — 첨부파일 RAG 처리 (스트리밍 업로드)
+# rag_save                   : POST /api/v1/rag/save              — 대화내역 RAG 저장
+# get_conversation_history   : GET  /api/v1/conversation/history  — 세션 최근 Q&A 쌍 조회
+# get_available_models       : GET  /api/v1/admin/models          — Ollama 설치 모델 목록
+# change_model               : POST /api/v1/admin/models          — .env MODEL_NAME 변경 (즉시 적용)
+# lotto_recommend            : POST /api/v1/lotto/recommend       — 로또 추천 번호 생성
+# lotto_algorithm            : GET  /api/v1/lotto/algorithm       — 추천 알고리즘 설명
+# lotto_analyze_batch        : POST /api/v1/lotto/analyze-batch   — 미분석 회차 LLM 일괄 분석
+# lotto_analyze_draw         : POST /api/v1/lotto/analyze-draw    — 단일 회차 즉시 분석
+# ════════════════════════════════════════════════════════════════════
 import json
 import os
 import time
@@ -40,6 +48,8 @@ from agri_ai_core.api.models import (
 )
 from agri_ai_core.api.voice_router import voice_router
 from agri_ai_core.api.rpi_router import rpi_router
+# [2026-04-28] AI 결정 피드백 API (M15)
+from agri_ai_core.api.ai_feedback_router import ai_feedback_router
 
 logger = setup_logger(__name__)
 
@@ -62,6 +72,9 @@ MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE_MB", "100")) * 1024 * 1024  # �
 ALLOWED_EXTENSIONS = {".txt", ".csv", ".pdf", ".xlsx", ".xls", ".json", ".md"}
 
 
+# ────────────────────────────────────────────────────────────────────
+# X-API-Key 헤더 검증 — AGRI_API_KEY 미설정 시 인증 우회 (개발 모드).
+# ────────────────────────────────────────────────────────────────────
 async def verify_api_key(api_key: str = Security(api_key_header)):
     if not API_KEY:
         return
@@ -69,9 +82,9 @@ async def verify_api_key(api_key: str = Security(api_key_header)):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
-# ════════════════════════════════════════════════
-# 바이트/문자열을 JSON 파싱, 실패 시 fallback 반환
-# ════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 바이트/문자열을 JSON 파싱 — 실패 시 fallback 문자열 반환 (예외 미발생).
+# ────────────────────────────────────────────────────────────────────
 def _try_parse_json(data, fallback="(non-JSON)"):
     if not data:
         return None
@@ -81,10 +94,16 @@ def _try_parse_json(data, fallback="(non-JSON)"):
         return fallback
 
 
-# ═══════════════════════════════════════════════════════════════════
-# SSE 스트리밍 질의 엔드포인트 — 실시간 status/token/done 이벤트 전송
-# ═══════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
+# JSON 로깅 미들웨어 — /api/* 요청·응답을 web/api 로그에 기록.
+# /api/v1/query 와 /api/v1/voice/* 는 바이패스 (별도 로깅 또는 바이너리).
+# StreamingResponse 는 body 미적재 (메모리 절약).
+# ════════════════════════════════════════════════════════════════════
 class JsonLoggingMiddleware(BaseHTTPMiddleware):
+    # ────────────────────────────────────────────────────────────────
+    # ASGI 요청 인터셉트 — request/response body 를 JSON 으로 직렬화 후
+    # api_json_logger(web 로그) + api_logger(api 로그) 양쪽에 기록.
+    # ────────────────────────────────────────────────────────────────
     async def dispatch(self, request: Request, call_next):
         if not request.url.path.startswith("/api/"):
             return await call_next(request)
@@ -194,6 +213,10 @@ class JsonLoggingMiddleware(BaseHTTPMiddleware):
         )
 
 
+# ────────────────────────────────────────────────────────────────────
+# FastAPI lifespan — 시작 시 DB·ChromaDB·스케줄러·LLM 초기화, alert_bus
+# 이벤트 루프 바인딩, Wave 7 Agent monitor Job 영속 복원. 종료 시 정리.
+# ────────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     api_port = os.getenv("API_PORT", "8002")
@@ -238,6 +261,7 @@ app = FastAPI(
 
 app.include_router(voice_router)
 app.include_router(rpi_router)
+app.include_router(ai_feedback_router)  # [2026-04-28]
 app.add_middleware(JsonLoggingMiddleware)
 
 # CORS 미들웨어
@@ -302,6 +326,10 @@ _KR_CITY = {
 }
 
 
+# ────────────────────────────────────────────────────────────────────
+# 사설 IP 여부 판정 — geo 조회 시 사설 IP 면 ipwho.is 의 자기자신 IP 사용.
+# 파싱 실패도 사설 취급 (보수적 동작).
+# ────────────────────────────────────────────────────────────────────
 def _is_private_ip(ip: str) -> bool:
     import ipaddress
     try:
@@ -310,15 +338,22 @@ def _is_private_ip(ip: str) -> bool:
         return True
 
 
+# ────────────────────────────────────────────────────────────────────
+# 영문 region/city → 한국어 행정구역명 매핑 (ipwho.is 응답 정규화).
+# 미매핑 항목은 영문 원문 그대로 반환.
+# ────────────────────────────────────────────────────────────────────
 def _to_korean(region_en: str, city_en: str) -> tuple:
     region_kr = _KR_REGION.get(region_en, region_en)
     city_kr = _KR_CITY.get(city_en, city_en)
     return region_kr, city_kr
 
 
+# ────────────────────────────────────────────────────────────────────
+# 클라이언트 IP 기반 지역 정보 반환 (한글, 최소 구/시/군 단위).
+# X-Real-IP / X-Forwarded-For 헤더 우선. ipwho.is 외부 API 사용.
+# ────────────────────────────────────────────────────────────────────
 @app.get("/geo")
 async def geo_location(request: Request):
-    """클라이언트 IP 기반 지역 정보 반환 (한글, 최소 구/시/군 단위)"""
     client_ip = (
         request.headers.get("X-Real-IP")
         or (request.headers.get("X-Forwarded-For", "").split(",")[0].strip())
@@ -339,26 +374,33 @@ async def geo_location(request: Request):
     return {"region": "", "city": "", "ip": client_ip}
 
 
+# ────────────────────────────────────────────────────────────────────
+# 헬스체크 — {"status": "ok"} 단순 응답.
+# ────────────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
 # [Phase 3] Proactive 알림 — SSE 스트림 + 최근 알림 조회
-# ═════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 최근 알림 목록 — 신규 구독자가 놓친 이벤트 확인용.
+# level 미지정 시 전체. limit 기본 50.
+# ────────────────────────────────────────────────────────────────────
 @app.get("/api/v1/alerts/recent")
 async def alerts_recent(limit: int = 50, level: Optional[str] = None):
-    """최근 알림 목록 (신규 구독자가 놓친 이벤트 확인용)."""
     from agri_ai_core.src.ai import alert_bus
     return {"alerts": alert_bus.get_recent(limit=limit, level=level)}
 
 
+# ────────────────────────────────────────────────────────────────────
+# 알림 수동 발행 — 운영/디버그용. 주로 Phase 3 통합 테스트에 사용.
+# body: {level, category, farm_id, house_id, title, message, data?}
+# ────────────────────────────────────────────────────────────────────
 @app.post("/api/v1/alerts/publish")
 async def alerts_publish(request: Request):
-    """운영/디버그용 — 알림을 수동 발행. 주로 Phase 3 통합 테스트에 사용.
-    body: {level, category, farm_id, house_id, title, message, data?}
-    """
     from agri_ai_core.src.ai import alert_bus
     body = await request.json()
     evt = alert_bus.publish(
@@ -373,14 +415,13 @@ async def alerts_publish(request: Request):
     return {"success": True, "event": evt}
 
 
+# ────────────────────────────────────────────────────────────────────
+# SSE 스트림 — AI 순환 루프 이상 감지 이벤트를 실시간 전송.
+# [Wave 10] Last-Event-ID 헤더 지원 (재연결 시 놓친 이벤트 복원), 각
+# 이벤트에 id: 필드 첨부 (SSE 표준 자동 재연결).
+# ────────────────────────────────────────────────────────────────────
 @app.get("/api/v1/alerts/stream")
 async def alerts_stream(request: Request):
-    """SSE: AI 순환 루프 이상 감지 이벤트를 실시간 스트림.
-
-    [Wave 10] 개선:
-    - Last-Event-ID 헤더 지원: 재연결 시 놓친 이벤트 복원
-    - 각 이벤트에 id: 필드 첨부 (SSE 표준 자동 재연결용)
-    """
     import asyncio as _asyncio
     import json as _json
     from fastapi.responses import StreamingResponse
@@ -389,6 +430,10 @@ async def alerts_stream(request: Request):
     last_event_id = request.headers.get("last-event-id") or request.query_params.get("last_event_id")
     queue = alert_bus.subscribe(maxsize=100)
 
+    # ────────────────────────────────────────────────────────────────
+    # SSE 이벤트 generator — connected 핸드셰이크 → Last-Event-ID 복원
+    # → 큐 폴링 (25초 타임아웃 시 keep-alive 핑).
+    # ────────────────────────────────────────────────────────────────
     async def _event_gen():
         try:
             # 초기 메시지
@@ -420,24 +465,31 @@ async def alerts_stream(request: Request):
     })
 
 
+# ────────────────────────────────────────────────────────────────────
+# alert_bus 관측성 통계 — published / dropped / subscribers / buffer_size.
+# ────────────────────────────────────────────────────────────────────
 @app.get("/api/v1/alerts/stats")
 async def alerts_stats():
-    """alert_bus 관측성 통계 (published/dropped/subscribers/buffer_size)."""
     from agri_ai_core.src.ai import alert_bus
     return {"success": True, **alert_bus.get_stats()}
 
 
+# ────────────────────────────────────────────────────────────────────
+# [Wave 11] PostgreSQL 커넥션 풀 실시간 상태 (min/max/in_use/idle).
+# ────────────────────────────────────────────────────────────────────
 @app.get("/api/v1/system/pg_pool")
 async def pg_pool_stats():
-    """[Wave 11] PostgreSQL 커넥션 풀 실시간 상태 (min/max/in_use/idle)."""
     from agri_ai_core.src.postgresql.connection import db as _db
     stats = _db.get_pool_stats()
     return {"success": True, **stats}
 
 
+# ────────────────────────────────────────────────────────────────────
+# 현재 센서값 기반 AI 환경 판단 조회 — 실제 제어 없이 판단 결과만 반환.
+# manual_control.get_ai_environment_judgment 를 to_thread 로 호출.
+# ────────────────────────────────────────────────────────────────────
 @app.get("/api/v1/ai-judgment/{farm_id}/{house_id}")
 async def get_ai_judgment(farm_id: str, house_id: str):
-    """현재 센서값 기반 AI 환경 판단 조회 (실제 제어 없음)"""
     from agri_ai_core.src.control.manual_control import get_ai_environment_judgment
     import asyncio
 
@@ -447,16 +499,25 @@ async def get_ai_judgment(farm_id: str, house_id: str):
     return {"success": True, **result}
 
 
+# ────────────────────────────────────────────────────────────────────
+# 통계 수집기 스냅샷 — query/RAG 호출 카운트·평균 응답 시간 등.
+# ────────────────────────────────────────────────────────────────────
 @app.get("/api/v1/stats")
 async def get_stats(_=Depends(verify_api_key)):
     from agri_ai_core.src.ai.stats_collector import get_stats_collector
     return get_stats_collector().get_stats()
 
 
+# ────────────────────────────────────────────────────────────────────
+# 단발 LLM 질의 — query_handler_simple 1회 호출, 4단계 step 로그 기록.
+# session_id 미지정 시 UUID4 자동 생성. tool_calls_detail 로 도구 호출 추적.
+# ────────────────────────────────────────────────────────────────────
 @app.post("/api/v1/query", response_model=QueryResponse)
 async def query_llm(request: QueryRequest, _=Depends(verify_api_key)):
     from agri_ai_core.src.ai.query_handler_simple import query_llm_simple
     from agri_ai_core.src.ai.llm_client import clean_llm_response
+    # [2026-04-28] LLM 대화 단계 로그 — AI/ALGO 와 동일 포맷
+    from agri_ai_core.src.control.ai_step_logger import AiStepLogger
 
     start = time.time()
     try:
@@ -465,12 +526,29 @@ async def query_llm(request: QueryRequest, _=Depends(verify_api_key)):
         if not session_id:
             session_id = str(uuid.uuid4())
 
+        scope = f"[대화 {session_id[:8]}]"
+        steps = AiStepLogger(scope=scope, total=4, prefix='LLM')
+
+        # ─── [LLM 1/4] 요청 접수 ───
+        steps.step("질의 접수",
+                   extra=f"farm={request.farm_id} house={request.house_id} "
+                         f"len={len(request.query or '')}자")
+        steps.detail(
+            f"session={session_id}",
+            f"farm_name={request.farm_name} / house_name={request.house_name}",
+            f"speech_style={request.speech_style or 'male'} "
+            f"auth_farm_id={request.auth_farm_id}",
+            f"질의 본문: {request.query or ''}",
+        )
+
         api_logger.debug(
             "[query] session=%s, farm=%s, house=%s, query=%s",
             session_id, request.farm_id, request.house_id,
             request.query[:200] if request.query else "",
         )
 
+        # ─── [LLM 2/4] LLM 처리 (query_handler_simple) ───
+        steps.step("LLM 처리 호출", extra="query_handler_simple → tools/RAG/chat")
         result_data = None
         async for chunk in query_llm_simple(
             user_query=request.query,
@@ -502,6 +580,19 @@ async def query_llm(request: QueryRequest, _=Depends(verify_api_key)):
 
         processing_time = round(time.time() - start, 3)
 
+        # ─── [LLM 3/4] 응답 정제·메타 ───
+        steps.step("응답 정제·메타",
+                   extra=f"type={response_type} tools={len(tools_used) if tools_used else 0} "
+                         f"sources={len(sources) if sources else 0} "
+                         f"resp={len(response_text or '')}자 ({processing_time}s)")
+        steps.detail(
+            f"response_type={response_type}",
+            f"tools_used={tools_used}",
+            f"sources={sources}",
+            f"tool_calls_detail={tool_calls_detail}",
+            f"응답 본문 (최대 800자): {response_text or ''}",
+        )
+
         # 통계 기록
         from agri_ai_core.src.ai.stats_collector import get_stats_collector
         get_stats_collector().record_query(
@@ -516,6 +607,10 @@ async def query_llm(request: QueryRequest, _=Depends(verify_api_key)):
             session_id, processing_time, response_type, tools_used,
             response_text[:300] if response_text else "",
         )
+
+        # ─── [LLM 4/4] 응답 반환 ───
+        steps.step("응답 반환", extra=f"success=True · {processing_time}s")
+        steps.done(summary=f"{len(response_text or '')}자 응답 / {processing_time}s")
 
         return QueryResponse(
             success=True,
@@ -535,6 +630,11 @@ async def query_llm(request: QueryRequest, _=Depends(verify_api_key)):
         from agri_ai_core.src.ai.stats_collector import get_stats_collector
         get_stats_collector().record_query(success=False, processing_time=processing_time)
 
+        try:
+            steps.warn("응답 반환", reason=f"예외 발생: {e}")
+        except Exception:
+            pass
+
         return QueryResponse(
             success=False,
             response=f"오류: {str(e)}",
@@ -542,6 +642,10 @@ async def query_llm(request: QueryRequest, _=Depends(verify_api_key)):
         )
 
 
+# ────────────────────────────────────────────────────────────────────
+# SSE 토큰 스트림 LLM 질의 — query_handler_simple_stream 결과를 chunk
+# 단위로 SSE 전송. 마지막에 [DONE] 마커. nginx 버퍼링 비활성화 헤더 포함.
+# ────────────────────────────────────────────────────────────────────
 @app.post("/api/v1/query/stream")
 async def query_llm_stream(request: QueryRequest, _=Depends(verify_api_key)):
     from agri_ai_core.src.ai.query_handler_simple import query_llm_simple_stream
@@ -557,6 +661,9 @@ async def query_llm_stream(request: QueryRequest, _=Depends(verify_api_key)):
     )
     logger.info(f"[query/stream] auth_farm_id={request.auth_farm_id!r} farm_id={request.farm_id!r}")
 
+    # ────────────────────────────────────────────────────────────────
+    # SSE 이벤트 generator — query_llm_simple_stream chunk 를 data: 로 직렬화.
+    # ────────────────────────────────────────────────────────────────
     async def event_generator():
         async for chunk in query_llm_simple_stream(
             user_query=request.query,
@@ -582,6 +689,10 @@ async def query_llm_stream(request: QueryRequest, _=Depends(verify_api_key)):
     )
 
 
+# ────────────────────────────────────────────────────────────────────
+# 첨부파일 RAG 처리 — 다중 파일 업로드(스트리밍·1MB 청크) → 확장자/크기
+# 검증 → process_attached_files 위임. UUID 접두사로 파일명 충돌 방지.
+# ────────────────────────────────────────────────────────────────────
 @app.post("/api/v1/rag/perform", response_model=RagResponse)
 async def rag_perform(
     files: list[UploadFile] = File(...),
@@ -651,6 +762,10 @@ async def rag_perform(
         )
 
 
+# ────────────────────────────────────────────────────────────────────
+# 대화내역 RAG 저장 — 메시지 목록을 텍스트로 변환 후 llm_document_process
+# 위임. format_rag_save_result 로 success/message 정규화 응답.
+# ────────────────────────────────────────────────────────────────────
 @app.post("/api/v1/rag/save", response_model=RagResponse)
 async def rag_save(request: RagSaveRequest, _=Depends(verify_api_key)):
     from agri_ai_core.src.ai.rag.document_processor import (
@@ -706,9 +821,12 @@ async def rag_save(request: RagSaveRequest, _=Depends(verify_api_key)):
 # 대화 이력 조회 API
 # ══════════════════
 
+# ────────────────────────────────────────────────────────────────────
+# 세션의 최근 대화 이력 조회 — 최대 limit 개 Q&A 쌍 반환.
+# conversation_store.get_recent_turns 위임. 실패 시 history=[] 로 graceful.
+# ────────────────────────────────────────────────────────────────────
 @app.get("/api/v1/conversation/history")
 async def get_conversation_history(session_id: str, limit: int = 10, _=Depends(verify_api_key)):
-    """세션의 최근 대화 이력을 반환합니다 (최대 limit 개 Q&A 쌍)."""
     try:
         from agri_ai_core.src.ai.conversation_store import get_conversation_store
         store = get_conversation_store()
@@ -724,9 +842,12 @@ async def get_conversation_history(session_id: str, limit: int = 10, _=Depends(v
 # 관리자 전용: LLM 모델 관리 API
 # ══════════════════════════════
 
+# ────────────────────────────────────────────────────────────────────
+# Ollama 설치 모델 목록 + 현재 선택된 모델 반환 (관리자 전용).
+# 임베딩 모델(bge/nomic/embed) 은 응답에서 제외.
+# ────────────────────────────────────────────────────────────────────
 @app.get("/api/v1/admin/models")
 async def get_available_models(_=Depends(verify_api_key)):
-    """Ollama에 설치된 모델 목록과 현재 선택된 모델을 반환합니다."""
     import httpx
 
     ollama_url = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
@@ -764,9 +885,12 @@ async def get_available_models(_=Depends(verify_api_key)):
         return {"success": False, "error": str(e), "current_model": current_model, "models": []}
 
 
+# ────────────────────────────────────────────────────────────────────
+# .env MODEL_NAME 변경 (관리자 전용) — MODEL_PREFIX 도 콜론 앞부분으로 자동 갱신.
+# os.environ 즉시 갱신 + LLM 클라이언트 모델 캐시 초기화 → 다음 호출부터 적용.
+# ────────────────────────────────────────────────────────────────────
 @app.post("/api/v1/admin/models")
 async def change_model(request: Request, _=Depends(verify_api_key)):
-    """관리자 전용: .env 파일의 MODEL_NAME을 변경합니다."""
     body = await request.json()
     new_model = (body.get("model_name") or "").strip()
 
@@ -832,9 +956,11 @@ async def change_model(request: Request, _=Depends(verify_api_key)):
 # 로또 추천 API
 # ════════════════════════════════════════════════════════════
 
+# ────────────────────────────────────────────────────────────────────
+# 로또 추천 번호 생성 — body.prompt 로 사용자 의도 받아 generate_recommendation.
+# ────────────────────────────────────────────────────────────────────
 @app.post("/api/v1/lotto/recommend")
 async def lotto_recommend(request: Request):
-    """로또 추천 번호 생성."""
     try:
         body = await request.json()
     except Exception:
@@ -845,16 +971,21 @@ async def lotto_recommend(request: Request):
     return {"success": True, "data": result}
 
 
+# ────────────────────────────────────────────────────────────────────
+# 로또 추천 알고리즘 설명 텍스트 반환.
+# ────────────────────────────────────────────────────────────────────
 @app.get("/api/v1/lotto/algorithm")
 async def lotto_algorithm():
-    """로또 추천 알고리즘 설명."""
     from agri_ai_core.src.lotto.lotto_recommender import get_algorithm_description
     return {"success": True, "data": get_algorithm_description()}
 
 
+# ────────────────────────────────────────────────────────────────────
+# 미분석 회차 LLM 일괄 분석 — start(기본 501)~end 범위를 백그라운드 실행.
+# threading.Thread(daemon=True) 로 즉시 응답, 본 작업은 비동기 진행.
+# ────────────────────────────────────────────────────────────────────
 @app.post("/api/v1/lotto/analyze-batch")
 async def lotto_analyze_batch(request: Request):
-    """501회부터 미분석 회차를 LLM으로 일괄 분석한다 (백그라운드 실행)."""
     try:
         body = await request.json()
     except Exception:
@@ -867,6 +998,9 @@ async def lotto_analyze_batch(request: Request):
     import threading
     from agri_ai_core.src.lotto.lotto_analyzer import run_batch
 
+    # ────────────────────────────────────────────────────────────────
+    # 백그라운드 워커 — run_batch 동기 호출, 예외는 로그로만 보고.
+    # ────────────────────────────────────────────────────────────────
     def _worker():
         try:
             run_batch(start=start, end=end)
@@ -878,9 +1012,11 @@ async def lotto_analyze_batch(request: Request):
     return {"success": True, "data": {"message": f"배치 분석 시작 (start={start}, end={end})"}}
 
 
+# ────────────────────────────────────────────────────────────────────
+# 단일 회차 즉시 분석 — body.draw_no 회차를 동기 분석.
+# ────────────────────────────────────────────────────────────────────
 @app.post("/api/v1/lotto/analyze-draw")
 async def lotto_analyze_draw(request: Request):
-    """단일 회차를 즉시 분석한다."""
     body = await request.json()
     draw_no = int(body.get("draw_no"))
     from agri_ai_core.src.lotto.lotto_analyzer import analyze_draw

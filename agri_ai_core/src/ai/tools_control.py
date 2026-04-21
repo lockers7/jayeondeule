@@ -2,13 +2,14 @@
 # 릴레이 제어 도구 — LLM이 호출하는 릴레이 ON/OFF/반전 및 일괄 제어.
 # tools_executor.py에서 분리된 L5 계층 모듈.
 # --->
-# _resolve_relay_ids: 릴레이 제어용 house_id/farm_id 정규화 및 검증
-# _get_ai_judgment_safe: AI 환경 판단 안전 호출
-# _control_relay_all_houses: house_id='all' 요청 시 모든 재배사 일괄 제어
-# control_relay: 단일 릴레이 ON/OFF/반전 제어
-# _batch_build_by_mode: mode(reverse_all/all_on/all_off) 기반 일괄 설정 계산
-# _batch_build_by_devices: devices 배열 기반 개별 릴레이 설정 계산
-# control_relays_batch: 여러 릴레이 장치를 한 번에 제어
+# _resolve_relay_ids            : 릴레이 제어용 house_id/farm_id 정규화 및 검증
+# _get_ai_judgment_safe         : AI 환경 판단 안전 호출
+# _build_post_control_snapshot  : DB 쓰기 직후 그 재배사의 ON/OFF 스냅샷을 LLM 친화 dict로 반환
+# _control_relay_all_houses     : house_id='all' 요청 시 모든 재배사 일괄 제어
+# control_relay                 : 단일 릴레이 ON/OFF/반전 제어
+# _batch_build_by_mode          : mode(reverse_all/all_on/all_off) 기반 일괄 설정 계산
+# _batch_build_by_devices       : devices 배열 기반 개별 릴레이 설정 계산
+# control_relays_batch          : 여러 릴레이 장치를 한 번에 제어
 # ══════════════════════════════════════════════════════════════════════════════
 import time
 import traceback
@@ -27,10 +28,40 @@ from agri_ai_core.src.ai.tools_auth import (
 logger = setup_logger(__name__)
 
 
+# ────────────────────────────────────────────────────────────────────
+# DB 쓰기 직후 해당 재배사 모든 릴레이를 다시 읽어 ON/OFF 한국어 라벨 dict 반환.
+# LLM이 답변 표 작성 시 control 전 데이터가 아닌 최종 상태를 보도록 하기 위함
+# (3단계 파이프라인은 control_relay 직전에 데이터를 수집하므로, 응답 자체에
+# 변경 후 스냅샷이 없으면 LLM이 옛 데이터를 표에 박아 환각이 발생함).
+# 실패 시 None 반환 — 호출자는 응답 dict 에 조건부 포함하면 됨.
+# ────────────────────────────────────────────────────────────────────
+def _build_post_control_snapshot(farm_id, house_id):
+    try:
+        from agri_ai_core.src.postgresql.reader import read_latest_relay_info
+        from agri_ai_core.config.mappers import get_relay_mapping
+        relay = read_latest_relay_info(farm_id, house_id)
+        if not relay:
+            return None
+        mapping = get_relay_mapping(house_id)
+        on_devices, off_devices = [], []
+        for col, rd in mapping.items():
+            value = relay.get(col)
+            if value is None:
+                continue
+            label = rd.kor_func or rd.sem
+            (on_devices if value else off_devices).append(label)
+        return {"ON": on_devices, "OFF": off_devices}
+    except Exception as e:
+        logger.warning(f"[post_state] 스냅샷 조회 실패 farm={farm_id} house={house_id}: {e}")
+        return None
+
+
+# ────────────────────────────────────────────────────────────────────
+# 릴레이 제어용 house_id/farm_id를 정규화하고 검증한다. (house_id, farm_id) 또는 에러 dict 반환.
+# auth_farm_id 가 전달되면 농장 접근권(자기 농장만 제어 가능) 도 검증한다.
+# house_id='0' 은 물리 장치 미존재로 항상 거부한다 (권한 무관).
+# ────────────────────────────────────────────────────────────────────
 def _resolve_relay_ids(house_id, farm_id, auth_farm_id=None):
-    """릴레이 제어용 house_id/farm_id를 정규화하고 검증한다. (house_id, farm_id) 또는 에러 dict 반환.
-    auth_farm_id 가 전달되면 농장 접근권(자기 농장만 제어 가능) 도 검증한다.
-    house_id='0' 은 물리 장치 미존재로 항상 거부한다 (권한 무관)."""
     from agri_ai_core.src.postgresql.connection import db_session
     from agri_ai_core.src.postgresql.queries import GET_ONE_FARM
     # 0호 거부 가드 — house_id='0' 은 어떤 사용자도 제어 불가 (통합재배사, 물리 장치 없음)
@@ -57,8 +88,10 @@ def _resolve_relay_ids(house_id, farm_id, auth_farm_id=None):
     return target_house_id, target_farm_id
 
 
+# ────────────────────────────────────────────────────────────────────
+# AI 환경 판단을 안전하게 호출 (실패해도 None 반환).
+# ────────────────────────────────────────────────────────────────────
 def _get_ai_judgment_safe(farm_id, house_id):
-    """AI 환경 판단을 안전하게 호출 (실패해도 None 반환)."""
     try:
         from agri_ai_core.src.control.manual_control import get_ai_environment_judgment
         return get_ai_environment_judgment(farm_id, house_id)
@@ -67,44 +100,21 @@ def _get_ai_judgment_safe(farm_id, house_id):
         return None
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# [B2] 히터 쿨다운 경고 헬퍼 — LLM 직접 ON 명령에 대해 안전 경고만 추가
-# 경고만 반환하고 실행은 차단하지 않는다 ("사용자 명령 즉시 실행" 철학 유지).
-# ═════════════════════════════════════════════════════════════════════════
-_HEATER_DEVICES = {"water_heater_flag", "indoor_heater_flag", "indoor_heater_valve_flag"}
-
-
+# ────────────────────────────────────────────────────────────────────
+# [deprecated 2026-04-27] 히터 쿨다운 인프라 제거 — 항상 None 반환.
+# 호환을 위해 시그니처만 유지. 호출자는 결과를 무시해도 됨.
+# ────────────────────────────────────────────────────────────────────
 def _get_heater_cooldown_warning(farm_id, house_id, device_name: str, action: str):
-    """LLM 이 히터 계열 장치를 ON 명령할 때 쿨다운 상태를 경고 메시지로 반환.
-    반환: 경고 문자열 또는 None (경고 없음).
-    - device_name 이 히터 계열이 아니면 None
-    - action 이 ON 이 아니면 None (OFF/reverse 는 안전 이슈 없음)
-    - check_heater_cooldown 이 (False, True)면 경고 반환, 그 외 None
-    """
-    try:
-        if not device_name or device_name not in _HEATER_DEVICES:
-            return None
-        if (action or "").lower() != "on":
-            return None
-        from agri_ai_core.src.control.control_common import check_heater_cooldown
-        available, cooling = check_heater_cooldown(farm_id, house_id)
-        if cooling:
-            return (
-                f"⚠️ 안전경고: {device_name} 은 직전 30분 연속 가동 후 쿨다운(5분) 상태이지만 "
-                f"사용자 명령으로 ON 처리를 수행했습니다. 과열 방지를 위해 필요 시 OFF 명령을 "
-                f"내려 주세요."
-            )
-        return None
-    except Exception as e:
-        logger.debug(f"[히터쿨다운경고] 계산 실패: {e}")
-        return None
+    return None
 
 
+# ────────────────────────────────────────────────────────────────────
+# house_id='all' 요청 시 모든 재배사(hous_id!=0)에 대해 일괄 제어.
+# auth_farm_id 전달 시 farm 접근권(자기 농장만)도 검증한다.
+# ────────────────────────────────────────────────────────────────────
 def _control_relay_all_houses(device_name: str = None, action: str = None, farm_id: str = None,
                                mode: str = None, devices: list = None,
                                auth_farm_id: str = None) -> Dict[str, Any]:
-    """house_id='all' 요청 시 모든 재배사(hous_id!=0)에 대해 일괄 제어.
-    auth_farm_id 전달 시 farm 접근권(자기 농장만)도 검증한다."""
     from agri_ai_core.src.postgresql.connection import db_session
     from agri_ai_core.src.postgresql.queries import GET_ONE_FARM, GET_ALL_HOUSES
     t_start = time.time()
@@ -154,8 +164,10 @@ def _control_relay_all_houses(device_name: str = None, action: str = None, farm_
         "message": f"전체 {total}개 재배사({', '.join(r['house_id']+'호' for r in results if r['result'].get('success'))}) 제어 완료.",
         "farm_id": target_farm_id,
         "controlled_houses": [r["house_id"] for r in results if r["result"].get("success")],
+        # 각 재배사별 변경 직후 실제 ON/OFF 스냅샷 포함 — LLM 표 작성 시 환각 방지
         "results": [{"house_id": r["house_id"], "success": r["result"].get("success"),
-                     "message": r["result"].get("message", "")} for r in results],
+                     "message": r["result"].get("message", ""),
+                     "post_state": r["result"].get("post_state")} for r in results],
     }
     if _first_ok.get("ai_judgment"):
         ret["ai_judgment"] = _first_ok["ai_judgment"]
@@ -164,11 +176,13 @@ def _control_relay_all_houses(device_name: str = None, action: str = None, farm_
     return ret
 
 
+# ────────────────────────────────────────────────────────────────────
+# LLM 이 호출하는 단일 릴레이 제어 진입점.
+# auth_farm_id 는 세션 사용자(시스템관리자=None, 농장관리자=자기농장ID)의 권한 검증용.
+# ────────────────────────────────────────────────────────────────────
 def control_relay(house_id: str, device_name: str = None, action: str = None,
                    farm_id: str = None, mode: str = None,
                    auth_farm_id: str = None) -> Dict[str, Any]:
-    """LLM 이 호출하는 단일 릴레이 제어 진입점.
-    auth_farm_id 는 세션 사용자(시스템관리자=None, 농장관리자=자기농장ID)의 권한 검증용."""
     # house_id='all' → 전 재배사 일괄 제어
     if str(house_id or "").strip().lower() in ("all", "전체", "모든"):
         return _control_relay_all_houses(device_name=device_name, action=action,
@@ -233,6 +247,8 @@ def control_relay(house_id: str, device_name: str = None, action: str = None,
             heater_warn = _get_heater_cooldown_warning(
                 target_farm_id, target_house_id, device_name, action,
             )
+            # 변경 직후 실제 ON/OFF 스냅샷 — LLM 표 작성 시 환각 방지용
+            post_state = _build_post_control_snapshot(target_farm_id, target_house_id)
             resp = {
                 "success": True,
                 "message": f"{target_house_id}호 재배사의 {device_label}을(를) {action_label} 처리했습니다.",
@@ -244,6 +260,7 @@ def control_relay(house_id: str, device_name: str = None, action: str = None,
                 "applied_value": relay_value,
                 "ai_judgment": ai_judgment,
                 "ai_conflict": ai_conflict,
+                "post_state": post_state,
             }
             if heater_warn:
                 resp["warnings"] = [heater_warn]
@@ -270,9 +287,6 @@ def control_relay(house_id: str, device_name: str = None, action: str = None,
 # 여러 장치를 한 번에 제어한다 (LLM의 반복 tool call 횟수 절감).
 # ══════════════════════════════════════════════════════════════
 def _batch_build_by_mode(target_farm_id, target_house_id, mode, valid_devices, SEMANTIC_LABELS, reverse_pin_map):
-    """mode 기반(reverse_all/all_on/all_off) 릴레이 일괄 설정 계산.
-    Returns: (relay_settings dict, results_detail list, error_response or None)
-    """
     from agri_ai_core.src.postgresql.reader import read_latest_relay_info
 
     current = read_latest_relay_info(target_farm_id, target_house_id)
@@ -312,10 +326,11 @@ def _batch_build_by_mode(target_farm_id, target_house_id, mode, valid_devices, S
     return relay_settings, results_detail, None
 
 
+# ────────────────────────────────────────────────────────────────────
+# devices 배열 기반 개별 릴레이 설정 계산.
+# Returns: (relay_settings dict, results_detail list)
+# ────────────────────────────────────────────────────────────────────
 def _batch_build_by_devices(devices, valid_devices, SEMANTIC_LABELS):
-    """devices 배열 기반 개별 릴레이 설정 계산.
-    Returns: (relay_settings dict, results_detail list)
-    """
     relay_settings = {}
     results_detail = []
     for item in devices:
@@ -336,13 +351,14 @@ def _batch_build_by_devices(devices, valid_devices, SEMANTIC_LABELS):
     return relay_settings, results_detail
 
 
+# ────────────────────────────────────────────────────────────────────
+# 재배사의 여러 릴레이 장치를 일괄 제어한다.
+# mode 우선 (reverse_all/all_on/all_off) → mode 없으면 devices 배열 사용.
+# 제어 후 LLM 잠금을 설정하여 자동제어가 일정시간 억제된다.
+# ────────────────────────────────────────────────────────────────────
 def control_relays_batch(house_id: str, devices: List[Dict[str, str]] = None,
                          farm_id: str = None, mode: str = None,
                          auth_farm_id: str = None) -> Dict[str, Any]:
-    """재배사의 여러 릴레이 장치를 일괄 제어한다.
-    mode 우선 (reverse_all/all_on/all_off) → mode 없으면 devices 배열 사용.
-    제어 후 LLM 잠금을 설정하여 자동제어가 일정시간 억제된다.
-    """
     t_start = time.time()
     logger.info(f"[릴레이일괄제어] 시작 farm_id={farm_id} house_id={house_id} mode={mode} devices={len(devices or [])}건")
     try:
@@ -380,6 +396,8 @@ def control_relays_batch(house_id: str, devices: List[Dict[str, str]] = None,
         if result.get("success"):
             set_llm_relay_lock(target_farm_id, target_house_id)
             controlled_labels = [d["label"] for d in results_detail if d.get("success")]
+            # 변경 직후 실제 ON/OFF 스냅샷 — LLM 표 작성 시 환각 방지용
+            post_state = _build_post_control_snapshot(target_farm_id, target_house_id)
             logger.info(f"[릴레이일괄제어] 완료 ({elapsed:.1f}s) {len(controlled_labels)}건 (LLM 잠금 설정)")
             return {
                 "success": True,
@@ -390,6 +408,7 @@ def control_relays_batch(house_id: str, devices: List[Dict[str, str]] = None,
                 "details": results_detail,
                 "ai_judgment": ai_judgment,
                 "ai_conflict": ai_conflict,
+                "post_state": post_state,
             }
         else:
             logger.warning(f"[릴레이일괄제어] 실패 ({elapsed:.1f}s): {result.get('message')}")

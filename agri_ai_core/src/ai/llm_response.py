@@ -192,14 +192,15 @@ def _refine_fetch_url(tool_result: str, user_query: str) -> str:
     return "\n".join(lines)
 
 
+# ────────────────────────────────────────────────────────────────────
+# get_farm_realtime_data 결과를 컴팩트 텍스트로 변환.
+# ~1.5KB JSON → 압축하여 LLM 컨텍스트 절감.
+# - 조회시각 생략 (모든 재배사 동일하므로 중복 제거)
+# - OFF 장치 목록 생략 (ON만 표시, 나머지는 OFF로 추론 가능)
+# - environment_thresholds: 환경 제어 임계값 (적정 범위) 보존
+# - ai_environment_judgment: AI 알고리즘 권장 릴레이 상태 보존
+# ────────────────────────────────────────────────────────────────────
 def _refine_realtime_data(tool_result: str) -> str:
-    """get_farm_realtime_data 결과를 컴팩트 텍스트로 변환.
-    ~1.5KB JSON → 압축하여 LLM 컨텍스트 절감.
-    - 조회시각 생략 (모든 재배사 동일하므로 중복 제거)
-    - OFF 장치 목록 생략 (ON만 표시, 나머지는 OFF로 추론 가능)
-    - environment_thresholds: 환경 제어 임계값 (적정 범위) 보존
-    - ai_environment_judgment: AI 알고리즘 권장 릴레이 상태 보존
-    """
     data = safe_json_load(tool_result)
     if data is None:
         return tool_result
@@ -207,8 +208,14 @@ def _refine_realtime_data(tool_result: str) -> str:
     if not data.get("success"):
         return tool_result
 
+    # 라벨 일관성: 시스템 프롬프트의 재배사 목록과 정확히 일치하는 이름을 사용
+    # → LLM이 표 작성 시 라벨 매핑 오류(빈 행/뒤섞임) 방지.
+    # DB의 hous_name 우선, 미등록 시 'N호재배사' 폴백.
+    farm_id = data.get("farm_id", "?")
     house_id = data.get("house_id", "?")
-    parts = [f"[{house_id}호재배사]"]
+    from agri_ai_core.src.ai.farm_cache import get_house_name
+    house_label = get_house_name(farm_id, house_id)
+    parts = [f"[{house_label}]"]
 
     # 센서 데이터 압축
     sensor = data.get("sensor")
@@ -297,8 +304,10 @@ def _refine_tool_result(tool_name: str, tool_result: str, user_query: str) -> st
     return tool_result
 
 
+# ────────────────────────────────────────────────────────────────────
+# 웹 스크래핑 네비게이션 잡음을 제거한다.
+# ────────────────────────────────────────────────────────────────────
 def _strip_nav_noise(text: str) -> str:
-    """웹 스크래핑 네비게이션 잡음을 제거한다."""
     if not text:
         return text
     # 네비게이션 패턴 이후 텍스트를 잘라냄
@@ -310,15 +319,16 @@ def _strip_nav_noise(text: str) -> str:
     return cleaned if len(cleaned) > 30 else text
 
 
+# ────────────────────────────────────────────────────────────────────
+# search_farm_knowledge 결과를 경량화한다.
+# - description이 content와 중복이면 제거
+# - 불필요한 metadata 키 제거
+# - 네비게이션 잡음 제거
+# - content 개별 항목 5000자 제한 + 전체 결과 20000자 제한 (A4 30장 대응)
+# 기존: 1500자 제한 → A4 1장도 못 채우는 빈약한 답변
+# 변경: 20000자로 확장하여 대용량 문서 학습 내용 기반 상세 답변 지원
+# ────────────────────────────────────────────────────────────────────
 def _refine_farm_knowledge(tool_result: str) -> str:
-    """search_farm_knowledge 결과를 경량화한다.
-    - description이 content와 중복이면 제거
-    - 불필요한 metadata 키 제거
-    - 네비게이션 잡음 제거
-    - content 개별 항목 5000자 제한 + 전체 결과 20000자 제한 (A4 30장 대응)
-    기존: 1500자 제한 → A4 1장도 못 채우는 빈약한 답변
-    변경: 20000자로 확장하여 대용량 문서 학습 내용 기반 상세 답변 지원
-    """
     # 참조 자료 크기 고정 — num_ctx(16384)에서 시스템프롬프트+대화+도구결과+답변 공간 확보
     # 시스템프롬프트 ~3000토큰 + 대화 ~2000토큰 + 답변 ~8192토큰 = ~13000 → 참조 자료 ~3000토큰 ≈ 4500자
     _MAX_TOTAL_REFINED = 4500   # 전체 참조 자료 최대 (3/14 안정화 1500 → RAG 대응 4500)
@@ -405,13 +415,15 @@ def _refine_farm_knowledge(tool_result: str) -> str:
     return refined
 
 
+# ────────────────────────────────────────────────────────────────────
+# LLM 응답 후처리: think 태그 제거 + 기본 포맷 정리만 수행.
+# ────────────────────────────────────────────────────────────────────
 def _finalize_user_facing_answer(
     model_name: str,
     user_query: str,
     farm_name: Optional[str],
     raw_answer: str,
 ) -> str:
-    """LLM 응답 후처리: think 태그 제거 + 기본 포맷 정리만 수행."""
     logger.debug(f"[필터링전-원본] len={len(raw_answer or '')}자")
     logger.debug(f"[필터링전-원본내용]\n{raw_answer}")
 
@@ -427,7 +439,6 @@ def _finalize_user_facing_answer(
 # 마크다운 표 정렬 유틸리티 (한글 너비 고려)
 # ══════════════════════════════════════════
 def _display_width(text: str) -> int:
-    """문자열의 터미널 표시 너비를 계산한다 (한글=2, 영문=1)."""
     width = 0
     for ch in text:
         eaw = unicodedata.east_asian_width(ch)
@@ -435,8 +446,10 @@ def _display_width(text: str) -> int:
     return width
 
 
+# ────────────────────────────────────────────────────────────────────
+# 문자열을 target_width 너비로 패딩한다.
+# ────────────────────────────────────────────────────────────────────
 def _pad_to_width(text: str, target_width: int) -> str:
-    """문자열을 target_width 너비로 패딩한다."""
     current = _display_width(text)
     pad = target_width - current
     return text + (' ' * max(0, pad))
@@ -446,7 +459,6 @@ def _pad_to_width(text: str, target_width: int) -> str:
 # LLM 응답 내 마크다운 표의 컬럼 구분자(|)를 정렬한다 (한글 너비 고려).
 # ═════════════════════════════════════════════════════════════════════
 def _align_markdown_tables(text: str) -> str:
-    """텍스트 내 모든 마크다운 표의 | 구분자 위치를 정렬한다."""
     if '|' not in text:
         return text
 
@@ -515,8 +527,10 @@ def _align_markdown_tables(text: str) -> str:
 # ══════════════════
 # LLM 응답 필터링
 # ══════════════════
+# ────────────────────────────────────────────────────────────────────
+# LLM 응답 기본 정리: Think 태그 제거, 마크다운 헤더/코드블록 제거, 빈 줄 정리, 표 정렬.
+# ────────────────────────────────────────────────────────────────────
 def clean_llm_response(response_text):
-    """LLM 응답 기본 정리: Think 태그 제거, 마크다운 헤더/코드블록 제거, 빈 줄 정리, 표 정렬."""
     if not response_text:
         return response_text
 
@@ -580,8 +594,10 @@ def clean_llm_response(response_text):
     return response_text
 
 
+# ────────────────────────────────────────────────────────────────────
+# LLM이 만든 가짜 URL을 제거. verified_urls는 도구가 반환한 실제 URL 집합.
+# ────────────────────────────────────────────────────────────────────
 def _strip_hallucinated_urls(answer: str, verified_urls: set) -> str:
-    """LLM이 만든 가짜 URL을 제거. verified_urls는 도구가 반환한 실제 URL 집합."""
     if not answer or ("http://" not in answer and "https://" not in answer):
         return answer
 

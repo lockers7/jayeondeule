@@ -49,8 +49,10 @@ CREATE INDEX IF NOT EXISTS idx_agent_job_active
 """
 
 
+# ────────────────────────────────────────────────────────────────────
+# '22:00' | '2026-04-19 22:00' | ISO 형식 파싱.
+# ────────────────────────────────────────────────────────────────────
 def _parse_time(t: str, default_date: datetime = None) -> datetime:
-    """'22:00' | '2026-04-19 22:00' | ISO 형식 파싱."""
     t = (t or "").strip()
     if not t:
         raise ValueError("시각이 비어있습니다")
@@ -79,7 +81,6 @@ def _parse_time(t: str, default_date: datetime = None) -> datetime:
 # [Wave 7] DB 영속화 헬퍼 — agent_monitor_m_job 테이블
 # ═══════════════════════════════════════════════════════════════════════════
 def _ensure_agent_job_table() -> bool:
-    """agent_monitor_m_job 테이블 lazy CREATE. 실패해도 in-memory 경로는 유지."""
     global _agent_table_ready
     if _agent_table_ready:
         return True
@@ -98,10 +99,12 @@ def _ensure_agent_job_table() -> bool:
             return False
 
 
+# ────────────────────────────────────────────────────────────────────
+# Job 등록을 DB 에 기록. 실패 시 로그만.
+# ────────────────────────────────────────────────────────────────────
 def _persist_agent_job(job_id: str, farm_id: str, intent: str,
                          start_dt: datetime, end_dt: datetime,
                          interval_min: int, houses: list, alert_on_normal: bool) -> None:
-    """Job 등록을 DB 에 기록. 실패 시 로그만."""
     if not _ensure_agent_job_table():
         return
     try:
@@ -121,8 +124,10 @@ def _persist_agent_job(job_id: str, farm_id: str, intent: str,
         logger.debug(f"[Agent] Job 영속화 실패 ({job_id}): {e}")
 
 
+# ────────────────────────────────────────────────────────────────────
+# Job 취소를 DB 에 반영.
+# ────────────────────────────────────────────────────────────────────
 def _mark_agent_job_cancelled(job_id: str) -> None:
-    """Job 취소를 DB 에 반영."""
     if not _ensure_agent_job_table():
         return
     try:
@@ -137,13 +142,14 @@ def _mark_agent_job_cancelled(job_id: str) -> None:
         logger.debug(f"[Agent] Job 취소 영속화 실패 ({job_id}): {e}")
 
 
+# ────────────────────────────────────────────────────────────────────
+# 서비스 시작 시 DB 에서 active(미취소 + end 미경과) Job 을 APScheduler 에 재등록.
+# 반환: 복원된 Job 개수. 호출처는 api/app.py lifespan 에서 이벤트 루프 바인딩 직후.
+# 
+# 멱등성: ON CONFLICT 없이 replace_existing=True 로 APScheduler 재등록.
+# DB 에 있는데 이미 메모리에도 있는 경우(해당 프로세스가 방금 등록함) 덮어쓰기로 안전.
+# ────────────────────────────────────────────────────────────────────
 def restore_active_jobs() -> int:
-    """서비스 시작 시 DB 에서 active(미취소 + end 미경과) Job 을 APScheduler 에 재등록.
-    반환: 복원된 Job 개수. 호출처는 api/app.py lifespan 에서 이벤트 루프 바인딩 직후.
-
-    멱등성: ON CONFLICT 없이 replace_existing=True 로 APScheduler 재등록.
-    DB 에 있는데 이미 메모리에도 있는 경우(해당 프로세스가 방금 등록함) 덮어쓰기로 안전.
-    """
     if not _ensure_agent_job_table():
         return 0
     restored = 0
@@ -193,12 +199,14 @@ def restore_active_jobs() -> int:
     return restored
 
 
+# ────────────────────────────────────────────────────────────────────
+# APScheduler 에 Job 을 등록하고 _AGENT_JOB_META 에 메타데이터 캐시.
+# fire_once_now=True 면 놓친 tick 보완 목적으로 복원 직후 1회 즉시 실행 (별도 스레드).
+# ────────────────────────────────────────────────────────────────────
 def _reregister_job(job_id: str, farm_id: str, intent: str,
                       start_dt: datetime, end_dt: datetime,
                       interval_min: int, houses: list, alert_on_normal: bool,
                       fire_once_now: bool = False) -> None:
-    """APScheduler 에 Job 을 등록하고 _AGENT_JOB_META 에 메타데이터 캐시.
-    fire_once_now=True 면 놓친 tick 보완 목적으로 복원 직후 1회 즉시 실행 (별도 스레드)."""
     from apscheduler.triggers.interval import IntervalTrigger
     from agri_ai_core.src.control.task_scheduler import _scheduler
     if _scheduler is None:
@@ -242,6 +250,9 @@ def _reregister_job(job_id: str, farm_id: str, intent: str,
         logger.info(f"[Agent] Job {job_id} 놓친 tick 감지 → 복원 직후 즉시 1회 실행 스레드 시작")
 
 
+# ────────────────────────────────────────────────────────────────────
+# APScheduler가 매 주기마다 호출하는 실행 함수. 센서 확인 + 이상시 알림 발행.
+# ────────────────────────────────────────────────────────────────────
 def _monitor_job_run(
     job_id: str,
     farm_id: str,
@@ -249,7 +260,6 @@ def _monitor_job_run(
     intent: str,
     alert_on_normal: bool = False,
 ) -> None:
-    """APScheduler가 매 주기마다 호출하는 실행 함수. 센서 확인 + 이상시 알림 발행."""
     from agri_ai_core.src.ai.tools_data import get_farm_realtime_data
     from agri_ai_core.src.ai import alert_bus
     from agri_ai_core.src.control.control_common import (
@@ -307,6 +317,21 @@ def _monitor_job_run(
             logger.error(f"[Agent] 모니터링 실행 오류 house={hid}: {e}\n{traceback.format_exc()}")
 
 
+# ────────────────────────────────────────────────────────────────────
+# 사용자 지정 시간대에 주기적 센서 감시+알림 Job 등록.
+# 
+# Args:
+#     intent: 사용자 의도 한 줄 (알림에 포함)
+#     start_time: 시작 시각 ('HH:MM' | 'YYYY-MM-DD HH:MM' | ISO)
+#     end_time: 종료 시각
+#     interval_min: 주기(분). 최소 1분, 최대 1440분(24시간)
+#     house_ids: 리스트(예: ['1','2','3']) 또는 콤마 구분 문자열 또는 'all'/'전체'
+#     farm_id: 농장 ID
+#     alert_on_normal: True면 이상 없을 때도 매 주기 정상 상태 알림 발행
+# 
+# Returns:
+#     {success, job_id, start, end, interval_min, houses, intent}
+# ────────────────────────────────────────────────────────────────────
 def schedule_monitor(
     intent: str,
     start_time: str,
@@ -316,20 +341,6 @@ def schedule_monitor(
     farm_id: str = None,
     alert_on_normal: bool = False,
 ) -> Dict[str, Any]:
-    """사용자 지정 시간대에 주기적 센서 감시+알림 Job 등록.
-
-    Args:
-        intent: 사용자 의도 한 줄 (알림에 포함)
-        start_time: 시작 시각 ('HH:MM' | 'YYYY-MM-DD HH:MM' | ISO)
-        end_time: 종료 시각
-        interval_min: 주기(분). 최소 1분, 최대 1440분(24시간)
-        house_ids: 리스트(예: ['1','2','3']) 또는 콤마 구분 문자열 또는 'all'/'전체'
-        farm_id: 농장 ID
-        alert_on_normal: True면 이상 없을 때도 매 주기 정상 상태 알림 발행
-
-    Returns:
-        {success, job_id, start, end, interval_min, houses, intent}
-    """
     from agri_ai_core.src.control.task_scheduler import add_job
     from apscheduler.triggers.interval import IntervalTrigger
 
@@ -429,8 +440,10 @@ def schedule_monitor(
         return {"success": False, "error": str(e)}
 
 
+# ────────────────────────────────────────────────────────────────────
+# 현재 등록된 Agent 모니터링 Job 목록 조회.
+# ────────────────────────────────────────────────────────────────────
 def list_monitors() -> Dict[str, Any]:
-    """현재 등록된 Agent 모니터링 Job 목록 조회."""
     from agri_ai_core.src.control.task_scheduler import _scheduler
     if _scheduler is None:
         return {"success": False, "error": "스케줄러 미초기화"}
@@ -447,8 +460,10 @@ def list_monitors() -> Dict[str, Any]:
     return {"success": True, "monitors": active, "count": len(active)}
 
 
+# ────────────────────────────────────────────────────────────────────
+# 특정 모니터링 Job 취소.
+# ────────────────────────────────────────────────────────────────────
 def cancel_monitor(job_id: str) -> Dict[str, Any]:
-    """특정 모니터링 Job 취소."""
     from agri_ai_core.src.control.task_scheduler import _scheduler
     if _scheduler is None:
         return {"success": False, "error": "스케줄러 미초기화"}

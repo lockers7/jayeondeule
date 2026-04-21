@@ -22,3 +22,19 @@ SELECT_BASE_SET_VALUE_SQL            = "SELECT tprt_min, tprt_max, hmdt_min, hmd
 SELECT_SENSOR_REFRESH_INTERVAL_SQL   = "SELECT snsr_rfrs_itvl   FROM FARMHOUSE_M_INFO WHERE farm_id=%s AND hous_id=%s;"
 # 현재 릴레이 상태값
 SELECT_RELAY_STATUS_SQL              = "SELECT relay_1st_flag, relay_2st_flag, relay_3st_flag, relay_4st_flag, relay_5st_flag, relay_6st_flag, relay_7st_flag, relay_8st_flag, relay_9st_flag, relay_10st_flag, relay_11st_flag, relay_12st_flag, relay_13st_flag, relay_14st_flag, relay_15st_flag, relay_16st_flag FROM RELAY_L_RECORDING WHERE farm_id=%s AND hous_id=%s ORDER BY recd_dttm DESC LIMIT 1;"
+
+# 다른 재배사의 최근 외부 온습도 평균 (2호 재배사는 외부 센서 부재 — 1·3호 평균값 차용)
+# 각 hous_id 별 가장 최근 1건만 골라 평균. 5분 이내 데이터만 채택, 0.0 값은 제외.
+SELECT_PEER_OUTDOOR_AVG_SQL          = """
+SELECT AVG(oudr_tprt_valu)::float, AVG(oudr_hmdt_valu)::float
+FROM (
+    SELECT DISTINCT ON (hous_id) hous_id, oudr_tprt_valu, oudr_hmdt_valu
+    FROM SENSOR_L_RECORDING
+    WHERE farm_id = %s
+      AND hous_id = ANY(%s)
+      AND recd_dttm >= NOW() - INTERVAL '5 minutes'
+    ORDER BY hous_id, recd_dttm DESC
+) AS recent
+WHERE oudr_tprt_valu IS NOT NULL
+  AND oudr_tprt_valu <> 0;
+"""

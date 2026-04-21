@@ -21,9 +21,11 @@ from agri_ai_core.src.ai.tools_auth import (
 logger = setup_logger(__name__)
 
 
+# ────────────────────────────────────────────────────────────────────
+# house_id를 정규화하되 'all'/'전체'/'모든'은 'all' 로 보존.
+# 숫자 또는 '1호재배사' 류는 숫자만 추출, 그 외는 None.
+# ────────────────────────────────────────────────────────────────────
 def _normalize_house(value: Any) -> Optional[str]:
-    """house_id를 정규화하되 'all'/'전체'/'모든'은 'all' 로 보존.
-    숫자 또는 '1호재배사' 류는 숫자만 추출, 그 외는 None."""
     if value is None:
         return None
     s = str(value).strip().lower()
@@ -51,18 +53,6 @@ _VALID_CIRCULATION_MODES = ("내부순환", "외부순환", "흡입순환", "배
 # ═══════════════════════════════════════════════════════════════════════════════
 def set_house_control_mode(house_id: str, mode: str, farm_id: str = None,
                             auth_farm_id: str = None) -> Dict[str, Any]:
-    """재배사의 제어 모드(mnul_ctrl_flag + ctrl_type)를 변경한다.
-
-    Args:
-        house_id: 해당 농장의 hous_id (문자/숫자) 또는 'all' (전 재배사),
-                  또는 재배사 이름(예: '상황버섯2호재배사'). 재배사 개수·번호는 농장별 가변.
-        mode: 'manual' | 'algorithm' | 'ai'
-        farm_id: 농장 ID (기본값: default_tool_args의 farm_id)
-        auth_farm_id: 세션 사용자 농장 ID (None/0=시스템관리자, N=농장관리자). 권한 검증용.
-
-    Returns:
-        {success, action, changed: [{farm_id, house_id, before: {...}, after: {...}}]}
-    """
     from agri_ai_core.src.postgresql.connection import db_session
 
     # 유효성 검증
@@ -145,6 +135,16 @@ def set_house_control_mode(house_id: str, mode: str, farm_id: str = None,
                     f"[제어모드변경] farm={r['farm_id']} house={r['hous_id']}({r['hous_name']}) "
                     f"{before} → {{'mnul_ctrl_flag':{mnul_flag},'ctrl_type':'{mode}'}}"
                 )
+                # [변경11 · 2026-04-30] algorithm 모드로 전환 시 throttle 즉시 reset →
+                # 다음 relay_control_job 사이클(최대 5초)에서 즉시 1회 환경제어 실행.
+                if mode == "algorithm":
+                    try:
+                        from agri_ai_core.src.control.manual_control import (
+                            trigger_algorithm_now,
+                        )
+                        trigger_algorithm_now(int(r["farm_id"]), int(r["hous_id"]))
+                    except Exception as _e:
+                        logger.warning(f"[제어모드변경] algorithm 즉시 트리거 실패: {_e}")
 
         return {
             "success": True,
@@ -162,14 +162,6 @@ def set_house_control_mode(house_id: str, mode: str, farm_id: str = None,
 # ═══════════════════════════════════════════════════════════════════════════════
 def set_growth_stage(house_id: str, stage: Any, farm_id: str = None,
                       auth_farm_id: str = None) -> Dict[str, Any]:
-    """재배사의 생육단계(crop_lvel)를 변경한다.
-
-    Args:
-        house_id: 해당 농장의 hous_id 또는 'all' (재배사 구성은 농장별 가변)
-        stage: '발아기' | '생육기' | '수확기' | '휴지기' (또는 숫자 1~4)
-        farm_id: 농장 ID
-        auth_farm_id: 세션 사용자 농장 ID (None/0=시스템관리자, N=농장관리자). 권한 검증용.
-    """
     from agri_ai_core.src.postgresql.connection import db_session
 
     lvel = _GROWTH_STAGE_MAP.get(stage)
@@ -250,18 +242,6 @@ def set_growth_stage(house_id: str, stage: Any, farm_id: str = None,
 # ═══════════════════════════════════════════════════════════════════════════════
 def set_circulation_mode(house_id: str, mode: str, farm_id: str = None,
                           auth_farm_id: str = None) -> Dict[str, Any]:
-    """재배사의 순환모드를 강제 설정한다 (댐퍼+팬 조합 반영).
-
-    Args:
-        house_id: 해당 농장의 hous_id 또는 'all' (재배사 구성은 농장별 가변)
-        mode: '내부순환' | '외부순환' | '흡입순환' | '배기순환' | '순환정지'
-        farm_id: 농장 ID
-        auth_farm_id: 세션 사용자 농장 ID (None/0=시스템관리자, N=농장관리자). 권한 검증용.
-
-    Note: ctrl_type='manual' 인 재배사에서만 영속적으로 반영된다.
-          algorithm/ai 모드 재배사는 5~10초 주기 자동 루프가 덮어쓰므로
-          응답의 warnings 필드에 해당 안내가 포함된다.
-    """
     from agri_ai_core.src.control.control_common import CIRCULATION_MODES, get_pin_map
     from agri_ai_core.src.control.relay_manager import set_relay_value
     from agri_ai_core.src.postgresql.connection import db_session
@@ -366,20 +346,6 @@ def set_schedule(
     farm_id: str = None,
     auth_farm_id: str = None,
 ) -> Dict[str, Any]:
-    """조명/관수 자동 제어 스케줄을 추가·삭제한다.
-
-    Args:
-        action: 'add' | 'delete' | 'list'
-        house_id: 단일 hous_id만 허용 ('all' 불가). 재배사 구성은 농장별 가변.
-        unit_type: 'light' | 'water'(irrigation)
-        start_time: 'HH:MM' (add 시)
-        end_time:   'HH:MM' (add 시)
-        interval_min: 관수의 경우 반복 주기(분). 조명은 None.
-        weekdays: 'mon,tue,...' 콤마 구분 또는 'daily'
-        excs_type: 기본 'daily'
-        farm_id: 농장 ID
-        auth_farm_id: 세션 사용자 농장 ID (None/0=시스템관리자, N=농장관리자). 권한 검증용.
-    """
     from agri_ai_core.src.postgresql.connection import db_session
     from datetime import datetime
 
@@ -466,19 +432,20 @@ _ALLOWED_THRESHOLD_KEYS = {
 }
 
 
+# ────────────────────────────────────────────────────────────────────
+# AI 환경 제어용 임계값을 조회한다. (현재 action='get' 만 지원)
+# 
+# Args:
+#     action: 'get' (조회). 'set'/'reset' 은 미지원 (아래 Note 참조).
+#     key: (set 전용, 현재 미사용)
+#     value: (set 전용, 현재 미사용)
+# 
+# Note: 임계값의 런타임 변경(set/reset)은 control_common 상수를 런타임에
+#       재참조하는 연동 계층이 완성된 뒤에 활성화된다. 현재는 조회만 가능하며,
+#       임계값 변경이 필요하면 .env 또는 control_common.py 상수를 직접 수정
+#       후 서비스 재시작이 필요하다.
+# ────────────────────────────────────────────────────────────────────
 def override_ai_thresholds(action: str, key: str = None, value: float = None) -> Dict[str, Any]:
-    """AI 환경 제어용 임계값을 조회한다. (현재 action='get' 만 지원)
-
-    Args:
-        action: 'get' (조회). 'set'/'reset' 은 미지원 (아래 Note 참조).
-        key: (set 전용, 현재 미사용)
-        value: (set 전용, 현재 미사용)
-
-    Note: 임계값의 런타임 변경(set/reset)은 control_common 상수를 런타임에
-          재참조하는 연동 계층이 완성된 뒤에 활성화된다. 현재는 조회만 가능하며,
-          임계값 변경이 필요하면 .env 또는 control_common.py 상수를 직접 수정
-          후 서비스 재시작이 필요하다.
-    """
     from agri_ai_core.src.control import control_common as cc
 
     if action == "get":

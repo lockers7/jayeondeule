@@ -22,6 +22,7 @@ house_id = cfg.is_myHouseId()
 db       = None
 gpio     = None
 sensor   = None
+lcd      = None   # [2026-04-27] I2C LCD (PCF8574 백팩) — 미장착 호스트는 None
 
 def system_restart_for_error():
     time.sleep(5)
@@ -63,6 +64,15 @@ try:
 except Exception as e:
     logger.warning(f'센서 초기화 실패 (계속 진행): {e}')
 
+# I2C LCD 초기화 — 미장착 호스트(5101/5103 등)에서는 RPLCD 미설치 또는 0x27
+# 응답 없음으로 자연스럽게 비활성. 매 read 사이클마다 update() 호출 (실패해도 main loop 무영향).
+try:
+    from display.lcd_control import LCDControl
+    lcd = LCDControl()
+except Exception as e:
+    logger.warning(f'LCD 모듈 import 실패 (LCD 표시 비활성): {e}')
+    lcd = None
+
 auto_record_data         = sql_format.AutoRecdFormat
 auto_record_data.farm_id = farm_id
 auto_record_data.hous_id = house_id
@@ -97,8 +107,14 @@ def get_each_sensor_value():
     logger.info(
         f'{auto_record_data.farm_id}-{auto_record_data.hous_id} '
         f'센서: 내부온도={auto_record_data.indr_tprt_valu} 내부습도={auto_record_data.indr_hmdt_valu} '
-        f'외부온도={auto_record_data.oudr_tprt_valu} CO2={auto_record_data.co2_valu} 수온={auto_record_data.watr_tprt_valu}'
+        f'외부온도={auto_record_data.oudr_tprt_valu} 외부습도={auto_record_data.oudr_hmdt_valu} '
+        f'CO2={auto_record_data.co2_valu} 수온={auto_record_data.watr_tprt_valu} '
+        f'조도={auto_record_data.ligt_level_valu} 수위={auto_record_data.watr_level_valu}'
     )
+
+    # LCD 갱신 — lcd is None (미장착) 또는 update 내부 실패 시 무영향 (no-op)
+    if lcd:
+        lcd.update(auto_record_data)
 
 def main_loop():
     if db is None:
@@ -170,6 +186,8 @@ def main_loop():
         except KeyboardInterrupt:
             if gpio:
                 gpio.cleanup_gpio()
+            if lcd:
+                lcd.close()
             logger.info('사용자에 의해 종료')
             break
         except Exception as e:
