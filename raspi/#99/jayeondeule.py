@@ -97,7 +97,9 @@ def get_each_sensor_value():
     logger.info(
         f'{auto_record_data.farm_id}-{auto_record_data.hous_id} '
         f'센서: 내부온도={auto_record_data.indr_tprt_valu} 내부습도={auto_record_data.indr_hmdt_valu} '
-        f'외부온도={auto_record_data.oudr_tprt_valu} CO2={auto_record_data.co2_valu} 수온={auto_record_data.watr_tprt_valu}'
+        f'외부온도={auto_record_data.oudr_tprt_valu} 외부습도={auto_record_data.oudr_hmdt_valu} '
+        f'CO2={auto_record_data.co2_valu} 수온={auto_record_data.watr_tprt_valu} '
+        f'조도={auto_record_data.ligt_level_valu} 수위={auto_record_data.watr_level_valu}'
     )
 
 def main_loop():

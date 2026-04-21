@@ -19,23 +19,55 @@ class SENSControl:
         self.house_id     = house_id
         self.gpio         = gpio
         
-        self.co2_sensor   = serial.Serial(sensor_config.SERIAL_PORT, sensor_config.BAUD_RATE, timeout=1)
-        self.device_files = [device_folder + '/w1_slave' for device_folder in sensor_config.DEVICE_FOLDERS]
-        
+        # CO2 센서 (UART) — 장치 미연결 시에도 나머지 센서는 살아나게 독립 방어
         try:
-            self.i2c    = busio.I2C(board.SCL, board.SDA)
-            time.sleep(0.2)
-            self.sensor = sht4x.SHT4x(self.i2c)
-            self.sensor.mode = sht4x.Mode.NOHEAT_HIGHPRECISION
-            print(f"SHT4x initialized. Serial: {self.sensor.serial_number}")
-        except ValueError as e:
-            print(f"[SHT4x 초기화 실패] - {e}")
-            self.sensor = None 
-                   
-        try:
-            self.bme280 = Adafruit_BME280_I2C(self.i2c, address=sensor_config.I2C_BME280_ADDRESS)
+            self.co2_sensor = serial.Serial(sensor_config.SERIAL_PORT, sensor_config.BAUD_RATE, timeout=1)
         except Exception as e:
-            print(f"[BME280 초기화 실패] - {e}")
+            logger.warning(f"[CO2 센서 초기화 실패] - {e}")
+            self.co2_sensor = None
+
+        # 1-Wire 수온 센서 디바이스 파일 경로
+        # [2026-04-22 수정] DEVICE_FOLDERS 는 sensor_config import 시점에 한번만 glob 됨.
+        # 부팅 직후 서비스가 1-Wire 커널 감지보다 먼저 실행되면 빈 리스트가 캐시되어
+        # "연결 안됨" 으로 고정되던 문제 방지 — 매 읽기마다 _rescan_ds18b20 으로 재검색.
+        self._rescan_ds18b20()
+
+    def _rescan_ds18b20(self):
+        """/sys/bus/w1/devices/ 를 런타임에 재스캔하여 self.device_files 를 갱신."""
+        import glob
+        folders = glob.glob(sensor_config.BASE_PATH + '28*')
+        self.device_files = [folder + '/w1_slave' for folder in folders]
+
+        # I2C 버스 공용 — SHT4x/BME280 둘 다 사용. 버스 자체 초기화 실패해도 계속 진행.
+        try:
+            self.i2c = busio.I2C(board.SCL, board.SDA)
+            time.sleep(0.2)
+        except Exception as e:
+            logger.warning(f"[I2C 버스 초기화 실패] - {e}")
+            self.i2c = None
+
+        # SHT45 — RuntimeError(CRC), OSError 등도 잡아 다른 센서와 독립시킴
+        # (ValueError 만 잡던 과거 버그로 SHT45 CRC 실패 시 SENSControl 전체가 죽어
+        #  BME280·CO2·수온까지 0.0 으로 표시되는 문제가 있었음)
+        if self.i2c is not None:
+            try:
+                self.sensor = sht4x.SHT4x(self.i2c)
+                self.sensor.mode = sht4x.Mode.NOHEAT_HIGHPRECISION
+                logger.info(f"SHT4x initialized. Serial: {self.sensor.serial_number}")
+            except Exception as e:
+                logger.warning(f"[SHT4x 초기화 실패] - {e}")
+                self.sensor = None
+        else:
+            self.sensor = None
+
+        # BME280 — 마찬가지로 독립 방어 (이미 Exception 범위)
+        if self.i2c is not None:
+            try:
+                self.bme280 = Adafruit_BME280_I2C(self.i2c, address=sensor_config.I2C_BME280_ADDRESS)
+            except Exception as e:
+                logger.warning(f"[BME280 초기화 실패] - {e}")
+                self.bme280 = None
+        else:
             self.bme280 = None
 
     #------------------------------------------------------------
@@ -77,6 +109,9 @@ class SENSControl:
     # CO2 농도 측정
     #-----------------------------------------------------------------------------
     def get_co2_now_val(self):
+        # CO2 센서 미연결 시 안전 반환 (초기화 실패 대응)
+        if self.co2_sensor is None:
+            return 0
         try:
             self.co2_sensor.write(b'\xFF\x01\x86\x00\x00\x00\x00\x00\x79')
             response = self.co2_sensor.read(9)
@@ -97,6 +132,9 @@ class SENSControl:
     # DS18B20 수온 센서 온도 측정
     #-----------------------------------------------------------------------------
     def get_water_temp_now_val(self):
+        # [2026-04-22] 부팅 직후 1-Wire 지연 감지 대응 — device_files 가 비어있으면 재스캔
+        if not self.device_files:
+            self._rescan_ds18b20()
         if not self.device_files:
             print("No DS18B20 sensor detected.")
             return 0
@@ -176,9 +214,12 @@ class SENSControl:
         except Exception:
             status["MH-Z19B (CO2)"] = False
         
+        # [2026-04-22] 부팅 직후 1-Wire 감지 지연에 대비해 상태 판정 시 재스캔
+        if not self.device_files:
+            self._rescan_ds18b20()
         status["DS18B20 (수온)"] = len(self.device_files) > 0
         
-        status["조도 센서"] = True
-        status["수위 센서"] = True    
+        status["조도 센서"] = None  # GPIO 디지털 — 연결 확인 불가
+        status["수위 센서"] = None  # GPIO 디지털 — 연결 확인 불가
         return status
     
