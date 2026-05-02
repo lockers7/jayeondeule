@@ -938,6 +938,76 @@ async def change_model(request: Request, _=Depends(verify_api_key)):
         except Exception as cache_err:
             logger.warning(f"[관리자] 모델 캐시 초기화 실패: {cache_err}")
 
+        # ─── ollama 강제 swap — 재시작 후 새 모델만 로드 ───
+        # 진행 중 LLM 호출이 keep_alive=-1 로 옛 모델 영구 상주를 계속 갱신하는
+        # race condition 회피. ollama 재시작으로 큐를 강제 비우고 .env 의 새 모델로
+        # 단일 로드 보장. sudo 비번은 user_m_info.sudo_passwd 에서 읽어 사용
+        # (사용자가 비번 변경 시 본 컬럼만 업데이트하면 즉시 반영).
+        try:
+            import subprocess, urllib.request, json as _json, time as _time
+            if old_model != new_model:
+                # DB 에서 sudo 비번 조회 (auth_lvel 가장 높은 사용자)
+                _sudo_pw = None
+                try:
+                    from agri_ai_core.src.postgresql.connection import db
+                    _conn = db._getconn()
+                    if _conn:
+                        try:
+                            with _conn.cursor() as _cur:
+                                _cur.execute("""
+                                    SELECT sudo_passwd FROM user_m_info
+                                    WHERE sudo_passwd IS NOT NULL AND dlte_yn='N'
+                                    ORDER BY auth_lvel DESC LIMIT 1
+                                """)
+                                _row = _cur.fetchone()
+                                if _row and _row[0]:
+                                    _sudo_pw = _row[0]
+                        finally:
+                            try: db._putconn(_conn)
+                            except Exception: pass
+                except Exception as _db_err:
+                    logger.warning(f"[관리자] sudo 비번 DB 조회 실패: {_db_err}")
+
+                # ollama 재시작 — NOPASSWD 우선 시도, 실패 시 DB 비번으로 sudo -S
+                try:
+                    if _sudo_pw:
+                        subprocess.run(
+                            ['sudo', '-S', '-p', '', '/usr/bin/systemctl', 'restart', 'ollama.service'],
+                            input=f'{_sudo_pw}\n', text=True,
+                            timeout=20, check=True,
+                            capture_output=True,
+                        )
+                        logger.info("[관리자] ollama 재시작 완료 (DB sudo 비번) — 옛 모델 강제 unload")
+                    else:
+                        subprocess.run(
+                            ['sudo', '-n', '/usr/bin/systemctl', 'restart', 'ollama.service'],
+                            timeout=20, check=True,
+                        )
+                        logger.info("[관리자] ollama 재시작 완료 (NOPASSWD) — 옛 모델 강제 unload")
+                except Exception as _e:
+                    logger.warning(f"[관리자] ollama 재시작 실패: {_e} — keep_alive 폴백 시도")
+                # 재시작 후 안정화 대기
+                _time.sleep(4)
+
+            # 새 모델 강제 load — keep_alive=-1 (영구 상주)
+            ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+            try:
+                req = urllib.request.Request(
+                    f"{ollama_url}/api/generate",
+                    data=_json.dumps({
+                        "model": new_model, "prompt": "hi", "stream": False,
+                        "options": {"num_predict": 3},
+                        "keep_alive": -1,
+                    }).encode(),
+                    headers={"Content-Type": "application/json"},
+                )
+                urllib.request.urlopen(req, timeout=240).read()
+                logger.info(f"[관리자] 새 모델 load 완료: {new_model}")
+            except Exception as _e:
+                logger.warning(f"[관리자] 새 모델 load 실패: {_e}")
+        except Exception as _swap_err:
+            logger.warning(f"[관리자] ollama swap 처리 실패: {_swap_err}")
+
         logger.info(f"[관리자] LLM 모델 변경: {old_model} → {new_model} (즉시 적용)")
         api_logger.info(f"[admin/models] 모델 변경: {old_model} → {new_model}")
 
@@ -950,6 +1020,193 @@ async def change_model(request: Request, _=Depends(verify_api_key)):
     except Exception as e:
         logger.error(f"모델 변경 실패: {e}")
         raise HTTPException(500, f"모델 변경 실패: {str(e)}")
+
+
+# ════════════════════════════════════════════════════════════════════
+# sudo 비밀번호 변경 — 시스템(Linux jayeondeule) + DB(user_m_info) 동기화
+# body: { "old_password":"...", "new_password":"..." }
+# 1. 현 sudo_passwd 검증 (DB 의 가장 높은 auth_lvel 사용자 row)
+# 2. 시스템 chpasswd 로 jayeondeule 계정 비번 변경 (현 sudo 비번으로 sudo -S)
+# 3. user_m_info.sudo_passwd 모든 관리자 row 업데이트
+# 두 가지를 단일 트랜잭션처럼 동기화 — 중간 실패 시 롤백 안내.
+# ════════════════════════════════════════════════════════════════════
+@app.post("/api/v1/admin/sudo-password")
+async def change_sudo_password(request: Request, _=Depends(verify_api_key)):
+    body = await request.json()
+    old_pw = (body.get("old_password") or "").strip()
+    new_pw = (body.get("new_password") or "").strip()
+
+    if not old_pw or not new_pw:
+        raise HTTPException(400, "old_password 와 new_password 가 필요합니다.")
+    if len(new_pw) < 8:
+        raise HTTPException(400, "new_password 는 8자 이상이어야 합니다.")
+
+    # (1) 현 sudo_passwd 검증
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+        conn = db._getconn()
+        if conn is None:
+            raise HTTPException(500, "DB 연결 실패")
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT user_id, sudo_passwd FROM user_m_info
+                    WHERE sudo_passwd IS NOT NULL AND dlte_yn='N'
+                    ORDER BY auth_lvel DESC LIMIT 1
+                """)
+                row = cur.fetchone()
+                if not row or not row[1]:
+                    raise HTTPException(400, "현 sudo 비밀번호가 DB 에 등록돼 있지 않습니다.")
+                current_sudo = row[1]
+        finally:
+            try: db._putconn(conn)
+            except Exception: pass
+
+        if old_pw != current_sudo:
+            raise HTTPException(401, "old_password 가 일치하지 않습니다.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"DB 검증 실패: {e}")
+
+    # (2) 시스템 jayeondeule 계정 비번 변경
+    # sudo -S 와 chpasswd input 을 bash -c + echo 로 분리 (단일 stdin 공유 시 부분 실패)
+    try:
+        import subprocess, shlex
+        cmd = f'echo {shlex.quote(f"jayeondeule:{new_pw}")} | /usr/sbin/chpasswd'
+        result = subprocess.run(
+            ['sudo', '-S', '-p', '', 'bash', '-c', cmd],
+            input=f'{old_pw}\n', text=True,
+            timeout=15, capture_output=True,
+        )
+        if result.returncode != 0:
+            err = result.stderr or result.stdout or 'unknown'
+            raise HTTPException(500, f"시스템 비밀번호 변경 실패: {err[:200]}")
+        logger.info("[관리자] 시스템 jayeondeule 비밀번호 변경 완료")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(500, "시스템 비밀번호 변경 timeout")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"시스템 비밀번호 변경 예외: {e}")
+
+    # (3) DB user_m_info.sudo_passwd 모든 관리자 row 업데이트
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+        conn = db._getconn()
+        if conn is None:
+            raise HTTPException(500, "DB 연결 실패 (시스템 비번은 이미 변경됨 — 수동 DB 갱신 필요)")
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE user_m_info SET sudo_passwd=%s
+                    WHERE sudo_passwd IS NOT NULL AND dlte_yn='N'
+                """, (new_pw,))
+                affected = cur.rowcount
+            conn.commit()
+        finally:
+            try: db._putconn(conn)
+            except Exception: pass
+        logger.info(f"[관리자] DB sudo_passwd {affected}건 업데이트 완료")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"DB 비밀번호 업데이트 실패: {e} (시스템 비번은 이미 변경됨)")
+
+    api_logger.info("[admin/sudo-password] sudo 비밀번호 변경 완료 (시스템+DB 동기화)")
+
+    return {
+        "success": True,
+        "message": "sudo 비밀번호 변경 완료 (시스템 + DB 동기화). 다음 모델 변경부터 새 비번 사용.",
+        "db_updated_rows": affected,
+    }
+
+
+# ════════════════════════════════════════════════════════════════════
+# sudo 비밀번호 강제 변경 — old_password 검증 없이 즉시 동기화
+# 사용처: Spring Boot UserService 가 사용자 관리 화면에서 admin 비번 변경 시
+# 시스템 jayeondeule 비번도 같이 변경하기 위해 호출. 외부 노출 금지 — Spring 만.
+# ════════════════════════════════════════════════════════════════════
+@app.post("/api/v1/admin/sudo-password/force")
+async def force_change_sudo_password(request: Request, _=Depends(verify_api_key)):
+    body = await request.json()
+    new_pw = (body.get("new_password") or "").strip()
+    if not new_pw:
+        raise HTTPException(400, "new_password 가 필요합니다.")
+    if len(new_pw) < 4:
+        raise HTTPException(400, "new_password 는 4자 이상이어야 합니다.")
+
+    # 현 sudo_passwd 조회 (chpasswd 의 sudo -S input 으로 사용)
+    current_sudo = None
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+        conn = db._getconn()
+        if conn is None:
+            raise HTTPException(500, "DB 연결 실패")
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT sudo_passwd FROM user_m_info
+                    WHERE sudo_passwd IS NOT NULL AND dlte_yn='N'
+                    ORDER BY auth_lvel DESC LIMIT 1
+                """)
+                row = cur.fetchone()
+                if row and row[0]:
+                    current_sudo = row[0]
+        finally:
+            try: db._putconn(conn)
+            except Exception: pass
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"DB 조회 실패: {e}")
+
+    if not current_sudo:
+        raise HTTPException(500, "현 sudo_passwd 가 DB 에 없음 — chpasswd 호출 불가")
+
+    # 시스템 jayeondeule 비번 변경
+    # sudo -S 의 stdin 비번 처리와 chpasswd input 을 bash -c + echo 로 분리.
+    # 한 stdin 으로 둘 다 받으면 chpasswd 가 sudo 비번 줄까지 user:pass 로 해석해 부분 실패.
+    try:
+        import subprocess, shlex
+        cmd = f'echo {shlex.quote(f"jayeondeule:{new_pw}")} | /usr/sbin/chpasswd'
+        result = subprocess.run(
+            ['sudo', '-S', '-p', '', 'bash', '-c', cmd],
+            input=f'{current_sudo}\n', text=True,
+            timeout=15, capture_output=True,
+        )
+        if result.returncode != 0:
+            err = result.stderr or result.stdout or 'unknown'
+            raise HTTPException(500, f"시스템 chpasswd 실패: {err[:200]}")
+        logger.info("[관리자/force] 시스템 jayeondeule 비번 변경 완료")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(500, "chpasswd timeout")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"chpasswd 예외: {e}")
+
+    # DB sudo_passwd 갱신
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+        conn = db._getconn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE user_m_info SET sudo_passwd=%s
+                    WHERE sudo_passwd IS NOT NULL AND dlte_yn='N'
+                """, (new_pw,))
+                affected = cur.rowcount
+            conn.commit()
+        finally:
+            try: db._putconn(conn)
+            except Exception: pass
+        logger.info(f"[관리자/force] DB sudo_passwd {affected}건 갱신")
+    except Exception as e:
+        raise HTTPException(500, f"DB 업데이트 실패: {e} (시스템 비번은 이미 변경됨)")
+
+    api_logger.info("[admin/sudo-password/force] 동기화 완료 (Spring → FastAPI)")
+    return {"success": True, "db_updated_rows": affected}
 
 
 # ════════════════════════════════════════════════════════════

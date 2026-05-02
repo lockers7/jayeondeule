@@ -43,6 +43,7 @@ def _call_llm(prompt: str, num_predict: int, timeout: int) -> str:
         "model": model_name,
         "prompt": prompt,
         "stream": False,
+        "keep_alive": -1,  # GPU 영구 상주 보장
         "options": {
             "temperature": 0.3,
             "num_predict": num_predict,

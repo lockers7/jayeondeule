@@ -63,6 +63,7 @@ export default function AiChatPage() {
     }, [isAdmin, isSysMonitor, globalSelectedFarm?.farmId]);
     const [speechStyle, setSpeechStyle] = useState(() => localStorage.getItem("ai_chat_speech_style") || "male");
     const [modelAlert, setModelAlert] = useState(null);
+    const [isModelChanging, setIsModelChanging] = useState(false);
     const fileInputRef = useRef(null);
     const contentRef = useRef(null);
     const abortControllerRef = useRef(null);
@@ -482,6 +483,8 @@ export default function AiChatPage() {
                     setSpeechStyle={setSpeechStyle}
                     modelAlert={modelAlert}
                     setModelAlert={setModelAlert}
+                    isModelChanging={isModelChanging}
+                    setIsModelChanging={setIsModelChanging}
                 />
                 <div ref={contentRef} style={{flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden"}}>
                     <ChatMessageList messages={messages}/>
@@ -489,7 +492,7 @@ export default function AiChatPage() {
                         value={currentInput}
                         onChange={setCurrentInput}
                         onSend={handleSend}
-                        isLoading={isLoading || !!ragLoading}
+                        isLoading={isLoading || !!ragLoading || isModelChanging}
                         farmName={selectedFarm?.farmName}
                         onStop={handleStop}
                     />

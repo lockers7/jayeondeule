@@ -360,6 +360,7 @@ def analyze_vision_llm(image_bytes: bytes, timeout: int = 60) -> str:
         "prompt": _VISION_PROMPT,
         "images": [b64],
         "stream": False,
+        "keep_alive": -1,  # GPU 영구 상주 보장
         "options": {"temperature": 0, "num_predict": 220},
     }
     logger.info(f"[AI카메라] Vision LLM 호출 model={model} url={base_url}")

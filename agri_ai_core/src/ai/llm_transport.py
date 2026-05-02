@@ -179,7 +179,8 @@ def _build_chat_payload(
         payload["options"] = options
     if tools:
         payload["tools"] = tools
-    payload["keep_alive"] = keep_alive or "-1"
+    # ollama 는 정수 -1 을 무한 keep_alive 로 해석. 문자열 "-1" 은 default 5분으로 fallback.
+    payload["keep_alive"] = keep_alive if keep_alive is not None else -1
     if think is not None:
         payload["think"] = think
     return payload

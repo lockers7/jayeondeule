@@ -15,6 +15,8 @@ export default function ChatSidebar({
     setSpeechStyle,
     modelAlert,
     setModelAlert,
+    isModelChanging,
+    setIsModelChanging,
 }) {
     const dispatch = useDispatch();
     const [farms, setFarms] = useState([]);
@@ -67,6 +69,14 @@ export default function ChatSidebar({
         const newModel = e.target.value;
         if (!newModel || newModel === currentModel) return;
 
+        // 변경 중 UX: 콤보박스 숨김 + 채팅 입력 비활성 + 안내 메시지
+        const oldModel = currentModel;
+        if (setIsModelChanging) setIsModelChanging(true);
+        setModelAlert({
+            variant: "info",
+            text: `모델을 변경 중 입니다. (${oldModel} → ${newModel}) 잠시만 기다려 주세요 !`,
+        });
+
         fetch("/ai-api/api/v1/admin/models", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -75,14 +85,16 @@ export default function ChatSidebar({
             .then((res) => res.json())
             .then((data) => {
                 if (data.success) {
-                    setCurrentModel(newModel);
-                    setModelAlert({ variant: "info", text: `모델이 '${newModel}'로 변경되었습니다. 다음 대화부터 적용됩니다.` });
+                    // 변경 완료 — 페이지 자동 새로고침 (콤보박스 + 채팅 정상 복귀)
+                    window.location.reload();
                 } else {
                     setModelAlert({ variant: "danger", text: `모델 변경 실패: ${data.detail || data.error || "알 수 없는 오류"}` });
+                    if (setIsModelChanging) setIsModelChanging(false);
                 }
             })
             .catch((err) => {
                 setModelAlert({ variant: "danger", text: `모델 변경 실패: ${err.message}` });
+                if (setIsModelChanging) setIsModelChanging(false);
             });
     };
 
@@ -239,32 +251,34 @@ export default function ChatSidebar({
                 대화 기록 삭제
             </Button>
 
-            {/* 관리자 전용: LLM 모델 선택 */}
+            {/* 관리자 전용: LLM 모델 선택 — 변경 중에는 콤보박스 숨김 */}
             {isAdmin && availableModels.length > 0 && (
                 <>
                     <hr />
-                    <Form.Group className="mb-2">
-                        <Form.Label style={{ fontWeight: "600", fontSize: "13px", color: "#D32F2F", marginBottom: "4px" }}>
-                            LLM 모델 ({userInfo?.userId || "Admin"})
-                        </Form.Label>
-                        <Form.Select
-                            size="sm"
-                            value={currentModel}
-                            onChange={handleModelChange}
-                            style={{ fontSize: "12px" }}
-                        >
-                            {availableModels.map((m) => (
-                                <option key={m.name} value={m.name}>
-                                    {m.name} ({m.parameter_size || "?"}/{m.size_gb}GB)
-                                </option>
-                            ))}
-                        </Form.Select>
-                    </Form.Group>
+                    {!isModelChanging && (
+                        <Form.Group className="mb-2">
+                            <Form.Label style={{ fontWeight: "600", fontSize: "13px", color: "#D32F2F", marginBottom: "4px" }}>
+                                LLM 모델 ({userInfo?.userId || "Admin"})
+                            </Form.Label>
+                            <Form.Select
+                                size="sm"
+                                value={currentModel}
+                                onChange={handleModelChange}
+                                style={{ fontSize: "12px" }}
+                            >
+                                {availableModels.map((m) => (
+                                    <option key={m.name} value={m.name}>
+                                        {m.name} ({m.parameter_size || "?"}/{m.size_gb}GB)
+                                    </option>
+                                ))}
+                            </Form.Select>
+                        </Form.Group>
+                    )}
                     {modelAlert && (
                         <Alert
                             variant={modelAlert.variant}
-                            dismissible
-                            onClose={() => setModelAlert(null)}
+                            dismissible={!isModelChanging}
+                            onClose={isModelChanging ? undefined : () => setModelAlert(null)}
                             style={{ fontSize: "12px", padding: "8px 10px", marginBottom: "0" }}
                         >
                             {modelAlert.text}

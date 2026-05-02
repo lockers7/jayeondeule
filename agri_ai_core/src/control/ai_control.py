@@ -671,6 +671,7 @@ def _call_llm(system_prompt, user_prompt):
         "model": model_name,
         "prompt": prompt,
         "stream": False,
+        "keep_alive": -1,  # GPU 영구 상주 보장 (정수 -1 = infinite)
         "options": {
             "temperature": 0,
             "num_predict": AI_CONTROL_NUM_PREDICT,   # 1500 (200 → 1500)

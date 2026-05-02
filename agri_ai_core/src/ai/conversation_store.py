@@ -253,6 +253,7 @@ class ConversationStore:
                     "model": model_name,
                     "prompt": prompt,
                     "stream": False,
+                    "keep_alive": -1,  # GPU 영구 상주 보장
                     "options": {"temperature": 0, "num_predict": 200},
                 },
                 timeout=20,

@@ -69,7 +69,7 @@ python_packages_upgrade.sh	 venv 의 모든 PyPI 패키지    venv pip check/upg
 chromadb_upgrade.sh         ChromaDB   venv pip + systemd chromadb             데이터 자동 백업
 ollama_upgrade.sh           Ollama     install.sh + systemd ollama             모델 데이터 보존
 postgresql_upgrade.sh	    PostgreSQL	apt + systemd postgresql                패치만 (메이저는 수동 안내)
-nginx_upgrade.sh            Nginx      apt + systemd nginx                     설정 보존 (--force-confold)
+nginx_upgrade.sh            Nginx      apt + systemd nginx           설정 보존 (--force-confold)
 nodejs_upgrade.sh	          Node.js    apt (NodeSource/distro/snap 자동 감지)  메이저는 setup_*.x 안내
 mcp_upgrade.sh	             (wrapper) —	아래 4개 일괄 호출
 mcp_postgres_upgrade.sh	    MCP @modelcontextprotocol/server-postgres          npx 캐시	

@@ -5,15 +5,24 @@ import com.jayeondeule.smartfarm.dto.user.*;
 import com.jayeondeule.smartfarm.entity.user.User;
 import com.jayeondeule.smartfarm.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class UserService {
@@ -22,6 +31,31 @@ public class UserService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final ObjectMapper mapper;
+
+    @Value("${agri-ai-core.base-url:http://127.0.0.1:8002}")
+    private String coreBaseUrl;
+
+    // ─────────────────────────────────────────────────────────
+    // [admin 비번 변경 시 시스템 jayeondeule 비번 + DB sudo_passwd 동기화]
+    // user_id='admin' 의 비번이 변경될 때만 호출.
+    // FastAPI /api/v1/admin/sudo-password/force 가 chpasswd + DB UPDATE 처리.
+    // 실패해도 user_m_info.passwd 변경은 그대로 유지 (best-effort).
+    // ─────────────────────────────────────────────────────────
+    private void syncSystemSudoPassword(String userId, String newPlainPasswd) {
+        if (!"admin".equals(userId)) return;  // admin user 만 동기화 대상
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            Map<String, Object> body = new HashMap<>();
+            body.put("new_password", newPlainPasswd);
+            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
+            String url = coreBaseUrl + "/api/v1/admin/sudo-password/force";
+            new RestTemplate().postForEntity(url, entity, Map.class);
+            log.info("[UserService] admin 비번 변경 → 시스템 jayeondeule + sudo_passwd 동기화 완료");
+        } catch (Exception e) {
+            log.warn("[UserService] 시스템 sudo 비번 동기화 실패 (admin 비번은 변경됨): {}", e.getMessage());
+        }
+    }
 
     //회원가입
     public boolean insertUser(UserInsertDTO signupInfo) {
@@ -96,6 +130,8 @@ public class UserService {
             String hashedNew = passwordEncoder.encode(passwordInfo.getNewPassword());
             target.changePassword(hashedNew);
             userRepository.save(target);
+            // admin 본인 비번 변경 시 시스템 sudo 동기화
+            syncSystemSudoPassword(userId, passwordInfo.getNewPassword());
             return true;
         }
 
@@ -113,6 +149,8 @@ public class UserService {
         if (modifiedInfo.getFarmId() != null) target.setFarmId(modifiedInfo.getFarmId());
         if (modifiedInfo.getPasswd() != null && !modifiedInfo.getPasswd().isBlank()) {
             target.changePassword(passwordEncoder.encode(modifiedInfo.getPasswd()));
+            // admin 비번 변경 시 시스템 sudo 동기화 (관리자 화면 경로)
+            syncSystemSudoPassword(userId, modifiedInfo.getPasswd());
         }
 
         userRepository.save(Objects.requireNonNull(target));
