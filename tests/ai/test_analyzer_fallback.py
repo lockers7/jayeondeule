@@ -24,30 +24,84 @@ from agri_ai_core.src.ai.pipeline.question_analyzer import _build_safe_fallback
 # ────────────────────────────────────────────────────────────────────
 class TestMonitorTimeBranch:
     def test_5min_monitoring(self):
+        # B 단계 보강: "5분 단위로 모니터링하라" 는 *등록 의도* — agent_subscribe
         p = _build_safe_fallback("1호 재배사를 5분 단위로 모니터링하라", 1, 1)
         assert p["question_type"] == "agent_monitor"
         tools = [d["tool"] for d in p["required_data"]]
-        assert "list_monitors" in tools
+        assert "agent_subscribe" in tools, \
+            f"등록 의도는 agent_subscribe 로 분기되어야 함 (got tools={tools})"
 
     def test_5min_monitoring_typo(self):
         # 실 사용자 쿼리 (2026-05-25 19:40) — "모티터링" 오타 + "5분단위"
         p = _build_safe_fallback("1호 재배사의 릴레이 세싱을 5분단위로 모티터링하고 결과 출력하라.", 1, 1)
-        assert p["question_type"] == "agent_monitor", \
-            f"오타 '모티터링' 도 agent_monitor 로 분기되어야 함 (got {p['question_type']})"
+        assert p["question_type"] == "agent_monitor"
 
     def test_1hour_monitoring(self):
         p = _build_safe_fallback("1시간 단위로 각 재배사 감시하라", 1, None)
         assert p["question_type"] == "agent_monitor"
+        # 시간 키워드 + 모니터링 → 등록 (agent_subscribe)
+        tools = [d["tool"] for d in p["required_data"]]
+        assert "agent_subscribe" in tools
 
     def test_jiyeobwa_keyword(self):
         # 사용자가 실제 19:48 보낸 쿼리 (오타 포함)
         p = _build_safe_fallback("지금부터 1시간 단위로각 재배사의 릴레이 제어 상태를 모니터링하고 요약해서 내게 설명하라", None, None)
-        assert p["question_type"] == "agent_monitor", \
-            f"실 사용자 쿼리가 agent_monitor 로 분기되어야 함 (got {p['question_type']})"
+        assert p["question_type"] == "agent_monitor"
 
     def test_overnight_watch(self):
         p = _build_safe_fallback("오늘 밤 재배사 지켜봐", 1, 1)
         assert p["question_type"] == "agent_monitor"
+
+
+# ────────────────────────────────────────────────────────────────────
+# B 단계 보강 — 등록/조회/취소/알림 세분화 fallback
+# ────────────────────────────────────────────────────────────────────
+class TestSubscriptionFallback:
+    def test_register_extracts_interval(self):
+        p = _build_safe_fallback("10분마다 1호기 모니터링하라", 1, 1)
+        tools = [d["tool"] for d in p["required_data"]]
+        assert "agent_subscribe" in tools
+        args = p["required_data"][0]["args"]
+        assert args["interval_min"] == 10
+
+    def test_register_hour_interval(self):
+        p = _build_safe_fallback("1시간마다 모니터링", 1, 1)
+        args = p["required_data"][0]["args"]
+        assert args["interval_min"] == 60
+
+    def test_list_subscriptions(self):
+        # 시간 키워드 없는 조회
+        p = _build_safe_fallback("내가 등록한 모니터링 뭐 있어?", 1, 1)
+        tools = [d["tool"] for d in p["required_data"]]
+        assert "list_agent_subscriptions" in tools
+
+    def test_list_subscriptions_alt(self):
+        p = _build_safe_fallback("구독 목록 보여줘", 1, 1)
+        tools = [d["tool"] for d in p["required_data"]]
+        assert "list_agent_subscriptions" in tools
+
+    def test_cancel_with_id(self):
+        p = _build_safe_fallback("id 5 구독 취소", 1, 1)
+        tools = [d["tool"] for d in p["required_data"]]
+        assert "cancel_agent_subscription" in tools
+        assert p["required_data"][0]["args"]["subscription_id"] == 5
+
+    def test_cancel_without_id_falls_to_list(self):
+        p = _build_safe_fallback("모니터링 취소해", 1, 1)
+        tools = [d["tool"] for d in p["required_data"]]
+        # id 없으면 list 먼저
+        assert "list_agent_subscriptions" in tools
+
+    def test_alert_query(self):
+        p = _build_safe_fallback("내 알림 있어?", 1, 1)
+        tools = [d["tool"] for d in p["required_data"]]
+        assert "get_pending_alerts" in tools
+
+    def test_register_clamps_too_small(self):
+        # 2분 → 최소 5분
+        p = _build_safe_fallback("2분마다 모니터링", 1, 1)
+        args = p["required_data"][0]["args"]
+        assert args["interval_min"] == 5
 
 
 # ────────────────────────────────────────────────────────────────────

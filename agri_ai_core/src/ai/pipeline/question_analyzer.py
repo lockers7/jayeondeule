@@ -161,12 +161,30 @@ def _validate_analysis(analysis):
 # fallback 키워드 패턴 — Ollama 503 등 LLM 분류 실패 시 합리적 분기
 # [2026-05-25 hotfix3] 기존 fallback 은 무조건 web_search → 농장 시스템에선
 # 부적절. 농장 키워드 매칭 시 farm_sensor / agent_monitor 로 분기.
+# [B 단계 보강] 등록/조회/취소 의도 세분화.
 # ────────────────────────────────────────────────────────────────────
 _MONITOR_TIME_RE = re.compile(
     # 모니터링 키워드 ↔ 시간/주기 키워드 양방향 매칭 (40자 윈도우)
     # "모[니티]터링" 으로 오타 "모티터링" 도 매칭 (2026-05-25 사용자 실 쿼리)
     r'(감시|지켜|모[니티]터링|관찰).{0,40}(시간|분|초|단위|마다|동안|밤|하루|이번주)|'
     r'(시간|분|초|단위|마다|동안|밤|하루|이번주|\d+\s*(시간|분)|매\s*시|매\s*분).{0,40}(감시|지켜|모[니티]터링|관찰|보고)',
+    re.IGNORECASE
+)
+# 구독 조회 — "내가 등록한", "구독", "목록", "뭐 있어"
+_SUB_LIST_RE = re.compile(
+    r'(등록|구독|예약).{0,15}(모[니티]터링|감시|있|뭐|목록|조회)|'
+    r'(모[니티]터링|감시|구독).{0,15}(목록|있어|있나|뭐|어떤|조회|보여)',
+    re.IGNORECASE
+)
+# 구독 취소 — "취소", "해제", "중지" + id 또는 모니터링
+_SUB_CANCEL_RE = re.compile(
+    r'(취소|해제|중지|중단|끊).{0,10}(모[니티]터링|감시|구독|id\s*\d+|\d+\s*번)|'
+    r'(모[니티]터링|감시|구독|id\s*\d+).{0,10}(취소|해제|중지|중단|끊)',
+    re.IGNORECASE
+)
+# 알림 조회 — "알림 있어", "알림 뭐"
+_ALERT_QUERY_RE = re.compile(
+    r'(알림|소식|결과|보고).{0,10}(있|뭐|어떤|받았|왔어|확인|보여)',
     re.IGNORECASE
 )
 _FARM_SENSOR_RE = re.compile(
@@ -194,19 +212,89 @@ def _build_safe_fallback(query, farm_id, house_id):
     now = datetime.now()
     q = (query or "").strip()
 
-    # 1) 모니터링 + 시간 키워드 → agent_monitor
-    if q and _MONITOR_TIME_RE.search(q):
+    # 1-a) 구독 취소 → cancel_agent_subscription (id 명시되어야 의미. 없으면 list 부터)
+    if q and _SUB_CANCEL_RE.search(q):
+        # id N 형태 추출
+        import re as _re
+        m_id = _re.search(r'(?:id\s*|구독\s*|모[니티]터링\s*)(\d+)', q, _re.IGNORECASE)
+        if m_id:
+            return {
+                "question_type": "agent_monitor",
+                "intent": q[:100],
+                "required_data": [
+                    {"tool": "cancel_agent_subscription",
+                     "args": {"subscription_id": int(m_id.group(1))},
+                     "priority": 1,
+                     "reason": "LLM 503 fallback — 취소 키워드 + id 추출"},
+                ],
+                "data_freshness": "any",
+                "answer_format": "text",
+                "multi_house": False, "house_ids": [],
+            }
+        # id 없으면 목록부터 보여줘서 사용자 지목 유도
         return {
             "question_type": "agent_monitor",
             "intent": q[:100],
             "required_data": [
-                {"tool": "list_monitors", "args": {}, "priority": 1,
-                 "reason": "LLM 503 fallback — 모니터링 키워드 + 시간 표현 매칭"},
+                {"tool": "list_agent_subscriptions", "args": {},
+                 "priority": 1, "reason": "LLM 503 fallback — 취소 의도 but id 미명시"},
             ],
             "data_freshness": "realtime",
             "answer_format": "text",
-            "multi_house": False,
-            "house_ids": [],
+            "multi_house": False, "house_ids": [],
+        }
+
+    # 1-b) 알림 조회 → get_pending_alerts
+    if q and _ALERT_QUERY_RE.search(q):
+        return {
+            "question_type": "agent_monitor",
+            "intent": q[:100],
+            "required_data": [
+                {"tool": "get_pending_alerts",
+                 "args": {"limit": 10, "mark_read": True},
+                 "priority": 1, "reason": "LLM 503 fallback — 알림 조회 키워드"},
+            ],
+            "data_freshness": "realtime",
+            "answer_format": "text",
+            "multi_house": False, "house_ids": [],
+        }
+
+    # 1-c) 구독 목록 조회 → list_agent_subscriptions
+    if q and _SUB_LIST_RE.search(q):
+        return {
+            "question_type": "agent_monitor",
+            "intent": q[:100],
+            "required_data": [
+                {"tool": "list_agent_subscriptions", "args": {},
+                 "priority": 1, "reason": "LLM 503 fallback — 구독 조회 키워드"},
+            ],
+            "data_freshness": "realtime",
+            "answer_format": "text",
+            "multi_house": False, "house_ids": [],
+        }
+
+    # 1-d) 등록 — 시간 + 모니터링 키워드 → agent_subscribe (간격 추출)
+    if q and _MONITOR_TIME_RE.search(q):
+        import re as _re
+        m_interval = _re.search(r'(\d+)\s*(시간|분)', q)
+        interval_min = 60
+        if m_interval:
+            n = int(m_interval.group(1))
+            interval_min = n * 60 if m_interval.group(2) == '시간' else n
+            interval_min = max(5, min(interval_min, 1440))
+        fid = int(farm_id) if farm_id else 1
+        return {
+            "question_type": "agent_monitor",
+            "intent": q[:100],
+            "required_data": [
+                {"tool": "agent_subscribe",
+                 "args": {"task": q[:200], "interval_min": interval_min, "farm_id": fid},
+                 "priority": 1,
+                 "reason": "LLM 503 fallback — 모니터링 등록 (시간 키워드 매칭)"},
+            ],
+            "data_freshness": "realtime",
+            "answer_format": "text",
+            "multi_house": False, "house_ids": [],
         }
 
     # 2) 농장 센서/릴레이/제어 키워드 → farm_sensor
