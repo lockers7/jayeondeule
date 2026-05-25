@@ -76,6 +76,25 @@ AGENT_LOOP_REPEAT_LIMIT = 3   # 같은 (tool, args) N회 연속 시 loop 감지
 # 반환: assistant 의 content 문자열 (또는 None on error).
 # ────────────────────────────────────────────────────────────────────
 def _call_llm(messages: List[Dict[str, str]], json_format: bool = True) -> Optional[str]:
+    # [2026-05-25] LLM_BACKEND=vllm 일 때 vLLM 으로 위임 — default ollama 유지.
+    try:
+        from agri_ai_core.src.ai import llm_backend_vllm as _vllm
+        if _vllm.is_enabled():
+            t0 = time.time()
+            try:
+                opts = {"num_predict": 800, "num_ctx": 16384}
+                if json_format:
+                    opts["format"] = "json"
+                resp = _vllm.vllm_chat(model=AGENT_LLM_MODEL, messages=messages, options=opts)
+                content = (resp.get("message") or {}).get("content")
+                elapsed = time.time() - t0
+                logger.info(f"[Agent LLM] 응답 backend=vllm ({elapsed:.1f}s, {len(content or '')}자)")
+                return content
+            except Exception as e:
+                logger.error(f"[Agent LLM] vLLM 실패 — ollama 폴백: {e}")
+    except Exception:
+        pass
+
     payload = {
         "model": AGENT_LLM_MODEL,
         "messages": messages,

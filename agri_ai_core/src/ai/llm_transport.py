@@ -467,6 +467,31 @@ def _ollama_chat(
     tools: list = None,
     keep_alive: str = None,
 ):
+    # [2026-05-25] LLM_BACKEND=vllm 일 때 vLLM OpenAI 호환 API 로 위임.
+    # default LLM_BACKEND='ollama' → 아래 기존 흐름 그대로 (회귀 영향 0).
+    try:
+        from agri_ai_core.src.ai import llm_backend_vllm as _vllm_backend
+        if _vllm_backend.is_enabled():
+            think_value = None
+            opts = dict(options or {})
+            if "think" in opts:
+                think_value = opts.pop("think")
+            t0 = time.time()
+            try:
+                result = _vllm_backend.vllm_chat(
+                    model=model, messages=messages,
+                    options=opts, tools=tools,
+                    keep_alive=keep_alive, think=think_value,
+                )
+                elapsed = time.time() - t0
+                logger.info(f"[LLM] backend=vllm ({elapsed:.1f}s)")
+                return result
+            except Exception as e:
+                logger.error(f"[LLM] vllm 호출 실패 — ollama 폴백: {e}")
+                # vLLM 실패 시 ollama 흐름으로 폴백 (안전망)
+    except Exception:
+        pass
+
     think_value = None
     if options and "think" in options:
         think_value = options.pop("think")

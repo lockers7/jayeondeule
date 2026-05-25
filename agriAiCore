@@ -25,6 +25,7 @@ API_PID="$PID_DIR/api.pid"
 SCHEDULER_PID="$PID_DIR/scheduler.pid"
 AGENT_PID="$PID_DIR/agent_monitor.pid"  # Agent Monitor (Phase 2, 16번)
 AGENT_WORKER_PID="$PID_DIR/agent_pending_worker.pid"  # Agent Pending Worker (Phase 3, 17번)
+# 18번 vLLM 은 systemd unit 직접 — PID 파일 불필요 (systemctl 로 관리)
 
 # 색상 정의
 RED='\033[0;31m'
@@ -415,6 +416,32 @@ agent_worker_restart() {
     agent_worker_stop
     sleep 1
     agent_worker_start
+}
+
+# --- vLLM (Ollama 대체 옵션, 2026-05-25 신규) ---
+# systemd 직접 관리. .env 의 LLM_BACKEND=vllm 일 때 효과.
+vllm_start() {
+    log_msg "${BLUE}[vLLM]${NC} 시작 중 (systemd)..."
+    if ! systemctl list-unit-files vllm.service 2>/dev/null | grep -q vllm.service; then
+        log_msg "${RED}[vLLM]${NC} unit 미배포 — 먼저 bash setup/vllm_install.sh 실행"
+        return 1
+    fi
+    sudo systemctl start vllm.service && \
+        log_msg "${GREEN}[vLLM]${NC} 시작 명령 송출 (로드 60~180s)" || \
+        log_msg "${RED}[vLLM]${NC} 시작 실패"
+}
+
+vllm_stop() {
+    log_msg "${BLUE}[vLLM]${NC} 종료 중..."
+    sudo systemctl stop vllm.service && \
+        log_msg "${GREEN}[vLLM]${NC} 종료 완료" || \
+        log_msg "${YELLOW}[vLLM]${NC} 종료 신호 송출 (이미 정지 가능)"
+}
+
+vllm_restart() {
+    vllm_stop
+    sleep 1
+    vllm_start
 }
 
 # --- FastAPI ---
@@ -1116,6 +1143,14 @@ show_status() {
     check_status "Agent Monitor" pid_file "$AGENT_PID"
     printf "  %-4s %-16s %-8s " "17" "Agent Worker" "-"
     check_status "Agent Worker" pid_file "$AGENT_WORKER_PID"
+    printf "  %-4s %-16s %-8s " "18" "vLLM (선택)" "8001"
+    if systemctl is-active vllm.service >/dev/null 2>&1; then
+        echo -e "${GREEN}● 실행 중${NC}"
+    elif systemctl list-unit-files vllm.service 2>/dev/null | grep -q vllm.service; then
+        echo -e "${YELLOW}○ 중지${NC} (LLM_BACKEND 미사용)"
+    else
+        echo -e "${YELLOW}○ 미설치${NC}"
+    fi
     echo -e "  ──────────────────────────────────────────────────────"
     echo ""
 }
@@ -1143,6 +1178,7 @@ show_menu() {
     echo -e "  ${CYAN}15${NC}. ChromaFlow Studio (운영 ChromaDB GUI Docker, 127.0.0.1:5000)"
     echo -e "  ${CYAN}16${NC}. Agent Monitor    (30분 cron ReAct daemon — Phase 2)"
     echo -e "  ${CYAN}17${NC}. Agent Worker     (30초 취소 큐 → 실제 실행 — Phase 3)"
+    echo -e "  ${CYAN}18${NC}. vLLM (선택)      (Ollama 대체 LLM 서버, port 8001)"
     echo ""
     echo -n -e "  번호 입력 (q=종료): "
 }
@@ -1293,6 +1329,25 @@ execute_service() {
                 logs)    tail -n 100 -f "$LOG_DIR/agent_pending_worker.log" ;;
             esac
             ;;
+        18) # vLLM — Ollama 대체 LLM 서버 (선택, 2026-05-25)
+            case "$action" in
+                start)   vllm_start ;;
+                stop)    vllm_stop ;;
+                restart) vllm_restart ;;
+                status)
+                    printf "  vLLM: "
+                    if systemctl is-active vllm.service >/dev/null 2>&1; then
+                        echo -e "${GREEN}● 실행 중${NC} (port ${VLLM_PORT:-8001})"
+                    else
+                        if systemctl list-unit-files vllm.service 2>/dev/null | grep -q vllm.service; then
+                            echo -e "${RED}○ 중지${NC} (unit 배포됨)"
+                        else
+                            echo -e "${YELLOW}○ 미설치${NC} — setup/vllm_install.sh 실행"
+                        fi
+                    fi ;;
+                logs)    journalctl -u vllm.service -n 100 --no-pager -f ;;
+            esac
+            ;;
         10) # Web Build (농장관리 React + Spring Boot)
             case "$action" in
                 start|restart) web_build ;;
@@ -1359,6 +1414,7 @@ usage() {
     echo -e "   15. ChromaFlow      (운영 ChromaDB GUI Docker — 127.0.0.1:5000)"
     echo -e "   16. Agent Monitor   (30분 cron ReAct daemon — Phase 2)"
     echo -e "   17. Agent Worker    (30초 취소 큐 → 실제 실행 — Phase 3)"
+    echo -e "   18. vLLM (선택)     (Ollama 대체 LLM 서버, port 8001)"
     echo ""
     echo -e "  ${BOLD}예시:${NC}"
     echo -e "    agriAiCore restart        # 메뉴에서 서비스 선택"
@@ -1437,7 +1493,7 @@ if [ "$choice" = "q" ] || [ "$choice" = "Q" ]; then
     exit 0
 fi
 
-if ! [[ "$choice" =~ ^(0|00|[0-9]|1[0-7])$ ]]; then
+if ! [[ "$choice" =~ ^(0|00|[0-9]|1[0-8])$ ]]; then
     echo -e "  ${RED}잘못된 입력입니다.${NC}"
     exit 1
 fi

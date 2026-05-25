@@ -1111,6 +1111,28 @@ def _call_llm(system_prompt, user_prompt):
     model_name = get_model_name()
     prompt = system_prompt + "\n\n" + user_prompt
 
+    # [2026-05-25] LLM_BACKEND=vllm 일 때 vLLM 으로 위임 — default ollama 유지.
+    try:
+        from agri_ai_core.src.ai import llm_backend_vllm as _vllm
+        if _vllm.is_enabled():
+            t0 = time.time()
+            try:
+                resp = _vllm.vllm_generate(
+                    model=model_name, prompt=prompt,
+                    options={"temperature": 0,
+                             "num_predict": AI_CONTROL_NUM_PREDICT,
+                             "num_ctx": AI_CONTROL_NUM_CTX},
+                    format=RELAY_RESPONSE_SCHEMA,
+                )
+                response_text = resp.get("response", "") or ""
+                elapsed = time.time() - t0
+                logger.info(f"[AI제어] LLM 응답 backend=vllm ({elapsed:.1f}s, format=schema): {response_text[:200]}")
+                return response_text
+            except Exception as e:
+                logger.error(f"[AI제어] vLLM 호출 실패 — ollama 폴백: {e}")
+    except Exception:
+        pass
+
     base_payload = {
         "model": model_name,
         "prompt": prompt,

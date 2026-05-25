@@ -1,0 +1,52 @@
+[Unit]
+Description=vLLM OpenAI-compatible LLM server (Ollama alternative)
+Documentation=file:///workspace/jayeondeule/docs/dev_agent.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=jayeondeule
+Group=jayeondeule
+WorkingDirectory=/workspace/jayeondeule
+EnvironmentFile=-/workspace/jayeondeule/.env
+
+# 기본값 — .env 에서 override 가능
+Environment=VLLM_PORT=8001
+Environment=VLLM_MODEL=google/gemma-3-27b-it
+Environment=VLLM_MODEL_DIR=/workspace/jayeondeule/.vllm_models
+Environment=VLLM_MAX_MODEL_LEN=16384
+Environment=VLLM_GPU_MEMORY_UTILIZATION=0.85
+Environment=VLLM_QUANTIZATION=
+Environment=VLLM_TENSOR_PARALLEL=1
+
+# OpenAI-호환 server 진입점.
+#   --quantization 은 awq / gptq 등 (양자화 모델 사용 시).
+#   --max-model-len 은 num_ctx 와 매핑 (16384).
+#   --gpu-memory-utilization 은 VRAM 사용 비율 (RTX 5060 Ti 16GB 환경 0.85 권장).
+ExecStart=/workspace/jayeondeule/venv/bin/python -m vllm.entrypoints.openai.api_server \
+  --host 127.0.0.1 \
+  --port ${VLLM_PORT} \
+  --model ${VLLM_MODEL} \
+  --download-dir ${VLLM_MODEL_DIR} \
+  --max-model-len ${VLLM_MAX_MODEL_LEN} \
+  --gpu-memory-utilization ${VLLM_GPU_MEMORY_UTILIZATION} \
+  --tensor-parallel-size ${VLLM_TENSOR_PARALLEL} \
+  --served-model-name gemma3:27b
+
+# 모델 로드 시간 (gemma3:27b 첫 startup 60~180초)
+TimeoutStartSec=300
+TimeoutStopSec=60
+KillSignal=SIGTERM
+
+Restart=on-failure
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vllm
+
+[Install]
+WantedBy=multi-user.target
