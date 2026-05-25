@@ -273,6 +273,34 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
             }, ensure_ascii=False, indent=2),
         )
 
+        # [1.5] [2026-05-26 hotfix] fast_classify=greeting 빠른 우회
+        # _GREETING_RE 매칭 = 농장 컨텍스트 불필요한 일상 인사 (사용자 룰 예외 허용 범위).
+        # load_hybrid_context (ChromaDB 임베딩) 가 5분 hang 발생 사례 (bge-m3 첫 로드 VRAM swap).
+        # 이 분기는 *극히 명확한 인사 패턴만* 우회 — 그 외 질문은 모두 ANALYZER+MCP 흐름.
+        try:
+            from agri_ai_core.src.ai.pipeline.question_analyzer import fast_classify
+            from agri_ai_core.src.ai.pipeline.answer_generator import _greeting_quick_response
+            if fast_classify(user_query) == "greeting":
+                text = _greeting_quick_response(user_query, farm_name, speech_style)
+                logger.info(f"[스트리밍] greeting 우회 (load_hybrid_context skip) — {text[:40]!r}")
+                yield {"type": "status", "content": "답변을 생성하고 있습니다..."}
+                for chunk in _split_for_streaming(text):
+                    yield {"type": "token", "content": chunk}
+                yield {
+                    "type": "done",
+                    "session_id": session_id,
+                    "sources": [], "tools_used": [], "response_type": "greeting",
+                    "tool_calls_detail": [],
+                    "elapsed_sec": round((datetime.now() - start_time).total_seconds(), 1),
+                }
+                try:
+                    save_conversation_turn_hybrid(session_id, user_query, text, farm_id, label="스트리밍·greeting][")
+                except Exception:
+                    pass
+                return
+        except Exception as _e:
+            logger.debug(f"[스트리밍] greeting 우회 실패 (정상 흐름 계속): {_e}")
+
         full_query = user_query
         default_tool_args = _build_default_tool_args(user_query, farm_id, house_id, auth_farm_id=auth_farm_id)
 

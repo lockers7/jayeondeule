@@ -240,9 +240,43 @@ def _format_collected_data(collected_result):
 
 
 # ══════════════════════════
+# 인사 — LLM 호출 없는 정형 응답 (2026-05-26 hotfix)
+# Ollama 가 환경제어/agent 사이클 처리 중이면 LLM 큐 대기로 응답 hang.
+# 인사는 정형 응답으로 즉시 반환해 사용자 체감 응답 시간 ↓.
+# ══════════════════════════
+def _greeting_quick_response(user_query, farm_name, speech_style):
+    from datetime import datetime
+    q = (user_query or "").strip()
+    farm_part = f"{farm_name} 농장의 AI 도우미입니다. " if farm_name else ""
+    h = datetime.now().hour
+    tod = "아침" if 5 <= h < 11 else "낮" if 11 <= h < 18 else "저녁" if 18 <= h < 22 else "밤"
+
+    qlow = q.lower().replace(" ", "")
+    if any(t in qlow for t in ['감사', '고마', 'thank']):
+        return "감사합니다. 도움이 됐다니 다행입니다."
+    if any(t in qlow for t in ['수고', '잘자', '잘있어', 'bye', '안녕히']):
+        return "네, 수고하세요. 농장 안전 우선으로 잘 살펴드리겠습니다."
+    if any(t in qlow for t in ['좋은아침', '굿모닝', 'morning']):
+        return f"좋은 아침입니다. {farm_part}무엇을 도와드릴까요?"
+    if any(t in qlow for t in ['좋은하루', '좋은저녁', '좋은밤', '잘지내']):
+        return f"좋은 {tod} 보내세요. {farm_part}무엇을 도와드릴까요?"
+    # 일반 인사 (안녕/hi/hello 등)
+    if speech_style == 'female':
+        return f"안녕하세요~ {farm_part}무엇을 도와드릴까요?"
+    return f"안녕하세요. {farm_part}무엇을 도와드릴까요?"
+
+
+# ══════════════════════════
 # 인사/대화참조 등 단순 응답
 # ══════════════════════════
 def _generate_simple_response(user_query, conversation_history, farm_name, speech_style, response_type):
+    # [2026-05-26 hotfix] greeting 은 LLM 우회 — Ollama 큐 점유 시 hang 방지
+    if response_type == "greeting":
+        from agri_ai_core.src.ai.llm_client import _build_structured_result
+        text = _greeting_quick_response(user_query, farm_name, speech_style)
+        logger.info(f"[3단계] greeting 즉시응답 (LLM 우회) — {text[:40]!r}")
+        return _build_structured_result(text, [], [])
+
     try:
         from agri_ai_core.src.ai.llm_client import (
             _ollama_chat, _get_model_name, _extract_message_content,
