@@ -216,13 +216,18 @@ def get_thresholds(farm: int, house: int) -> Dict[str, Any]:
     try:
         from agri_ai_core.src.postgresql.connection import db_session
         with db_session() as db:
+            # [2026-05-25 hotfix] sensor_m_setting 은 (farm_id, hous_id, setn_dttm) PK 로
+            # 같은 호기에 여러 row 누적. ORDER BY 없이 LIMIT 하면 임의 옛 row 가 선택되어
+            # LLM 이 잘못된 임계값으로 판단 (1호기 water_heater 오작동 사례 2026-05-25).
+            # 최신 setn_dttm 한 건만 잡도록 명시.
             rows = db.fetch_all(
                 "SELECT tprt_min, tprt_otml, tprt_max, tprt_crit_min, tprt_crit_max,"
                 " hmdt_min, hmdt_otml, hmdt_max, hmdt_crit_min, hmdt_crit_max,"
                 " co2_min, co2_otml, co2_max, co2_crit_max,"
                 " watr_tprt_min, watr_tprt_otml, watr_tprt_max, watr_tprt_crit_min, watr_tprt_crit_max,"
                 " bud_tprt_min, bud_tprt_max "
-                "FROM sensor_m_setting WHERE farm_id=%s AND hous_id=%s",
+                "FROM sensor_m_setting WHERE farm_id=%s AND hous_id=%s "
+                "ORDER BY setn_dttm DESC LIMIT 1",
                 (farm, house),
             )
         if not rows:
