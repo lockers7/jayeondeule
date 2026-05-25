@@ -270,13 +270,10 @@ def _greeting_quick_response(user_query, farm_name, speech_style):
 # 인사/대화참조 등 단순 응답
 # ══════════════════════════
 def _generate_simple_response(user_query, conversation_history, farm_name, speech_style, response_type):
-    # [2026-05-26 hotfix] greeting 은 LLM 우회 — Ollama 큐 점유 시 hang 방지
-    if response_type == "greeting":
-        from agri_ai_core.src.ai.llm_client import _build_structured_result
-        text = _greeting_quick_response(user_query, farm_name, speech_style)
-        logger.info(f"[3단계] greeting 즉시응답 (LLM 우회) — {text[:40]!r}")
-        return _build_structured_result(text, [], [])
-
+    # [2026-05-26 hotfix5+] 사용자 절대 룰 — ANALYZER LLM 이 greeting 으로 분류한
+    # 케이스 (애매한 자연어, 예: "안녕.. 오늘 날씨는?") 까지 키워드 응답하면 안 됨.
+    # query_handler_simple 의 fast_classify (단독 일상 인사) 만 키워드 우회 허용.
+    # 여기는 ANALYZER 결과로 진입한 케이스 → 모두 LLM 합성으로 답변.
     try:
         from agri_ai_core.src.ai.llm_client import (
             _ollama_chat, _get_model_name, _extract_message_content,

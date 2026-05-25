@@ -7,15 +7,17 @@
 from unittest.mock import patch
 
 
-def test_greeting_does_not_call_llm():
-    """greeting 분기는 _ollama_chat 호출 안 함."""
-    from agri_ai_core.src.ai.pipeline.answer_generator import _generate_simple_response
-    with patch("agri_ai_core.src.ai.llm_client._ollama_chat") as oc:
-        r = _generate_simple_response(
-            "안녕 ?", [], "자연들에", "male", "greeting")
-    oc.assert_not_called()
-    assert r["response"]
-    assert "안녕" in r["response"] or "도우미" in r["response"]
+def test_generate_simple_response_greeting_now_calls_llm():
+    """[hotfix5+] ANALYZER 가 greeting 분류한 케이스도 LLM 합성 — 사용자 룰.
+    키워드 우회는 query_handler_simple 의 fast_classify 분기에서만 적용."""
+    from agri_ai_core.src.ai.pipeline import answer_generator
+    # _ollama_chat 호출 여부만 검증 — 실제 응답 mock
+    fake_resp = {"message": {"content": "안녕하세요! 도와드리겠습니다."}}
+    with patch("agri_ai_core.src.ai.llm_client._ollama_chat", return_value=fake_resp) as oc:
+        r = answer_generator._generate_simple_response(
+            "안녕.. 오늘 날씨는 어떨것 같아?", [], "자연들에", "male", "greeting")
+    # 이제는 _ollama_chat 호출됨 (LLM 합성)
+    oc.assert_called_once()
 
 
 def test_conversation_ref_still_calls_llm():
