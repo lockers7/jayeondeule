@@ -1,0 +1,41 @@
+[Unit]
+Description=AgriAI Monitoring Agent (ReAct cron daemon, Phase 2)
+Documentation=file:///workspace/jayeondeule/docs/dev_agent.md
+After=network-online.target ollama.service postgresql.service
+Wants=network-online.target
+# Ollama / PostgreSQL 가 준비되지 않으면 agent 가 의미 없음 — 종속 표시
+Requires=ollama.service postgresql.service
+# 재시작 빈도 제한 ([Unit] section 에 위치해야 systemd 가 인식)
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=jayeondeule
+Group=jayeondeule
+WorkingDirectory=/workspace/jayeondeule
+EnvironmentFile=/workspace/jayeondeule/.env
+
+# 환경 변수 — agent_scheduler.py 의 기본값을 명시 (운영자가 .env 로 덮어쓰기 가능)
+Environment=AGENT_INTERVAL_MIN=30
+Environment=AGENT_FARM_IDS=1
+Environment=AGENT_INITIAL_DELAY=60
+
+# venv Python 으로 모듈 실행
+ExecStart=/workspace/jayeondeule/venv/bin/python -m agri_ai_core.src.control.agent_scheduler
+
+# 우아한 종료: SIGTERM → _STOP=True → 다음 cycle 후 종료. 한 cycle 이 LLM 호출 8회 * 60s = 8분 가능.
+KillSignal=SIGTERM
+TimeoutStopSec=600
+
+# 재시작 정책 — 실패해도 5초 후 자동 복구 (빈도 제한은 [Unit] 의 StartLimit*)
+Restart=on-failure
+RestartSec=5
+
+# 로그 — journald + 파일 보조
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agent_monitor
+
+[Install]
+WantedBy=multi-user.target

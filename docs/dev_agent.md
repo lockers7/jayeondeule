@@ -492,6 +492,10 @@ git tag "agent_phase<N>_$(date +%Y%m%d)"
 | 날짜 | 작성자 | 변경 |
 |---|---|---|
 | 2026-05-25 12:18 | initial | 문서 신설. baseline commit `a31dc70` + tag `baseline_agent_20260525` 기록 |
+| 2026-05-25 | Claude | **Phase 1 완료**. `tools_agent_read.py` (5 도구) + `ai_monitor_agent.py` (ReAct loop) + `AGENT_MONITOR_SYSTEM` 프롬프트. pytest 17+23 PASS. gemma3 PoC 2/3 성공 (2-step 90s, 3-step 88s). |
+| 2026-05-25 | Claude | **Phase 2.1~2.3 완료**. migration `005_agent_decision_log.sql` 적용. `_persist_agent_log()` DB 영속 (commit 패턴 정정). `agent_scheduler.py` 30분 cron 데몬. pytest 58 PASS (tools 17 + monitor 26 + scheduler 15). |
+| 2026-05-25 | Claude | **Phase 2.4 완료**. `setup/system-configs/systemd/agent_monitor.service` 신설 (Type=simple daemon, Requires=ollama+postgresql, Restart=on-failure). `agriAiCore` 스크립트 16번 서비스 통합 (수동만 — ALL/APP 자동 시작 미포함). `bash -n` + `systemd-analyze verify` 통과. |
+| 2026-05-25 | Claude | **Phase 2.5 완료**. 단축 cron 1사이클 (`AGENT_INTERVAL_MIN=1`) 실측: 13:04:00 cycle 시작 → 13:06:43 완료 (163.1s, gemma3 LLM 8회, 도구 7회 — `get_sensor_window×3, get_thresholds×3, compare_houses×1`). `agent_decision_log` id=16 INSERT 검증 완료 (trigger=schedule, success=true, model=gemma3:27b). 두번째 사이클 13:07:00 자동 진행 후 SIGTERM 우아한 종료. |
 
 다음 phase 진행 시 이 표에 추가:
 - 진행자 (Claude / 사용자) / 변경 요약 / commit hash·tag

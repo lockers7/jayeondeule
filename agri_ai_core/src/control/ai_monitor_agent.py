@@ -181,15 +181,83 @@ def build_system_prompt(max_steps: int = AGENT_MAX_STEPS) -> str:
 
 
 # ════════════════════════════════════════════════════════════════════
+# DB 영속 — agent_decision_log INSERT
+# ════════════════════════════════════════════════════════════════════
+
+# ────────────────────────────────────────────────────────────────────
+# 통계 산출 + DB 기록. 실패해도 agent 결과는 그대로 반환 (DB 가 죽어도 운영 영향 X).
+# 반환: INSERT 된 id (또는 None on error).
+# ────────────────────────────────────────────────────────────────────
+def _persist_agent_log(result: Dict[str, Any], task: str, farm_id: int,
+                       trigger_type: str = "user") -> Optional[int]:
+    # [2026-05-01 패턴 준수] db_session().fetch_all(INSERT...RETURNING) 은 commit 안 됨 —
+    # ai_decision_log.record_decision 과 동일한 _getconn() + execute + commit 패턴 사용.
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+        from psycopg2.extras import RealDictCursor
+
+        steps = result.get("steps", [])
+        llm_calls = len(steps)
+        tool_counts: Dict[str, int] = {}
+        for h in steps:
+            t = h.get("tool")
+            if t:
+                tool_counts[t] = tool_counts.get(t, 0) + 1
+
+        vals = (
+            trigger_type, farm_id, task,
+            json.dumps(steps, ensure_ascii=False, default=str),
+            result.get("final"),
+            bool(result.get("success", False)),
+            result.get("reason"),
+            result.get("duration_sec"),
+            llm_calls,
+            json.dumps(tool_counts),
+            AGENT_LLM_MODEL,
+        )
+        sql = (
+            "INSERT INTO agent_decision_log "
+            "(ended_at, trigger_type, farm_id, task, steps, final_report, "
+            " success, reason, duration_sec, llm_calls, tool_calls, model) "
+            "VALUES (NOW(), %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s::jsonb, %s) "
+            "RETURNING id"
+        )
+
+        conn = db._getconn()
+        if conn is None:
+            logger.warning("[Agent DB] connection 획득 실패")
+            return None
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(sql, vals)
+                row = cur.fetchone()
+                conn.commit()
+            log_id = int(row['id']) if row and 'id' in row else None
+        finally:
+            try: db._putconn(conn)
+            except Exception: pass
+
+        logger.info(f"[Agent DB] log id={log_id} (trigger={trigger_type}, "
+                    f"steps={llm_calls}, tools={tool_counts}, success={result.get('success')})")
+        return log_id
+    except Exception as e:
+        logger.warning(f"[Agent DB] 기록 실패 (운영 영향 없음): {e}")
+        return None
+
+
+# ════════════════════════════════════════════════════════════════════
 # 메인 ReAct loop
 # ════════════════════════════════════════════════════════════════════
 
 # ────────────────────────────────────────────────────────────────────
 # user_task 한 건 처리. 최종 보고 dict 반환:
-#   {"success": True,  "final": "...",  "steps": [...], "duration_sec": N}
-#   {"success": False, "reason": "...", "steps": [...], "duration_sec": N}
+#   {"success": True,  "final": "...",  "steps": [...], "duration_sec": N, "log_id": ...}
+#   {"success": False, "reason": "...", "steps": [...], "duration_sec": N, "log_id": ...}
+# trigger_type: 'schedule' (cron) / 'event' / 'user' (default).
+# persist_db=False 시 DB INSERT 안 함 (단위테스트용).
 # ────────────────────────────────────────────────────────────────────
-def run_agent(task: str, farm_id: int = 1, max_steps: int = None) -> Dict[str, Any]:
+def run_agent(task: str, farm_id: int = 1, max_steps: int = None,
+              trigger_type: str = "user", persist_db: bool = True) -> Dict[str, Any]:
     max_steps = max_steps or AGENT_MAX_STEPS
     t_start = time.time()
     history: List[Dict[str, Any]] = []
@@ -201,7 +269,7 @@ def run_agent(task: str, farm_id: int = 1, max_steps: int = None) -> Dict[str, A
         {"role": "user",   "content": user_msg},
     ]
 
-    logger.info(f"[Agent 시작] farm={farm_id} task={task!r}")
+    logger.info(f"[Agent 시작] farm={farm_id} trigger={trigger_type} task={task!r}")
 
     for step in range(max_steps):
         raw = _call_llm(messages, json_format=True)
@@ -224,8 +292,11 @@ def run_agent(task: str, farm_id: int = 1, max_steps: int = None) -> Dict[str, A
         if "final" in parsed:
             duration = time.time() - t_start
             logger.info(f"[Agent 완료] step={step} duration={duration:.1f}s final={parsed['final'][:80]!r}")
-            return {"success": True, "final": parsed["final"], "steps": history,
-                    "duration_sec": round(duration, 2)}
+            result = {"success": True, "final": parsed["final"], "steps": history,
+                      "duration_sec": round(duration, 2)}
+            if persist_db:
+                result["log_id"] = _persist_agent_log(result, task, farm_id, trigger_type)
+            return result
 
         # tool 호출
         tool_name = parsed.get("tool")
@@ -240,8 +311,11 @@ def run_agent(task: str, farm_id: int = 1, max_steps: int = None) -> Dict[str, A
         if _detect_loop(history):
             duration = time.time() - t_start
             logger.warning(f"[Agent 종료] loop 감지 (같은 도구 {AGENT_LOOP_REPEAT_LIMIT}회 연속)")
-            return {"success": False, "reason": f"loop 감지: {tool_name}", "steps": history,
-                    "duration_sec": round(duration, 2)}
+            result = {"success": False, "reason": f"loop 감지: {tool_name}", "steps": history,
+                      "duration_sec": round(duration, 2)}
+            if persist_db:
+                result["log_id"] = _persist_agent_log(result, task, farm_id, trigger_type)
+            return result
 
         result = _execute_tool(tool_name, args)
         history[-1]["tool_result"] = result
@@ -252,8 +326,11 @@ def run_agent(task: str, farm_id: int = 1, max_steps: int = None) -> Dict[str, A
 
     duration = time.time() - t_start
     logger.warning(f"[Agent 종료] MAX_STEPS({max_steps}) 초과")
-    return {"success": False, "reason": "MAX_STEPS exceeded", "steps": history,
-            "duration_sec": round(duration, 2)}
+    result = {"success": False, "reason": "MAX_STEPS exceeded", "steps": history,
+              "duration_sec": round(duration, 2)}
+    if persist_db:
+        result["log_id"] = _persist_agent_log(result, task, farm_id, trigger_type)
+    return result
 
 
 # ════════════════════════════════════════════════════════════════════

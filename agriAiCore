@@ -23,6 +23,7 @@ PID_DIR="$BASE_DIR/logs"
 mkdir -p "$PID_DIR"
 API_PID="$PID_DIR/api.pid"
 SCHEDULER_PID="$PID_DIR/scheduler.pid"
+AGENT_PID="$PID_DIR/agent_monitor.pid"  # Agent Monitor (Phase 2, 16번)
 
 # 색상 정의
 RED='\033[0;31m'
@@ -315,6 +316,55 @@ scheduler_restart() {
     scheduler_stop
     sleep 1
     scheduler_start
+}
+
+# --- Agent Monitor (Phase 2: 30분 cron ReAct daemon) ---
+agent_monitor_start() {
+    log_msg "${BLUE}[Agent Monitor]${NC} 시작 중..."
+    if [ -f "$AGENT_PID" ]; then
+        local pid
+        pid=$(cat "$AGENT_PID" 2>/dev/null)
+        if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
+            log_msg "${YELLOW}[Agent Monitor]${NC} 이미 실행 중 (PID $pid)"
+            return 0
+        fi
+    fi
+    pkill -f "agri_ai_core\.src\.control\.agent_scheduler" 2>/dev/null || true
+    sleep 1
+    cd "$BASE_DIR"
+    $PYTHON_BIN -m agri_ai_core.src.control.agent_scheduler >> "$LOG_DIR/agent_monitor.log" 2>&1 &
+    local pid=$!
+    echo $pid > "$AGENT_PID"
+    log_msg "${GREEN}[Agent Monitor]${NC} 시작 완료 (PID $pid, 30분 cron)"
+}
+
+agent_monitor_stop() {
+    log_msg "${BLUE}[Agent Monitor]${NC} 종료 중..."
+    if [ -f "$AGENT_PID" ]; then
+        local pid
+        pid=$(cat "$AGENT_PID" 2>/dev/null)
+        if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
+            if ! _safe_kill "$pid" "Agent Monitor"; then
+                log_msg "${RED}[Agent Monitor]${NC} PID $pid 종료 실패 - PID 파일 유지"
+                return 1
+            fi
+        fi
+        rm -f "$AGENT_PID"
+    fi
+    local remaining
+    remaining=$(pgrep -f "agri_ai_core\.src\.control\.agent_scheduler" 2>/dev/null || true)
+    if [ -n "$remaining" ]; then
+        for p in $remaining; do
+            _safe_kill "$p" "Agent Monitor(잔존)" || true
+        done
+    fi
+    log_msg "${GREEN}[Agent Monitor]${NC} 종료 완료"
+}
+
+agent_monitor_restart() {
+    agent_monitor_stop
+    sleep 1
+    agent_monitor_start
 }
 
 # --- FastAPI ---
@@ -1011,6 +1061,9 @@ show_status() {
     else
         echo -e "${YELLOW}○ 미캡처${NC}"
     fi
+    echo -e "  ${CYAN}[AI Agent — Phase 2]${NC}"
+    printf "  %-4s %-16s %-8s " "16" "Agent Monitor" "-"
+    check_status "Agent Monitor" pid_file "$AGENT_PID"
     echo -e "  ──────────────────────────────────────────────────────"
     echo ""
 }
@@ -1036,6 +1089,7 @@ show_menu() {
     echo -e "  ${CYAN}13${NC}. RPi Camera       (5199 USB 카메라 원격 — port 8095)"
     echo -e "  ${CYAN}14${NC}. Camera Archive   (시간별 캡처 + 24시간 이력 + 보존정책)"
     echo -e "  ${CYAN}15${NC}. ChromaFlow Studio (운영 ChromaDB GUI Docker, 127.0.0.1:5000)"
+    echo -e "  ${CYAN}16${NC}. Agent Monitor    (30분 cron ReAct daemon — Phase 2)"
     echo ""
     echo -n -e "  번호 입력 (q=종료): "
 }
@@ -1168,6 +1222,15 @@ execute_service() {
                 logs)    sudo docker logs --tail 100 -f chromaflow ;;
             esac
             ;;
+        16) # Agent Monitor — 30분 cron ReAct daemon (Phase 2)
+            case "$action" in
+                start)   agent_monitor_start ;;
+                stop)    agent_monitor_stop ;;
+                restart) agent_monitor_restart ;;
+                status)  printf "  Agent Monitor: "; check_status "Agent Monitor" pid_file "$AGENT_PID" ;;
+                logs)    tail -n 100 -f "$LOG_DIR/agent_monitor.log" ;;
+            esac
+            ;;
         10) # Web Build (농장관리 React + Spring Boot)
             case "$action" in
                 start|restart) web_build ;;
@@ -1232,6 +1295,7 @@ usage() {
     echo -e "   13. RPi Camera      (5199 USB 카메라 원격 — port 8095)"
     echo -e "   14. Camera Archive  (시간별 캡처/이력/보존정책)"
     echo -e "   15. ChromaFlow      (운영 ChromaDB GUI Docker — 127.0.0.1:5000)"
+    echo -e "   16. Agent Monitor   (30분 cron ReAct daemon — Phase 2)"
     echo ""
     echo -e "  ${BOLD}예시:${NC}"
     echo -e "    agriAiCore restart        # 메뉴에서 서비스 선택"
@@ -1310,7 +1374,7 @@ if [ "$choice" = "q" ] || [ "$choice" = "Q" ]; then
     exit 0
 fi
 
-if ! [[ "$choice" =~ ^(0|00|[0-9]|1[0-4])$ ]]; then
+if ! [[ "$choice" =~ ^(0|00|[0-9]|1[0-6])$ ]]; then
     echo -e "  ${RED}잘못된 입력입니다.${NC}"
     exit 1
 fi
