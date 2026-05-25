@@ -117,6 +117,8 @@ _VALID_TOOLS = {
     "set_schedule", "override_ai_thresholds", "get_system_status",
     # [Phase 4] Agent 모니터링 도구
     "schedule_monitor", "list_monitors", "cancel_monitor",
+    # [A 단계 · 2026-05-25] Agent 즉시 1회 분석
+    "agent_one_shot",
     # [2026-05-01] 사용자 채팅 → 도메인 RAG 영속 저장 도구
     "save_domain_knowledge",
 }

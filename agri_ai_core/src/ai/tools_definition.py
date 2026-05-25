@@ -341,6 +341,21 @@ _ADMIN_TOOLS: List[Dict[str, Any]] = [
         "parameters": {"type": "object", "properties": {
             "job_id": {"type": "string"}
         }, "required": ["job_id"]}}},
+    # ─── [A 단계 · 2026-05-25] Agent 즉시 1회 분석 ───
+    {"type": "function", "function": {
+        "name": "agent_one_shot",
+        "description": (
+            "AI 모니터링 Agent (ReAct 도구 사용) 를 지금 즉시 1회 실행합니다. "
+            "사용자가 '지금/즉시/한번/방금 분석해줘', '○호기 상태 진단해', "
+            "'○호기 봐줘' 등 *반복 없이 한 번* 자율 분석을 요청할 때 호출. "
+            "schedule_monitor 와 다름 — schedule_monitor 는 시간 주기 반복 감시, "
+            "agent_one_shot 은 1회 ReAct 분석 후 final 보고. 응답시간 100~250초."),
+        "parameters": {"type": "object", "properties": {
+            "task": {"type": "string",
+                     "description": "Agent 가 수행할 작업 (한국어 한 문장). 예: "
+                                    "'1호기 수온과 내부온도 현재 상태 진단'"},
+            "farm_id": {"type": "integer", "description": "농장 ID. 기본 1"}
+        }, "required": ["task"]}}},
 ]
 
 

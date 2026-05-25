@@ -46,6 +46,7 @@ ANALYZER_SYSTEM_PROMPT_RAW = """당신은 질문 분석기입니다. 사용자 �
 12. override_ai_thresholds — args: {"action":"get|set|reset","key":"TEMP_LOW 등","value":숫자} — AI 제어 임계값 조회/조정.
 13. get_system_status — args: {"farm_id":"N"} — 전체 시스템 상태(재배사별 제어모드/생육단계/AI루프/스케줄러) 조회. "시스템 상황 알려줘" 요청 시 필수.
 14. schedule_monitor — args: {"intent":"의도","start_time":"HH:MM","end_time":"HH:MM","interval_min":30,"house_ids":"all 또는 콤마구분 hous_id","farm_id":"N","alert_on_normal":false} — Agent 모니터링 Job 등록. "○시부터 ○시까지 ○분마다 감시/모니터링/지켜봐", "오늘 밤 재배사 봐줘" 등 시간 기반 관찰을 요청하면 반드시 호출. 이상 감지 시 채팅 알림 자동 발행. 재배사 구성은 농장별 가변이므로 전체 감시에는 "all" 사용.
+14b. agent_one_shot — args: {"task":"한국어 한 문장 작업","farm_id":N} — AI 모니터링 Agent (ReAct) 즉시 1회 실행. "지금/즉시/한번/방금 진단해/봐줘/분석해" 등 *반복 없이 한 번* 자율 분석을 원할 때 사용. schedule_monitor (반복 Job) 과 구분: schedule_monitor 는 "X시까지 X분마다", agent_one_shot 은 "지금 한 번". 응답시간 100~250초.
 15. list_monitors — args: {} — 현재 등록된 Agent 모니터링 목록. "감시 뭐 돌고 있어?"류 질문.
 16. cancel_monitor — args: {"job_id":"agent_monitor_..."} — 특정 Agent 모니터링 취소.
 17. save_domain_knowledge — args: {"title":"30자 내 요약","content":"본문(임계치/조건/예시 포함)","category":"운영노하우|제어룰|안전룰|생육관리|장치사용법","farm_id":"N(선택)","house_id":"N(선택)","tags":"쉼표구분(선택)"} — 사용자가 알려주는 운영 노하우/룰/도메인 지식을 도메인 RAG에 영속 저장. 저장 즉시 다음 AI 환경제어 사이클부터 LLM이 자동 참조. 사용자 발화에 다음 의도가 보이면 반드시 호출: "학습해/기억해/저장해/다음부터 적용/룰로 추가/방침으로/규칙으로/알아둬". 저장 후엔 "방금 저장한 룰을 다음 AI 사이클부터 자동 반영합니다"로 사용자 안내.
@@ -105,9 +106,12 @@ agent_monitor (Agent 모니터링 조회·취소·등록):
 - 취소(자연어 예: "그 감시 취소", "ID ○○○ 취소", "모니터링 중단")
   → required_data=[{"tool":"cancel_monitor","args":{"job_id":"..."},"priority":1}]
     (job_id 가 질문에 없으면 list_monitors 먼저 호출해 사용자 지목 유도)
-- 신규 등록(자연어 예: "N시부터 M시까지 ○분마다 감시/지켜봐")
+- 신규 등록 — 반복 (자연어 예: "N시부터 M시까지 ○분마다 감시/지켜봐", "오늘 밤 모니터링")
   → required_data=[{"tool":"schedule_monitor","args":{...},"priority":1}]
   (등록은 기존 farm_sensor 로 분류하지 말고 이 유형을 우선.)
+- 즉시 1회 분석 (자연어 예: "지금 1호기 분석해줘", "즉시 진단해", "한번 봐줘", "방금 상태 점검해")
+  → required_data=[{"tool":"agent_one_shot","args":{"task":"<한국어 작업 한 문장>","farm_id":<N>},"priority":1}]
+  (반복 없는 1회 ReAct 분석. schedule_monitor 와 구분: "지금 한 번" 패턴.)
 
 greeting (인사/잡담): required_data=[]
 conversation_ref (이전 대화 참조 / 재포맷 요청): required_data=[]

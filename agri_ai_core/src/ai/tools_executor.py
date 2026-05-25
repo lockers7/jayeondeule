@@ -212,6 +212,32 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
         elif tool_name == "cancel_monitor":
             result = cancel_monitor(job_id=tool_args.get("job_id"))
 
+        # ─────── [A 단계 · 2026-05-25] Agent 즉시 1회 분석 ───────
+        elif tool_name == "agent_one_shot":
+            from agri_ai_core.src.control.ai_monitor_agent import run_agent
+            task = (tool_args.get("task") or "농장 모니터링").strip()
+            try:
+                farm_id_arg = int(tool_args.get("farm_id") or 1)
+            except (TypeError, ValueError):
+                farm_id_arg = 1
+            agent_result = run_agent(task=task, farm_id=farm_id_arg,
+                                     trigger_type="user")
+            # LLM 합성에 필요한 핵심만 압축 — steps 전체는 너무 길어 final + 메타만
+            tool_counts: Dict[str, int] = {}
+            for h in agent_result.get("steps", []):
+                t = h.get("tool")
+                if t:
+                    tool_counts[t] = tool_counts.get(t, 0) + 1
+            result = {
+                "success": bool(agent_result.get("success")),
+                "duration_sec": agent_result.get("duration_sec"),
+                "steps": len(agent_result.get("steps", [])),
+                "tool_calls": tool_counts,
+                "final": agent_result.get("final"),
+                "reason": agent_result.get("reason"),
+                "log_id": agent_result.get("log_id"),
+            }
+
         else:
             result = {
                 "success": False,
