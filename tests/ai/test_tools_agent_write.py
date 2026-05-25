@@ -47,7 +47,7 @@ class TestArgsValidation:
         with patch.object(W, "_enqueue", return_value=99), \
              patch.object(W, "_count_today", return_value=0), \
              patch.object(W, "_last_call_at", return_value=None):
-            r = W.set_relay(farm_id=1, house_id=2, semantic="water_heater", on="true")
+            r = W.set_relay(farm_id=1, house_id=2, semantic="water_heater_flag", on="true")
         assert r["success"] is False
         assert r["reason"] == "invalid_args"
 
@@ -55,7 +55,7 @@ class TestArgsValidation:
         with patch.object(W, "_enqueue", return_value=101), \
              patch.object(W, "_count_today", return_value=0), \
              patch.object(W, "_last_call_at", return_value=None):
-            r = W.set_relay(farm_id=1, house_id=2, semantic="water_heater",
+            r = W.set_relay(farm_id=1, house_id=2, semantic="water_heater_flag",
                             on=False, reason="수온 위험")
         assert r["success"] is True
         assert r["action_id"] == 101
@@ -145,7 +145,7 @@ class TestSafetyGuardMocked:
         with patch.object(W, "_enqueue", return_value=99) as enq, \
              patch.object(W, "_count_today", return_value=W.DAILY_LIMIT), \
              patch.object(W, "_last_call_at", return_value=None):
-            r = W.set_relay(farm_id=1, house_id=2, semantic="water_heater", on=False)
+            r = W.set_relay(farm_id=1, house_id=2, semantic="water_heater_flag", on=False)
         assert r["success"] is False
         assert r["reason"] == "daily_limit"
         enq.assert_not_called()
@@ -156,7 +156,7 @@ class TestSafetyGuardMocked:
         with patch.object(W, "_enqueue", return_value=99) as enq, \
              patch.object(W, "_count_today", return_value=0), \
              patch.object(W, "_last_call_at", return_value=recent):
-            r = W.set_relay(farm_id=1, house_id=2, semantic="water_heater", on=False)
+            r = W.set_relay(farm_id=1, house_id=2, semantic="water_heater_flag", on=False)
         assert r["success"] is False
         assert r["reason"] == "cooldown"
         enq.assert_not_called()
@@ -167,7 +167,7 @@ class TestSafetyGuardMocked:
         with patch.object(W, "_enqueue", return_value=110) as enq, \
              patch.object(W, "_count_today", return_value=0), \
              patch.object(W, "_last_call_at", return_value=old):
-            r = W.set_relay(farm_id=1, house_id=2, semantic="water_heater", on=False)
+            r = W.set_relay(farm_id=1, house_id=2, semantic="water_heater_flag", on=False)
         assert r["success"] is True
         enq.assert_called_once()
 
@@ -229,7 +229,7 @@ class TestRealDB:
         with patch.object(W, "_count_today", return_value=0), \
              patch.object(W, "_last_call_at", return_value=None):
             r = W.set_relay(farm_id=999, house_id=999,
-                            semantic="water_heater", on=False,
+                            semantic="water_heater_flag", on=False,
                             reason="__pytest_tools_write__",
                             trigger_type="user")
         assert r["success"] is True
@@ -244,7 +244,7 @@ class TestRealDB:
         assert row is not None
         assert row["tool_name"] == "set_relay"
         assert row["status"] == "pending"
-        assert row["args"]["semantic"] == "water_heater"
+        assert row["args"]["semantic"] == "water_heater_flag"
         # execute_at = created_at + 30s (대략)
         delta = (row["execute_at"] - row["created_at"]).total_seconds()
         assert 25 <= delta <= 35

@@ -54,7 +54,7 @@ class TestDispatch:
              patch.object(W, "_mark_executed") as me:
             W._execute_action({"id": 2, "tool_name": "set_relay",
                                "args": {"farm_id": 1, "house_id": 1,
-                                        "semantic": "led", "on": True}})
+                                        "semantic": "lighting_flag", "on": True}})
         mf.assert_called_once()
         me.assert_not_called()
 
@@ -80,22 +80,22 @@ class TestExecSetRelay:
         mock_set = MagicMock(return_value=(True, "ok"))
         with patch("agri_ai_core.src.control.relay_manager.set_relay_value", mock_set):
             r = W._exec_set_relay({"farm_id": 1, "house_id": 2,
-                                    "semantic": "water_heater", "on": False})
+                                    "semantic": "water_heater_flag", "on": False})
         assert r["success"] is True
-        assert r["applied"]["semantic"] == "water_heater"
+        assert r["applied"]["semantic"] == "water_heater_flag"
         assert r["applied"]["on"] is False
         # set_relay_value(farm, house, {semantic: on}, raw_mode=False) 형태
         call_args = mock_set.call_args
         assert call_args[0][0] == 1
         assert call_args[0][1] == 2
-        assert call_args[0][2] == {"water_heater": False}
+        assert call_args[0][2] == {"water_heater_flag": False}
         assert call_args[1].get("raw_mode") is False
 
     def test_relay_exception_returns_failure(self, W):
         with patch("agri_ai_core.src.control.relay_manager.set_relay_value",
                    side_effect=RuntimeError("hw error")):
             r = W._exec_set_relay({"farm_id": 1, "house_id": 2,
-                                    "semantic": "ventilation_fan", "on": True})
+                                    "semantic": "exhaust_fan_flag", "on": True})
         assert r["success"] is False
         assert "hw error" in r["message"]
 

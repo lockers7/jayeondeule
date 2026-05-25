@@ -61,9 +61,20 @@ TOOL_DAILY_LIMIT_OVERRIDE: Dict[str, int] = {
 }
 
 # ── 유효 인자 화이트리스트 ──
+# [2026-05-25 hotfix2] 실제 pin_map (control_common.get_pin_map) 의 키와 정렬.
+# 모든 호기 공통 10개 시멘틱. 임의 영문명 (water_heater 등) 사용 시 relay_manager
+# 가 silent skip 하여 false success 반환하는 사고 방지.
 VALID_RELAY_SEMANTICS = {
-    "water_heater", "air_heater", "ventilation_fan", "circulation_fan",
-    "humidifier", "dehumidifier", "co2_supply", "led",
+    "water_heater_flag",          # 수온 히터
+    "fog_occurs_flag",             # 분무기 (가습)
+    "drainage_motor_flag",         # 배수 모터
+    "intake_fan_flag",             # 흡기 팬
+    "exhaust_fan_flag",            # 배기 팬
+    "lighting_flag",               # 조명 (LED)
+    "irrigation_flag",             # 관수
+    "air_circulation_valve_flag",  # 순환 밸브
+    "air_exhaust_valve_flag",      # 배기 밸브
+    "air_intake_valve_flag",       # 흡기 밸브
 }
 VALID_THRESHOLD_KEYS = {
     "tprt_min", "tprt_max", "hmdt_min", "hmdt_max",
@@ -378,8 +389,9 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "args": {
             "farm_id":  "int — 농장 ID",
             "house_id": "int — 호기 ID (0=공통 거부)",
-            "semantic": ("str — water_heater / air_heater / ventilation_fan / "
-                         "circulation_fan / humidifier / dehumidifier / co2_supply / led"),
+            "semantic": ("str — water_heater_flag / fog_occurs_flag / drainage_motor_flag / "
+                         "intake_fan_flag / exhaust_fan_flag / lighting_flag / irrigation_flag / "
+                         "air_circulation_valve_flag / air_exhaust_valve_flag / air_intake_valve_flag"),
             "on":       "bool — true=ON / false=OFF",
             "reason":   "str (필수) — LLM 이 결정한 사유 (사용자 화면에 표시)"
         }
