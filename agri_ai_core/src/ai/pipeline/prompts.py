@@ -112,6 +112,13 @@ agent_monitor (Agent 모니터링 조회·취소·등록):
 - 즉시 1회 분석 (자연어 예: "지금 1호기 분석해줘", "즉시 진단해", "한번 봐줘", "방금 상태 점검해")
   → required_data=[{"tool":"agent_one_shot","args":{"task":"<한국어 작업 한 문장>","farm_id":<N>},"priority":1}]
   (반복 없는 1회 ReAct 분석. schedule_monitor 와 구분: "지금 한 번" 패턴.)
+- 반복 ReAct 분석 등록 (자연어 예: "1시간마다 모니터링하라", "30분마다 1호기 분석해줘", "매 시간 봐줘")
+  → required_data=[{"tool":"agent_subscribe","args":{"task":"<한국어 작업>","interval_min":<5~1440>,"farm_id":<N>},"priority":1}]
+  (ai_monitor_agent ReAct 분석을 N분 주기 반복. 결과는 매 사이클 채팅 알림. schedule_monitor 보다 강한 분석 — 단순 임계값 체크가 아닌 ReAct.)
+- 구독 조회 (자연어 예: "내가 등록한 모니터링", "구독 목록")
+  → required_data=[{"tool":"list_agent_subscriptions","args":{},"priority":1}]
+- 구독 취소 (자연어 예: "id 5 구독 취소", "그 모니터링 해제")
+  → required_data=[{"tool":"cancel_agent_subscription","args":{"subscription_id":<N>},"priority":1}]
 
 greeting (인사/잡담): required_data=[]
 conversation_ref (이전 대화 참조 / 재포맷 요청): required_data=[]

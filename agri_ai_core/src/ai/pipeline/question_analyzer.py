@@ -119,6 +119,9 @@ _VALID_TOOLS = {
     "schedule_monitor", "list_monitors", "cancel_monitor",
     # [A 단계 · 2026-05-25] Agent 즉시 1회 분석
     "agent_one_shot",
+    # [B 단계 · 2026-05-25] 반복 Agent 구독 + 알림 조회
+    "agent_subscribe", "list_agent_subscriptions",
+    "cancel_agent_subscription", "get_pending_alerts",
     # [2026-05-01] 사용자 채팅 → 도메인 RAG 영속 저장 도구
     "save_domain_knowledge",
 }

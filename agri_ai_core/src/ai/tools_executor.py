@@ -212,6 +212,41 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
         elif tool_name == "cancel_monitor":
             result = cancel_monitor(job_id=tool_args.get("job_id"))
 
+        # ─────── [B 단계 · 2026-05-25] 반복 agent 구독 ───────
+        elif tool_name == "agent_subscribe":
+            from agri_ai_core.src.ai.tools_agent_sub import agent_subscribe
+            result = agent_subscribe(
+                task=tool_args.get("task", ""),
+                interval_min=tool_args.get("interval_min", 60),
+                farm_id=tool_args.get("farm_id"),
+                house_id=tool_args.get("house_id"),
+                user_id=tool_args.get("user_id"),
+                intent=tool_args.get("intent"),
+            )
+
+        elif tool_name == "list_agent_subscriptions":
+            from agri_ai_core.src.ai.tools_agent_sub import list_agent_subscriptions
+            result = list_agent_subscriptions(
+                user_id=tool_args.get("user_id"),
+                include_default=bool(tool_args.get("include_default", False)),
+            )
+
+        elif tool_name == "cancel_agent_subscription":
+            from agri_ai_core.src.ai.tools_agent_sub import cancel_agent_subscription
+            result = cancel_agent_subscription(
+                subscription_id=tool_args.get("subscription_id") or tool_args.get("id"),
+                user_id=tool_args.get("user_id"),
+                reason=tool_args.get("reason"),
+            )
+
+        elif tool_name == "get_pending_alerts":
+            from agri_ai_core.src.ai.tools_agent_sub import get_pending_alerts
+            result = get_pending_alerts(
+                user_id=tool_args.get("user_id"),
+                limit=int(tool_args.get("limit", 10) or 10),
+                mark_read=bool(tool_args.get("mark_read", True)),
+            )
+
         # ─────── [A 단계 · 2026-05-25] Agent 즉시 1회 분석 ───────
         elif tool_name == "agent_one_shot":
             from agri_ai_core.src.control.ai_monitor_agent import run_agent

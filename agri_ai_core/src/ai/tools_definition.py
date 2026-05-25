@@ -341,6 +341,52 @@ _ADMIN_TOOLS: List[Dict[str, Any]] = [
         "parameters": {"type": "object", "properties": {
             "job_id": {"type": "string"}
         }, "required": ["job_id"]}}},
+    # ─── [B 단계 · 2026-05-25] 반복 Agent 구독 ───
+    {"type": "function", "function": {
+        "name": "agent_subscribe",
+        "description": (
+            "사용자 채팅 요청을 받아 ai_monitor_agent (ReAct) 를 반복 실행하는 구독을 등록합니다. "
+            "사용자가 '○분/○시간마다 분석/모니터링/감시', '매 시간 ○호기 봐줘' 등 "
+            "*반복 + ReAct 다단계 분석* 의도를 보일 때 호출. "
+            "결과는 매 사이클 agent_user_alerts 큐에 적재되어 채팅창으로 전달. "
+            "schedule_monitor (단순 임계값 체크) 와 다름. 5분~24시간 주기, 사용자당 5건 한도."),
+        "parameters": {"type": "object", "properties": {
+            "task": {"type": "string", "description": "agent 가 매 사이클 수행할 작업 (한국어 한 문장)"},
+            "interval_min": {"type": "integer", "description": "사이클 주기 (분, 5~1440)"},
+            "farm_id": {"type": "integer", "description": "농장 ID. 기본 1"},
+            "house_id": {"type": "integer", "description": "호기 ID (선택, 다호기면 생략)"},
+            "user_id": {"type": "string", "description": "채팅 발신자 식별 (선택)"},
+            "intent": {"type": "string", "description": "사용자 자연어 원문 (감사 로그용)"}
+        }, "required": ["task", "interval_min"]}}},
+    {"type": "function", "function": {
+        "name": "list_agent_subscriptions",
+        "description": "현재 등록된 반복 agent 구독 목록을 조회합니다. "
+                       "사용자가 '내가 등록한 모니터링 뭐 있어?' 등 물을 때 호출. "
+                       "schedule_monitor 와는 별개 (이건 ai_monitor_agent ReAct 분석 반복).",
+        "parameters": {"type": "object", "properties": {
+            "user_id": {"type": "string", "description": "특정 사용자만 조회 (선택)"},
+            "include_default": {"type": "boolean", "description": "시스템 default cron 포함 (기본 false)"}
+        }}}},
+    {"type": "function", "function": {
+        "name": "cancel_agent_subscription",
+        "description": "특정 agent 구독을 취소합니다. id 는 list_agent_subscriptions 결과에서 확보.",
+        "parameters": {"type": "object", "properties": {
+            "subscription_id": {"type": "integer"},
+            "user_id": {"type": "string", "description": "발신자 검증용 (선택)"},
+            "reason": {"type": "string", "description": "취소 사유 (선택)"}
+        }, "required": ["subscription_id"]}}},
+    {"type": "function", "function": {
+        "name": "get_pending_alerts",
+        "description": (
+            "미읽 agent 알림을 가져와 사용자에게 전달합니다. "
+            "사용자가 '내 알림 있어?', '뭐 알림 왔어?' 등 물을 때 또는 "
+            "농장 상태 질문 시 백그라운드 알림 정황을 함께 제시할 때 호출. "
+            "기본적으로 mark_read=true 로 호출 후 read 처리."),
+        "parameters": {"type": "object", "properties": {
+            "user_id": {"type": "string", "description": "특정 사용자만 조회"},
+            "limit": {"type": "integer", "description": "최대 알림 수 (기본 10, max 50)"},
+            "mark_read": {"type": "boolean", "description": "조회 후 read 처리 (기본 true)"}
+        }}}},
     # ─── [A 단계 · 2026-05-25] Agent 즉시 1회 분석 ───
     {"type": "function", "function": {
         "name": "agent_one_shot",

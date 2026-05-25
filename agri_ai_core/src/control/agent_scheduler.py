@@ -39,6 +39,10 @@ logger = setup_logger(__name__)
 AGENT_INTERVAL_MIN  = int(os.getenv("AGENT_INTERVAL_MIN", "30"))
 AGENT_INITIAL_DELAY = int(os.getenv("AGENT_INITIAL_DELAY", "60"))
 AGENT_FARM_IDS      = [int(x.strip()) for x in os.getenv("AGENT_FARM_IDS", "1").split(",") if x.strip()]
+# [B 단계 2026-05-25] subscriptions polling 주기 (초). 기본 60.
+AGENT_SUB_POLL_SEC  = int(os.getenv("AGENT_SUB_POLL_SEC", "60"))
+# default subscription 자동 부트스트랩 여부 (기존 30분 cron 호환)
+AGENT_BOOTSTRAP_DEFAULT = os.getenv("AGENT_BOOTSTRAP_DEFAULT", "1") == "1"
 
 _STOP = False
 
@@ -107,16 +111,205 @@ def _run_cycle():
     logger.info(f"[Agent Scheduler] === cycle 완료 ({cycle_duration:.1f}s) ===")
 
 
+# ════════════════════════════════════════════════════════════════════
+# [B 단계 2026-05-25] Subscriptions polling — 사용자 채팅 등록 반복 task
+# ════════════════════════════════════════════════════════════════════
+
 # ────────────────────────────────────────────────────────────────────
-# 메인 — 무한 loop. 다음 cycle 시각까지 sleep 후 _run_cycle 호출.
+# default subscription 부트스트랩 — 기존 30분 cron 행동 보존.
+# AGENT_FARM_IDS 각 농장에 대해 *시스템 default* subscription 이 없으면 생성.
+# 표시자: user_id=NULL, intent='__default_cron__'.
+# ────────────────────────────────────────────────────────────────────
+def _bootstrap_default_subscriptions():
+    if not AGENT_BOOTSTRAP_DEFAULT:
+        return
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+    except Exception:
+        return
+    conn = db._getconn()
+    if conn is None:
+        return
+    try:
+        with conn.cursor() as cur:
+            for farm_id in AGENT_FARM_IDS:
+                cur.execute(
+                    "SELECT id FROM agent_subscriptions "
+                    "WHERE farm_id=%s AND user_id IS NULL "
+                    "  AND intent='__default_cron__' AND active=TRUE LIMIT 1",
+                    (farm_id,))
+                row = cur.fetchone()
+                if row:
+                    continue
+                task = (
+                    f"농장 {farm_id} 전체 호기 정기 {AGENT_INTERVAL_MIN}분 모니터링. "
+                    f"각 호기의 현재 센서 상태를 확인하고, 임계 근접·이상치·LLM 결정 "
+                    f"패턴을 종합 분석해 운영자가 알아야 할 위험 신호가 있는지 보고하라."
+                )
+                cur.execute(
+                    "INSERT INTO agent_subscriptions "
+                    "(user_id, farm_id, house_id, interval_min, task, intent, next_run_at) "
+                    "VALUES (NULL, %s, NULL, %s, %s, '__default_cron__', NOW())",
+                    (farm_id, AGENT_INTERVAL_MIN, task))
+                logger.info(f"[Agent Scheduler] default subscription 생성: farm={farm_id} interval={AGENT_INTERVAL_MIN}분")
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"[Agent Scheduler] bootstrap 실패: {e}")
+        try: conn.rollback()
+        except Exception: pass
+    finally:
+        try: db._putconn(conn)
+        except Exception: pass
+
+
+# ────────────────────────────────────────────────────────────────────
+# polling: active + next_run_at <= NOW() 인 row 잡아옴.
+# SKIP LOCKED 로 race-free (다중 scheduler 실행 시도 시).
+# ────────────────────────────────────────────────────────────────────
+def _claim_due_subscriptions(limit: int = 5):
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+        from psycopg2.extras import RealDictCursor
+    except Exception:
+        return []
+    conn = db._getconn()
+    if conn is None:
+        return []
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, user_id, farm_id, house_id, interval_min, task, intent "
+                "FROM agent_subscriptions "
+                "WHERE active=TRUE AND next_run_at <= NOW() "
+                "ORDER BY next_run_at "
+                "FOR UPDATE SKIP LOCKED LIMIT %s",
+                (limit,))
+            rows = cur.fetchall()
+            conn.commit()
+        return [dict(r) for r in rows] if rows else []
+    except Exception as e:
+        logger.warning(f"[Agent Scheduler] _claim_due_subscriptions 실패: {e}")
+        try: conn.rollback()
+        except Exception: pass
+        return []
+    finally:
+        try: db._putconn(conn)
+        except Exception: pass
+
+
+def _advance_subscription(sub_id: int, interval_min: int):
+    """사이클 끝나면 next_run_at += interval_min, total_runs += 1."""
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+    except Exception:
+        return
+    conn = db._getconn()
+    if conn is None:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE agent_subscriptions "
+                "SET last_run_at = NOW(), "
+                "    next_run_at = GREATEST(NOW(), next_run_at) + (%s || ' minutes')::interval, "
+                "    total_runs = total_runs + 1 "
+                "WHERE id=%s",
+                (str(interval_min), sub_id))
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"[Agent Scheduler] _advance_subscription({sub_id}) 실패: {e}")
+        try: conn.rollback()
+        except Exception: pass
+    finally:
+        try: db._putconn(conn)
+        except Exception: pass
+
+
+def _save_alert(user_id, sub_id, log_id, level, title, body):
+    """agent_user_alerts 에 결과 영속. 채팅 프론트엔드가 폴링/SSE 로 받음."""
+    if not body:
+        return
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+    except Exception:
+        return
+    conn = db._getconn()
+    if conn is None:
+        return
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO agent_user_alerts "
+                "(user_id, subscription_id, agent_log_id, level, title, body) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (user_id, sub_id, log_id, level, (title or "")[:200], body))
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"[Agent Scheduler] _save_alert 실패: {e}")
+        try: conn.rollback()
+        except Exception: pass
+    finally:
+        try: db._putconn(conn)
+        except Exception: pass
+
+
+def _run_subscription(sub: dict):
+    """단일 subscription 실행 — run_agent 호출 + advance + alert."""
+    sub_id = int(sub["id"])
+    farm_id = int(sub["farm_id"]) if sub.get("farm_id") else 1
+    task = sub["task"]
+    user_id = sub.get("user_id")
+    interval_min = int(sub.get("interval_min") or AGENT_INTERVAL_MIN)
+    is_default = (sub.get("intent") == "__default_cron__")
+
+    logger.info(
+        f"[Agent Scheduler] subscription #{sub_id} 실행 farm={farm_id} "
+        f"user={user_id or '-'} interval={interval_min}분 default={is_default}"
+    )
+    try:
+        result = run_agent(task=task, farm_id=farm_id, trigger_type="subscription")
+        ok = result.get("success")
+        log_id = result.get("log_id")
+        final = result.get("final") or ""
+        logger.info(
+            f"[Agent Scheduler] sub #{sub_id} 완료 success={ok} "
+            f"log_id={log_id} | {final[:100]}"
+        )
+        # 사용자 등록 subscription 만 alert 영속 (default 는 운영 로그/DB 이력 충분)
+        if not is_default and user_id and final:
+            level = "info" if ok else "warning"
+            title = f"농장 {farm_id} 모니터링 결과"
+            _save_alert(user_id, sub_id, log_id, level, title, final)
+    except Exception as e:
+        logger.warning(f"[Agent Scheduler] sub #{sub_id} 예외: {e}")
+    finally:
+        _advance_subscription(sub_id, interval_min)
+
+
+def _run_due_subscriptions():
+    """매 polling 사이클: due subscription 모두 처리."""
+    rows = _claim_due_subscriptions(limit=5)
+    if not rows:
+        return
+    logger.info(f"[Agent Scheduler] due subscriptions = {len(rows)}건")
+    for row in rows:
+        if _STOP:
+            return
+        _run_subscription(row)
+
+
+# ────────────────────────────────────────────────────────────────────
+# 메인 — 매 분 polling. subscriptions 처리 + (option) 30분 boundary cron.
+# 기존 30분 cron 동작은 default subscription 으로 보존 (_bootstrap_default).
 # ────────────────────────────────────────────────────────────────────
 def main():
     signal.signal(signal.SIGTERM, _on_signal)
     signal.signal(signal.SIGINT,  _on_signal)
 
     logger.info(
-        f"[Agent Scheduler] 시작 interval={AGENT_INTERVAL_MIN}분 "
-        f"farms={AGENT_FARM_IDS} initial_delay={AGENT_INITIAL_DELAY}s"
+        f"[Agent Scheduler] 시작 interval={AGENT_INTERVAL_MIN}분 (default cron) "
+        f"farms={AGENT_FARM_IDS} sub_poll={AGENT_SUB_POLL_SEC}s "
+        f"initial_delay={AGENT_INITIAL_DELAY}s"
     )
 
     # 시작 직후 즉시 사이클 도는 것 방지 (Ollama 준비 대기)
@@ -126,26 +319,21 @@ def main():
                 return
             time.sleep(1)
 
+    # default subscription 부트스트랩 (기존 30분 cron 행동 보존)
+    _bootstrap_default_subscriptions()
+
+    # 메인 loop — 매 AGENT_SUB_POLL_SEC 초마다 due subscriptions 처리
     while not _STOP:
-        nxt = _next_interval_dt()
-        wait_sec = max(0, (nxt - datetime.now()).total_seconds())
-        logger.info(f"[Agent Scheduler] 다음 cycle: {nxt:%H:%M:%S} ({wait_sec:.0f}s 후)")
-
-        # 1초 단위 sleep + 종료 신호 체크
-        while wait_sec > 0 and not _STOP:
-            chunk = min(wait_sec, 5)
-            time.sleep(chunk)
-            wait_sec = (nxt - datetime.now()).total_seconds()
-
-        if _STOP:
-            break
-
         try:
-            _run_cycle()
+            _run_due_subscriptions()
         except Exception as e:
-            logger.error(f"[Agent Scheduler] cycle 예외 — 다음 cycle 까지 대기: {e}")
-            # 5초 대기 후 다음 cycle (실패 폭주 방지)
-            time.sleep(5)
+            logger.error(f"[Agent Scheduler] polling 사이클 예외: {e}")
+
+        # 1초 단위 sleep + 종료 신호 체크 (즉시 반응)
+        slept = 0
+        while slept < AGENT_SUB_POLL_SEC and not _STOP:
+            time.sleep(1)
+            slept += 1
 
     logger.info("[Agent Scheduler] 정상 종료")
 
