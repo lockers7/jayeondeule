@@ -152,13 +152,84 @@ def _validate_analysis(analysis):
 # ══════════════════════════════════
 # LLM 분석 실패 시 최소한의 fallback
 # ══════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# fallback 키워드 패턴 — Ollama 503 등 LLM 분류 실패 시 합리적 분기
+# [2026-05-25 hotfix3] 기존 fallback 은 무조건 web_search → 농장 시스템에선
+# 부적절. 농장 키워드 매칭 시 farm_sensor / agent_monitor 로 분기.
+# ────────────────────────────────────────────────────────────────────
+_MONITOR_TIME_RE = re.compile(
+    # 모니터링 키워드 ↔ 시간/주기 키워드 양방향 매칭 (40자 윈도우)
+    # "모[니티]터링" 으로 오타 "모티터링" 도 매칭 (2026-05-25 사용자 실 쿼리)
+    r'(감시|지켜|모[니티]터링|관찰).{0,40}(시간|분|초|단위|마다|동안|밤|하루|이번주)|'
+    r'(시간|분|초|단위|마다|동안|밤|하루|이번주|\d+\s*(시간|분)|매\s*시|매\s*분).{0,40}(감시|지켜|모[니티]터링|관찰|보고)',
+    re.IGNORECASE
+)
+_FARM_SENSOR_RE = re.compile(
+    r'(릴레이|센서값?|재배사|호기|호\s*재배사|\d+호\s*재배|'
+    r'내부온도|외부온도|수온|발이?기온도|습도|CO2|이산화탄소|이슬점|VPD)',
+    re.IGNORECASE
+)
+_FARM_CONTROL_RE = re.compile(
+    r'(켜|꺼|on|off|작동|가동|중지|중단|돌려|멈춰).{0,5}'
+    r'(팬|밸브|히터|조명|관수|배수|포그|fog|램프)|'
+    r'(팬|밸브|히터|조명|관수|배수|포그|fog|램프).{0,5}'
+    r'(켜|꺼|on|off|작동|가동|중지|중단|돌려|멈춰)',
+    re.IGNORECASE
+)
+
+
 def _build_safe_fallback(query, farm_id, house_id):
+    """Ollama 503 등 LLM 분석 실패 시 키워드 기반 합리적 fallback.
+
+    분기 우선순위:
+    1. 모니터링 + 시간 키워드 → agent_monitor (list_monitors)
+    2. 농장 센서/제어 키워드 → farm_sensor (get_farm_realtime_data)
+    3. 그 외 → web_search (기존)
+    """
     now = datetime.now()
+    q = (query or "").strip()
+
+    # 1) 모니터링 + 시간 키워드 → agent_monitor
+    if q and _MONITOR_TIME_RE.search(q):
+        return {
+            "question_type": "agent_monitor",
+            "intent": q[:100],
+            "required_data": [
+                {"tool": "list_monitors", "args": {}, "priority": 1,
+                 "reason": "LLM 503 fallback — 모니터링 키워드 + 시간 표현 매칭"},
+            ],
+            "data_freshness": "realtime",
+            "answer_format": "text",
+            "multi_house": False,
+            "house_ids": [],
+        }
+
+    # 2) 농장 센서/릴레이/제어 키워드 → farm_sensor
+    if q and (_FARM_SENSOR_RE.search(q) or _FARM_CONTROL_RE.search(q)):
+        fid = str(farm_id) if farm_id else "1"
+        hid = str(house_id) if house_id else "all"
+        return {
+            "question_type": "farm_sensor",
+            "intent": q[:100],
+            "required_data": [
+                {"tool": "get_farm_realtime_data",
+                 "args": {"data_type": "all", "farm_id": fid, "house_id": hid},
+                 "priority": 1,
+                 "reason": "LLM 503 fallback — 농장 키워드 매칭, 실시간 데이터 조회"},
+            ],
+            "data_freshness": "realtime",
+            "answer_format": "text",
+            "multi_house": (hid == "all"),
+            "house_ids": (["all"] if hid == "all" else []),
+        }
+
+    # 3) 그 외 → 기존 web_search
     return {
         "question_type": "web_search",
-        "intent": query[:100] if query else "",
+        "intent": q[:100] if q else "",
         "required_data": [
-            {"tool": "search_web", "args": {"query": f"{query} {now.year}년 {now.month}월"}, "priority": 1, "reason": "일반 검색"},
+            {"tool": "search_web", "args": {"query": f"{q} {now.year}년 {now.month}월"},
+             "priority": 1, "reason": "LLM 503 fallback — 일반 검색"},
         ],
         "data_freshness": "recent",
         "answer_format": "text",
@@ -281,8 +352,11 @@ def analyze_question(user_query, conversation_context=None, farm_id=None, house_
         logger.error(f"[1단계] LLM 분석 예외, fallback 사용: {e}")
         logger.error(traceback.format_exc())
 
-    # Step 3: LLM 실패 시 안전한 fallback
+    # Step 3: LLM 실패 시 안전한 fallback (키워드 기반 분기)
     plan = _build_safe_fallback(user_query, farm_id, house_id)
     total_ms = (time.time() - t0) * 1000
-    logger.info(f"[1단계] fallback=web_search ({total_ms:.0f}ms) query=\"{user_query[:60]}\"")
+    logger.info(
+        f"[1단계] fallback={plan['question_type']} 도구={len(plan['required_data'])}개 "
+        f"({total_ms:.0f}ms) query=\"{user_query[:60]}\""
+    )
     return plan
