@@ -88,20 +88,22 @@ def test_step_logger_prefix_variants():
 # 사용자 명시 규칙: "수온 ≥ 40℃ ⟹ 포그 ON" (수온히터 상태 무관)
 # ════════════════════════════════════════════════════════════════════════════
 def test_fog_coupling_water_below_40_heater_on():
-    """수온 < 40 + 수온히터 ON → 포그 OFF (가열 중·차가운 안개 무의미)."""
+    """[2026-05-01] 효율 룰 (3),(4) 제거 — 수온<40 + heater ON 시 LLM fog 결정 보존 (자율 판단)."""
     from agri_ai_core.src.control.environment_logic import _apply_fog_coupling
     devices = {'water_heater_flag': True, 'fog_occurs_flag': True}
     _apply_fog_coupling(devices, {'water_temperature': 30, 'indoor_temperature': 24})
-    assert devices['fog_occurs_flag'] is False
+    # 안전가드(과열·실내고온) 미발동 → LLM 의 fog=True 결정 그대로 보존
+    assert devices['fog_occurs_flag'] is True
     assert devices['water_heater_flag'] is True
 
 
 def test_fog_coupling_water_above_40_any_heater():
-    """수온 ≥ 40 → 포그 ON (수온히터 상태 무관)."""
+    """[2026-05-01] 효율 룰 제거 — 수온 ≥ 40 시 LLM fog 결정 보존 (강제 ON 안 함)."""
     from agri_ai_core.src.control.environment_logic import _apply_fog_coupling
     for heater in (True, False):
-        devices = {'water_heater_flag': heater, 'fog_occurs_flag': False}
+        devices = {'water_heater_flag': heater, 'fog_occurs_flag': True}
         _apply_fog_coupling(devices, {'water_temperature': 45, 'indoor_temperature': 28})
+        # LLM fog=True → 보존
         assert devices['fog_occurs_flag'] is True
 
 
@@ -335,18 +337,20 @@ def test_relay_response_schema_structure():
 
 
 def test_ai_control_extended_token_limits():
+    # [2026-05-04] num_predict 1500→400 — 실응답 <200토큰 · GPU 점유시간 단축
     from agri_ai_core.src.control import ai_control as ac
-    assert ac.AI_CONTROL_NUM_PREDICT >= 1500
+    assert ac.AI_CONTROL_NUM_PREDICT >= 300
     assert ac.AI_CONTROL_NUM_CTX     >= 8192
     assert ac.AI_CONTROL_TIMEOUT     >= 120
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# [2026-04-28 rev4] 수온히터 가동 정책 가드 (LLM 응답에만 적용)
-# 사용자 명시: "수온히터의 목적은 실내 환경 조절. 실내 정상이면 가열 불필요."
+# [2026-05-01] 수온히터 정책 보정 코드 제거 — LLM 자율 판단 보존 검증
+# 정상 환경(critical 미트립)에서는 LLM 의 heater=True 결정을 강제 OFF 하지 않음.
+# critical 임계 안전 가드만 유지, 정상 범위 결정은 LLM 에 위임.
 # ════════════════════════════════════════════════════════════════════════════
-def test_validate_safety_heater_off_when_indoor_normal(monkeypatch):
-    """LLM 이 heater=ON 결정해도 실내·외부 정상 + 수온비상 아니면 강제 OFF."""
+def test_validate_safety_heater_kept_when_indoor_normal(monkeypatch):
+    """정상 환경에서도 LLM 의 heater=ON 결정을 그대로 보존 (정책 보정 미발동)."""
     from agri_ai_core.src.control import ai_control as ac
     # ts 모킹 — 99호 시나리오와 유사 (정상 20~25)
     class _TS:
@@ -375,7 +379,8 @@ def test_validate_safety_heater_off_when_indoor_normal(monkeypatch):
     }
     out = ac._validate_safety(parsed, sensor, 0, 99, growth_stage='생육기')
     assert out is not None
-    assert out['devices']['water_heater_flag'] is False, "정책 가드: 정상 환경에서 heater 강제 OFF"
+    assert out['devices']['water_heater_flag'] is True, \
+        "[2026-05-01] 정책 보정 제거 — 정상 환경에서 LLM heater=True 결정 보존"
 
 
 def test_validate_safety_heater_kept_when_indoor_low(monkeypatch):

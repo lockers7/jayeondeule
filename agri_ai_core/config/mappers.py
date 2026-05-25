@@ -87,12 +87,14 @@ _RELAY_DESCRIPTIONS = {
         '재배사 내부 온도(indoor_temperature_value)와 습도(indoor_humidity_value)가 함께 상승. '
         '【의존성 (필수)】 drainage_motor_flag 와 상호배타. 배수밸브가 ON 이면 새 차가운 지하수가 계속 유입되어 가열 불가. '
         '수온을 올리려면 반드시 [drainage_motor_flag = OFF + water_heater_flag = ON] 조합. '
-        '【가열 효율 룰 (사용자 정의·중요)】 '
-        '포그가 ON 인 상태에서 가열하면 분사 손실로 가열이 매우 더디다. 신속한 수온 회복을 위해 다음 시퀀스를 따른다: '
-        '(1) 수온이 적정범위 - 5℃ 이하 (예: 적정 35℃ 기준 30℃ 이하) → fog_occurs_flag = OFF 로 가열 집중. '
-        '(2) 수온이 적정범위(water_temp_low) 도달 → fog_occurs_flag = ON 으로 재배사 가습·가온 전달. '
-        '(3) 수온이 적정범위 안에서 유지되는 동안은 fog ON 유지. '
-        '이 -5℃ 히스테리시스는 단순 임계 ON/OFF 진동(채터링)을 막고 가열 효율을 극대화하는 핵심 룰. '
+        '【가열 효율 룰 (사용자 정의·중요 — 2026-05-03 통일)】 '
+        '포그가 ON 인 상태에서 가열하면 분사 손실로 가열이 매우 더디다. 신속한 수온 회복을 위해 '
+        '실내온도 기준 +5℃ 히스테리시스 시퀀스를 따른다: '
+        '(1) 수온 < (실내온도 + 5℃) → fog_occurs_flag = OFF 로 가열 집중 (가열된 열기 분사 손실 방지). '
+        '(2) 수온 ≥ (실내온도 + 5℃) → fog_occurs_flag = ON 으로 재배사 가습·가온 전달. '
+        '(3) 두 임계 사이 영역은 직전 상태 유지 (채터링 방지). '
+        '예: 실내 22℃ 일 때 — 수온 < 27℃ → fog OFF, 수온 ≥ 27℃ → fog ON. '
+        '이 +5℃ 실내 기준 히스테리시스는 가열 효율 극대화 + 채터링 방지 + 비상정책 #1 통일. '
         '【목표 수온대】 SENSOR_M_SETTING DB 테이블의 호기별 water_temp_low~water_temp_high 범위 (예: 40~55℃). '
         '임계값 자체는 하드코딩 금지 — DB 조회.'
     ),
@@ -106,13 +108,13 @@ _RELAY_DESCRIPTIONS = {
         '탱크가 따뜻하면 재배사 온도 상승, 차가우면 하강. '
         '【필수 안전 가드 (시스템 자동 강제)】 탱크 수온이 비상 하한(SENSOR_M_SETTING.water_temp_critical_low) 미만이면 '
         '시스템이 강제 OFF — 차가운 미스트로 재배사가 급랭되는 사고 방지. '
-        '【가열 시퀀스 룰 (사용자 정의·중요)】 '
+        '【가열 시퀀스 룰 (사용자 정의·중요 — 2026-05-03 통일)】 '
         '실내 저온이라 수온히터 가열 중일 때, 포그가 동시 ON 이면 미스트 분사로 탱크 수온이 잘 안 오른다. '
-        '따라서 가열 페이즈는 다음 히스테리시스 시퀀스로 관리: '
-        '(1) 수온 < 적정범위 - 5℃ → fog OFF (가열 집중). '
-        '(2) 수온 ≥ 적정범위(water_temp_low) → fog ON (가습·가온 재배사 전달). '
-        '(3) 적정범위 안에서는 ON 유지, 적정범위 - 5℃ 미만으로 떨어질 때만 다시 OFF. '
-        '단순 임계 ON/OFF 진동(채터링) 방지 + 가열 효율 극대화. '
+        '따라서 가열 페이즈는 실내온도 기준 +5℃ 히스테리시스로 관리: '
+        '(1) 수온 < (실내온도 + 5℃) → fog OFF (가열 집중, 분사 손실 방지). '
+        '(2) 수온 ≥ (실내온도 + 5℃) → fog ON (가습·가온 재배사 전달). '
+        '(3) 두 임계 사이는 직전 상태 유지 — 채터링 방지. '
+        '예: 실내 22℃ 일 때 수온 27℃ 가 토글 임계. 비상정책 #1 의 5℃ 와 통일. '
         '【용도 시나리오】 '
         '· 가열+가습: 수온히터로 탱크를 데운 뒤(배수밸브 OFF + 수온히터 ON) 위 시퀀스 따라 fog 결정. '
         '· 냉방+가습: 배수밸브 ON 으로 탱크가 자연 지하수 온도일 때 포그 ON (여름철).'
@@ -129,7 +131,11 @@ _RELAY_DESCRIPTIONS = {
         '· 겨울철 가열: drainage_motor_flag = OFF → 수온히터 ON 으로 탱크 가열 → 포그 ON 시 따뜻한 미스트로 재배사 온도 상승. '
         '【LLM 제어 권한 (2026-05-01 변경)】 LLM 직접 결정 가능. 수온히터·배수밸브 상호배타 룰을 LLM 이 직접 적용한다. '
         '· 수온히터 ON ↔ 배수밸브 OFF (가온 위해 물 가둠). '
-        '· 수온히터 OFF ↔ 배수밸브 ON (자연 흐름 유지·냉방).'
+        '· 수온히터 OFF ↔ 배수밸브 ON (자연 흐름 유지·냉방). '
+        '【수온 과열비상 분기 룰 (사용자 정의·2026-05-04)】 '
+        '수온이 watr_tprt_crit_max 를 넘으면 수온히터는 무조건 OFF. drainage 결정은 실내 온도에 따라 분기: '
+        '① 실내가 가열 필요 또는 정상(indoor_temp ≤ tprt_max) → drainage 현상유지 (LLM 자율 결정 보존). '
+        '② 실내가 냉각 필요(indoor_temp > tprt_max) → drainage ON (탱크에 차가운 새 지하수 주입 → 능동 냉각).'
     ),
     'intake_fan_flag': (
         '【대상】 공기를 한 방향으로 밀어내는 송풍 팬. '
@@ -317,7 +323,22 @@ def control_modes_enum():
     return list(CONTROL_MODES)
 
 
+# ────────────────────────────────────────────────────────────────────
+# [프롬프트 자동화 · Phase 3-(2)] CIRCULATION_MODES 표 — DB 우선 / 코드 폴백.
+# USE_DB_BLOCKS=1 일 때 prompt_block_m 의 'CIRCULATION_MODES_TABLE' 사용.
+# DB 비어있거나 예외 시 control_common.CIRCULATION_MODES 자동 생성 폴백.
+# ────────────────────────────────────────────────────────────────────
 def circulation_modes_text():
+    import os as _os
+    if _os.getenv("USE_DB_BLOCKS", "0") == "1":
+        try:
+            from agri_ai_core.src.prompt_registry import get_block as _get_block
+            db_text = _get_block('CIRCULATION_MODES_TABLE')
+            if db_text:
+                return db_text
+        except Exception:
+            pass
+
     from agri_ai_core.src.control.control_common import CIRCULATION_MODES
 
     def _onoff(v):
@@ -506,18 +527,30 @@ def all_relay_defs():
 # 자동 갱신 (서비스 재시작 없이도 함수 호출 시점에 새 desc 반영).
 # ────────────────────────────────────────────────────────────────────
 def device_detail_text():
+    import os as _os
+    use_db = _os.getenv("USE_DB_RULES", "0") == "1"
+
+    def _desc_for(sem, fallback):
+        if use_db:
+            try:
+                from agri_ai_core.src.prompt_registry import get_rule_by_id as _get
+                v = _get(sem)
+                if v:
+                    return v
+            except Exception:
+                pass
+        return _RELAY_DESCRIPTIONS.get(sem, fallback)
+
     seen = set()
     lines = []
     for r in RELAY_FIELD_MAPPING.values():
         seen.add(r.sem)
-        desc = _RELAY_DESCRIPTIONS.get(r.sem, r.desc)
-        lines.append(f"- {r.sem} — {r.kor_func} ({r.kor_relay}): {desc}")
+        lines.append(f"- {r.sem} — {r.kor_func} ({r.kor_relay}): {_desc_for(r.sem, r.desc)}")
     for r in RELAY_FIELD_MAPPING_E.values():
         if r.sem in seen:
             continue
         seen.add(r.sem)
-        desc = _RELAY_DESCRIPTIONS.get(r.sem, r.desc)
-        lines.append(f"- {r.sem} — {r.kor_func} (E타입 {r.kor_relay}): {desc}")
+        lines.append(f"- {r.sem} — {r.kor_func} (E타입 {r.kor_relay}): {_desc_for(r.sem, r.desc)}")
     return '\n'.join(lines)
 
 

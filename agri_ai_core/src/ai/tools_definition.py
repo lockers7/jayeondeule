@@ -358,7 +358,29 @@ def _inject_admin_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # get_available_tools 는 위에 이미 정의됨. 리턴 시점에 관리 도구를 병합하도록 모듈 로드 후 한 번만 패치.
 _original_get_available_tools = get_available_tools
 
+
+# ────────────────────────────────────────────────────────────────────
+# [프롬프트 자동화 · Phase 3-(3)] 도구 목록 — DB 우선 / 코드 폴백.
+# 환경변수 USE_DB_TOOLS=1 일 때 prompt_registry.get_tools() 우선 사용.
+# DB 비어있거나 예외 시 기존 hard-coded 흐름으로 자동 폴백 (영향 0).
+# ────────────────────────────────────────────────────────────────────
 def get_available_tools() -> List[Dict[str, Any]]:  # type: ignore[no-redef]
+    import os as _os
+    if _os.getenv("USE_DB_TOOLS", "0") == "1":
+        try:
+            from agri_ai_core.src.prompt_registry import get_tools as _registry_get_tools
+            rows = _registry_get_tools()
+            if rows:
+                return [
+                    {"type": "function", "function": {
+                        "name": r["tool_id"],
+                        "description": r["description"],
+                        "parameters": r["schema_json"],
+                    }}
+                    for r in rows
+                ]
+        except Exception:
+            pass
     return _inject_admin_tools(_original_get_available_tools())
 
 

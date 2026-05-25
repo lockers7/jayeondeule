@@ -1,5 +1,7 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # AI/알고리즘 환경제어 — 재배사별 임계값 동적 로드 모듈 (M18, [2026-04-28 rev2])
+# [Phase 3-a · 2026-05-09] 캐시 invalidate 정책을 TTL → updt_dttm 비교로 변경.
+#                          web UI 변경 즉시 반영(다음 호출에서). TTL 폐기.
 #
 # 사용자 강제 요구: "센서값은 절대 하드코딩 금지. 테이블 컬럼 값만 변경하면 되어야
 # 한다." → 정상/비상/발이기 모든 임계값을 SENSOR_M_SETTING 테이블에서 직접 조회.
@@ -23,11 +25,10 @@
 #   • postgresql 만 의존.
 # --->
 # ThresholdSet:        값 컨테이너 (dataclass)
-# get_thresholds:      (farm_id, house_id) → ThresholdSet (캐시 5분 TTL)
+# get_thresholds:      (farm_id, house_id) → ThresholdSet (updt_dttm 비교 캐시)
 # get_global_default:  DB 부재/미연결 시 최후 폴백 (운영에선 발생 안 해야 함)
 # clear_cache:         테스트용
 # ══════════════════════════════════════════════════════════════════════════════
-import time
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, Optional
 
@@ -38,8 +39,10 @@ import agri_ai_core.src.postgresql.queries as dbQry
 logger = setup_logger(__name__)
 
 
-_CACHE_TTL_SEC = 300  # 5분 — 운영 중 셋팅 변경 시 빠른 반영
-_CACHE: Dict[tuple, tuple] = {}  # {(farm, house): (expires_at, ThresholdSet)}
+# [Phase 3-a] TTL 폐기. updt_dttm 비교 invalidate 로 전환.
+# 캐시 entry 형식: (last_seen_updt_dttm, ThresholdSet)
+# 매 호출마다 max(updt_dttm) 1건 SELECT — 동일하면 hit, 다르면 전체 재로드.
+_CACHE: Dict[tuple, tuple] = {}
 
 
 # 최후 폴백 — DB 미연결 / 행 부재 / 모든 컬럼 NULL 인 비상 상황에만 사용.
@@ -221,7 +224,12 @@ def get_global_default() -> ThresholdSet:
 
 
 # ────────────────────────────────────────────────────────────────────
-# 재배사별 정상/비상 임계값 한 번에 조회. 캐시 5분.
+# 재배사별 정상/비상 임계값 한 번에 조회.
+# [Phase 3-a] 캐시 invalidate: SENSOR_M_SETTING.max(updt_dttm) 비교.
+#   - 매 호출마다 max(updt_dttm) 1건 SELECT (가벼움)
+#   - 캐시의 updt_dttm 와 동일 → 캐시 hit (DB 재로드 skip)
+#   - 다르거나 캐시 없음 → 전체 재로드 후 캐시 갱신
+#   - DB 오류 시 캐시 hit fallback, 그도 없으면 last_resort
 # DB 부재/오류 시에만 last_resort 폴백 — 운영에서는 DB 값이 항상 우선.
 # ────────────────────────────────────────────────────────────────────
 def get_thresholds(farm_id, house_id) -> ThresholdSet:
@@ -229,10 +237,21 @@ def get_thresholds(farm_id, house_id) -> ThresholdSet:
         return get_global_default()
 
     cache_key = (int(farm_id), int(house_id))
+
+    # 1) 가벼운 max(updt_dttm) 조회 — 변경 감지
+    current_updt = None
+    try:
+        from agri_ai_core.src.postgresql.reader import read_sensor_setting_max_updt
+        current_updt = read_sensor_setting_max_updt(int(farm_id), int(house_id))
+    except Exception as ee:
+        logger.debug(f"[AI임계값] updt_dttm 조회 실패 (캐시 fallback): {ee}")
+
+    # 2) 캐시 hit — updt_dttm 동일하면 그대로 반환
     e = _CACHE.get(cache_key)
-    if e and time.time() < e[0]:
+    if e and current_updt is not None and e[0] == current_updt:
         return e[1]
 
+    # 3) 변경 감지 (또는 첫 조회) — 전체 row 재로드
     ts: Optional[ThresholdSet] = None
     try:
         with db_session() as database:
@@ -241,32 +260,37 @@ def get_thresholds(farm_id, house_id) -> ThresholdSet:
                 vals=(int(farm_id), int(house_id)),
             )
         ts = _from_db_row(row) if row else None
-    except Exception as e:
+    except Exception as ex:
         logger.warning(
-            f"[AI임계값] DB 조회 실패 farm={farm_id} house={house_id}: {e}"
+            f"[AI임계값] DB 조회 실패 farm={farm_id} house={house_id}: {ex}"
         )
         ts = None
 
+    # 4) DB 실패 시 — 기존 캐시 우선 (운영 안정), 그도 없으면 last_resort
     if ts is None:
+        if e:
+            return e[1]
         ts = _from_last_resort()
         logger.warning(
             f"[AI임계값] DB 행/컬럼 부재 → last_resort 폴백 farm={farm_id} house={house_id} "
             f"(SENSOR_M_SETTING 운영자 셋팅 권장)"
         )
     else:
-        logger.info(
-            f"[AI임계값] DB 로드 완료 farm={farm_id} house={house_id} "
-            f"src={ts.source} 온도 정상 {ts.temp_low}~{ts.temp_high}℃ "
-            f"비상 {ts.temp_critical_low}~{ts.temp_critical_high}℃ · "
-            f"습도 정상 {ts.humidity_low}~{ts.humidity_high}% "
-            f"비상 {ts.humidity_critical_low}~{ts.humidity_critical_high}% · "
-            f"CO2 정상 ≤{ts.co2_high}ppm 비상 >{ts.co2_critical_high}ppm · "
-            f"수온 정상 {ts.water_temp_low}~{ts.water_temp_high}℃ "
-            f"비상 {ts.water_temp_critical_low}~{ts.water_temp_critical_high}℃ · "
-            f"발이기 {ts.budding_temp_low}~{ts.budding_temp_high}℃"
-        )
+        # 변경 감지로 재로드된 경우만 INFO 로깅 (운영 잡음 감소)
+        if e is None or (current_updt is not None and e[0] != current_updt):
+            logger.info(
+                f"[AI임계값] DB 로드 완료 farm={farm_id} house={house_id} "
+                f"src={ts.source} 온도 정상 {ts.temp_low}~{ts.temp_high}℃ "
+                f"비상 {ts.temp_critical_low}~{ts.temp_critical_high}℃ · "
+                f"습도 정상 {ts.humidity_low}~{ts.humidity_high}% "
+                f"비상 {ts.humidity_critical_low}~{ts.humidity_critical_high}% · "
+                f"CO2 정상 ≤{ts.co2_high}ppm 비상 >{ts.co2_critical_high}ppm · "
+                f"수온 정상 {ts.water_temp_low}~{ts.water_temp_high}℃ "
+                f"비상 {ts.water_temp_critical_low}~{ts.water_temp_critical_high}℃ · "
+                f"발이기 {ts.budding_temp_low}~{ts.budding_temp_high}℃"
+            )
 
-    _CACHE[cache_key] = (time.time() + _CACHE_TTL_SEC, ts)
+    _CACHE[cache_key] = (current_updt, ts)
     return ts
 
 

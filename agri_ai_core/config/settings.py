@@ -52,6 +52,8 @@ class CollectionSettings:
     document: Optional[str]
     conversation: Optional[str]
     web_knowledge: Optional[str]
+    prompt_chunk: Optional[str]   # [프롬프트 자동화] 시스템/유저/분석/답변 프롬프트 chunk
+    domain_rule: Optional[str]    # [프롬프트 자동화] 결합 규칙·안전 룰·사용자 학습 룰
 
 
 @dataclass(frozen=True)
@@ -136,6 +138,8 @@ def get_settings() -> AppSettings:
         document=os.getenv("COLLECTION_DOCUMENT"),
         conversation=os.getenv("COLLECTION_CONVERSATION"),
         web_knowledge=os.getenv("COLLECTION_WEB_KNOWLEDGE"),
+        prompt_chunk=os.getenv("COLLECTION_PROMPT_CHUNK", "prompt_chunk"),
+        domain_rule=os.getenv("COLLECTION_DOMAIN_RULE", "domain_rule"),
     )
 
     logging_settings = LoggingSettings(

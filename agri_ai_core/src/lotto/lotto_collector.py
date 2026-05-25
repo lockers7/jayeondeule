@@ -48,10 +48,13 @@ def update_lotto_db():
     from agri_ai_core.src.postgresql.connection import db_session
 
     # 마지막 회차 확인
+    # [2026-05-04 fix] execute_query 는 SELECT 시도 bool 반환 → fetch_one 으로 수정.
+    #   기존 코드: rows[0][0] 접근 시 'bool object is not subscriptable' 에러로
+    #   2026-04-04 이후 4주간(4/11, 4/18, 4/25, 5/2) 토요일 22:00 수집이 모두 실패.
     logger.debug("[로또수집] DB에서 마지막 회차 조회 중...")
     with db_session() as db:
-        rows = db.execute_query("SELECT MAX(draw_no) FROM lotto_results")
-        last_draw = rows[0][0] if rows and rows[0][0] else 0
+        row = db.fetch_one("SELECT MAX(draw_no) AS max_draw FROM lotto_results")
+        last_draw = (row.get("max_draw") if row else None) or 0
 
     logger.info(f"[로또수집] DB 마지막 회차: {last_draw}, 최신 데이터 수집 시작...")
 

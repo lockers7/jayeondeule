@@ -98,9 +98,14 @@ def _persist_relay_values(farm_id, house_id, relay_values, count=_PERSIST_COUNT,
 # ────────────────────────────────────────────────────────────────────
 # 릴레이 값 설정 메인 함수 — 인터록 게이트 통과 후 DB 쓰기.
 # raw_mode=True: 16개 핀 직접 전달 (수동환경제어). False: 시멘틱 부분갱신.
+# skip_emergency_guard=True: 수동 UI 사용자 명령 — 비상 오버라이드 미적용
+#   (사용자 정책 2026-05-17). 스케줄·RPI 자동 호출은 False 유지로 기존 비상가드 작동.
 # 마이크로초 타임스탬프 + IoT 폴링 생존용 백그라운드 반복 쓰기 자동 트리거.
 # ────────────────────────────────────────────────────────────────────
-def set_relay_value(farm_id, house_id, relay_settings, raw_mode=False):
+def set_relay_value(farm_id, house_id, relay_settings, raw_mode=False,
+                    skip_emergency_guard=True):
+    # [2026-05-17] skip_emergency_guard default 를 True 로 변경 — 운용모드 무관
+    # 모든 비상제어 skip (사용자 정책). 호출자에서 명시적 False 전달 시만 적용.
     try:
         # 인터록 게이트는 raw_mode 와 무관하게 항상 통과 — 게이트는 현재 DB 상태 대비
         # target 의 OFF→ON 전이만 검사하므로 이미 ON 인 팬은 영향 없음. raw_mode 의
@@ -116,6 +121,34 @@ def set_relay_value(farm_id, house_id, relay_settings, raw_mode=False):
                 f"relay_{i}st_flag": bool(relay_settings.get(f"relay_{i}st_flag", False))
                 for i in range(1, RELAY_COUNT + 1)
             }
+            # ────────────────────────────────────────────────────────────
+            # [2026-05-17] 사용자 정책 — 운용모드 무관 모든 비상제어 skip.
+            #   skip_emergency_guard default=True 로 모든 호출자에서 자동 건너뜀.
+            #   비상가드 복귀 시: default=False 변경 + 본 분기 안 로그 재추가.
+            # ────────────────────────────────────────────────────────────
+            if not skip_emergency_guard:
+                try:
+                    from agri_ai_core.src.postgresql.reader import read_current_sensor_info
+                    from agri_ai_core.src.control.environment_logic import _emergency_override
+                    from agri_ai_core.src.control.ai_thresholds import get_thresholds
+                    _sensor = read_current_sensor_info(farm_id, house_id) or {}
+                    _ts = get_thresholds(farm_id, house_id)
+                    _is_e, _dev_override, _circ_override, _wto = _emergency_override(_sensor, _ts)
+                    if _is_e and _dev_override:
+                        _pin_map = get_pin_map(house_id)
+                        for _sem, _val in _dev_override.items():
+                            if _val is None:
+                                continue
+                            _pin = _pin_map.get(_sem)
+                            if _pin and _pin in relay_values:
+                                _prev = relay_values[_pin]
+                                relay_values[_pin] = bool(_val)
+                                logger.warning(
+                                    f"[비상가드] 자동 호출 {_sem}({_pin}) {_prev} → {_val} "
+                                    f"(스케줄/RPI 경로 — 사용자 원칙: 운용모드 결정 후 비상 오버라이드)"
+                                )
+                except Exception as _e:
+                    logger.error(f"[비상가드] 자동 호출 비상 오버라이드 실패: {_e}")
         else:
             # 현재 릴레이 상태를 읽어 기존 상태 보존 (부분 갱신)
             current = current_for_gate

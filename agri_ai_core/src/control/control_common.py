@@ -131,16 +131,18 @@ def resolve_device_alias(name):
 # ════════════════════════════════════
 CIRCULATION_MODES = {
     '순환정지': {
+        # [2026-05-04 사용자 정의] 모든 밸브 OFF — 밸브 열림 시 미약한 내외기
+        # 공기 누출까지 완전 차단. 이전 ON·ON·ON 은 공기구멍이 열려 있어 미세 흐름 발생.
         'dampers': {
-            'air_circulation_valve_flag': True,
-            'air_intake_valve_flag': True,
-            'air_exhaust_valve_flag': True,
+            'air_circulation_valve_flag': False,
+            'air_intake_valve_flag': False,
+            'air_exhaust_valve_flag': False,
         },
         'fans': {
             'intake_fan_flag': False,
             'exhaust_fan_flag': False,
         },
-        'effect': '모든 흐름 정지 (밸브는 모두 ON, 팬만 OFF)',
+        'effect': '모든 밸브·팬 OFF — 내외기 완전 차단',
     },
     '내부순환': {
         'dampers': {

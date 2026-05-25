@@ -87,9 +87,17 @@ def get_forecast(farm_id, house_id) -> Dict[str, Any]:
         return {}
 
     url = os.getenv("KMA_FORECAST_URL", _DEFAULT_URL)
-    now = datetime.now() - timedelta(minutes=45)  # KMA 최신 발표 시간 보정
-    base_date = now.strftime("%Y%m%d")
-    base_time = now.strftime("%H00")
+    # KMA 단기예보 base_time 은 02·05·08·11·14·17·20·23 시(3h 간격)만 유효.
+    # 발표 +10분 안전 마진 후, 가장 가까운 과거 발표 시각으로 스냅.
+    _BASE_HOURS = (2, 5, 8, 11, 14, 17, 20, 23)
+    ref = datetime.now() - timedelta(minutes=10)
+    _valid = [h for h in _BASE_HOURS if h <= ref.hour]
+    if _valid:
+        base_dt = ref.replace(hour=_valid[-1], minute=0, second=0, microsecond=0)
+    else:
+        base_dt = (ref - timedelta(days=1)).replace(hour=23, minute=0, second=0, microsecond=0)
+    base_date = base_dt.strftime("%Y%m%d")
+    base_time = base_dt.strftime("%H00")
 
     params_url = (
         f"{url}?serviceKey={api_key}&pageNo=1&numOfRows=300&dataType=JSON"

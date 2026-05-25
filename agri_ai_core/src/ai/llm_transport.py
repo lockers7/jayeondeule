@@ -445,6 +445,21 @@ def _log_llm_response_json(result, transport, elapsed):
 # 3가지 전송(package/MCP/direct) 중 가용한 것으로 Ollama chat 호출.
 # 전송 실패 시 다음 전송으로 폴백. 모두 실패 시 RuntimeError.
 # ────────────────────────────────────────────────────────────────────
+# [2026-05-04 D안] Ollama "server busy / 503" 일시 자원 부족 에러 감지 헬퍼.
+#   대화 LLM 호출 시 제어 LLM 또는 임베딩이 슬롯을 점유 중이면 503 발생.
+#   짧은 backoff 후 재시도하면 슬롯 확보되어 정상 응답 받을 가능성 높음.
+def _is_ollama_busy_error(err: Exception) -> bool:
+    s = str(err).lower()
+    return (
+        "server busy" in s
+        or "maximum pending requests" in s
+        or "503" in s
+    )
+
+
+_OLLAMA_BUSY_BACKOFFS = (1.0, 2.0, 4.0)  # 총 1+2+4=7초 추가 대기
+
+
 def _ollama_chat(
     model: str,
     messages: list,
@@ -476,34 +491,49 @@ def _ollama_chat(
     for label, check_fn, call_fn in _TRANSPORTS:
         if not check_fn():
             continue
-        try:
-            result = call_fn(
-                model=model, messages=messages, options=options,
-                tools=tools, keep_alive=keep_alive, think=think_value,
-            )
-            elapsed = time.time() - t_start
-            _log_llm_response_json(result, label, elapsed)
-            resp_content = _extract_message_content(result)
-            log_msg = (
-                f"[Ollama응답] transport={label} ({elapsed:.1f}s) "
-                f"답변길이={len(resp_content)}자"
-            )
-            if label == "package":
-                resp_tool_calls = _extract_tool_calls_fn(
-                    _normalize_assistant_message(
-                        result.message if hasattr(result, 'message')
-                        else (result.get('message', {}) if isinstance(result, dict) else {})
-                    ),
-                    logger=logger,
+        # [2026-05-04 D안] 동일 transport 내 503/busy 재시도 (1s → 2s → 4s backoff)
+        last_err = None
+        for attempt in range(len(_OLLAMA_BUSY_BACKOFFS) + 1):
+            try:
+                result = call_fn(
+                    model=model, messages=messages, options=options,
+                    tools=tools, keep_alive=keep_alive, think=think_value,
                 )
-                log_msg += f" tool_calls={len(resp_tool_calls)}개"
-            logger.info(log_msg)
-            return result
-        except Exception as err:
-            errors.append(str(err))
-            if label == "direct":
-                raise
-            logger.warning(f"Ollama chat 호출 실패({label}) -> fallback: {err}")
+                elapsed = time.time() - t_start
+                _log_llm_response_json(result, label, elapsed)
+                resp_content = _extract_message_content(result)
+                log_msg = (
+                    f"[Ollama응답] transport={label} ({elapsed:.1f}s) "
+                    f"답변길이={len(resp_content)}자"
+                )
+                if label == "package":
+                    resp_tool_calls = _extract_tool_calls_fn(
+                        _normalize_assistant_message(
+                            result.message if hasattr(result, 'message')
+                            else (result.get('message', {}) if isinstance(result, dict) else {})
+                        ),
+                        logger=logger,
+                    )
+                    log_msg += f" tool_calls={len(resp_tool_calls)}개"
+                logger.info(log_msg)
+                return result
+            except Exception as err:
+                last_err = err
+                if _is_ollama_busy_error(err) and attempt < len(_OLLAMA_BUSY_BACKOFFS):
+                    backoff = _OLLAMA_BUSY_BACKOFFS[attempt]
+                    logger.warning(
+                        f"Ollama chat busy({label}, 시도 {attempt + 1}) "
+                        f"→ {backoff}s 후 재시도: {str(err)[:120]}"
+                    )
+                    time.sleep(backoff)
+                    continue
+                # busy 아닌 에러이거나 최대 재시도 도달 → transport fallback
+                break
+        # 이 transport 의 모든 재시도 실패 → 다음 transport 시도
+        errors.append(str(last_err))
+        if label == "direct":
+            raise last_err
+        logger.warning(f"Ollama chat 호출 실패({label}) -> fallback: {last_err}")
 
     error_tail = errors[-1] if errors else "all transports unavailable"
     raise RuntimeError(f"No available Ollama transport: {error_tail}")

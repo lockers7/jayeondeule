@@ -22,6 +22,10 @@ logger = setup_logger(__name__)
 _RAG_TOP_K = 2
 _RAG_DOC_PREVIEW_CHARS = 220
 
+# [Phase 3-c · 2026-05-09] TTL 캐시 폐기.
+# 사용자 지침: "비용 무시. 모든 데이터 실시간." → 매 호출마다 임베딩 + 검색.
+# farm_knowledge 컬렉션의 새 row 추가/삭제 즉시 반영.
+
 
 # ────────────────────────────────────────────────────────────────────
 # 현재 상황(센서값+생육단계)을 한국어 한 문장으로 압축 — 임베딩 입력 텍스트.
@@ -48,6 +52,7 @@ def _build_query_text(sensor: Dict[str, Any], growth_stage: str) -> str:
 def query_similar_periods(farm_id, house_id, sensor: Dict[str, Any],
                           growth_stage: str = "생육기",
                           top_k: int = _RAG_TOP_K) -> List[Dict[str, Any]]:
+    # [Phase 3-c · 2026-05-09] 캐시 폐기 — 매 호출 임베딩 + chroma 검색.
     try:
         from agri_ai_core.src.ai.embedder import embed_text
         from agri_ai_core.src.chroma.collections import farm_knowledge_collection

@@ -242,6 +242,32 @@ chromadb_restart() {
     fi
 }
 
+# --- ChromaFlowStudio (운영 ChromaDB 관리 GUI · Docker 컨테이너 · 127.0.0.1:5000) ---
+chromaflow_start() {
+    log_msg "${BLUE}[ChromaFlowStudio]${NC} 시작 중..."
+    if sudo docker ps --format '{{.Names}}' | grep -q '^chromaflow$'; then
+        log_msg "${YELLOW}[ChromaFlowStudio]${NC} 이미 실행 중"
+        return 0
+    fi
+    sudo docker start chromaflow >/dev/null 2>&1 \
+        && log_msg "${GREEN}[ChromaFlowStudio]${NC} 시작 완료 (127.0.0.1:5000)" \
+        || log_msg "${RED}[ChromaFlowStudio]${NC} 시작 실패 — setup/05.deploy_configs.sh 로 컨테이너 등록 필요"
+}
+
+chromaflow_stop() {
+    log_msg "${BLUE}[ChromaFlowStudio]${NC} 중지 중..."
+    sudo docker stop chromaflow >/dev/null 2>&1 \
+        && log_msg "${GREEN}[ChromaFlowStudio]${NC} 중지 완료" \
+        || log_msg "${YELLOW}[ChromaFlowStudio]${NC} 컨테이너 미존재"
+}
+
+chromaflow_restart() {
+    log_msg "${BLUE}[ChromaFlowStudio]${NC} 재시작 중..."
+    sudo docker restart chromaflow >/dev/null 2>&1 \
+        && log_msg "${GREEN}[ChromaFlowStudio]${NC} 재시작 완료" \
+        || log_msg "${RED}[ChromaFlowStudio]${NC} 재시작 실패"
+}
+
 # --- Scheduler ---
 scheduler_start() {
     log_msg "${BLUE}[Scheduler]${NC} 시작 중..."
@@ -791,6 +817,7 @@ all_start() {
     ollama_start
     postgresql_start
     chromadb_start
+    chromaflow_start
     scheduler_start
     fastapi_start
     searxng_start
@@ -849,6 +876,7 @@ all_stop() {
     searxng_stop
     fastapi_stop
     scheduler_stop
+    chromaflow_stop
     chromadb_stop
     postgresql_stop
     ollama_stop
@@ -1007,6 +1035,7 @@ show_menu() {
     echo -e "  ${CYAN}12${NC}. ALL Build        (Web + Shop 전체 빌드)"
     echo -e "  ${CYAN}13${NC}. RPi Camera       (5199 USB 카메라 원격 — port 8095)"
     echo -e "  ${CYAN}14${NC}. Camera Archive   (시간별 캡처 + 24시간 이력 + 보존정책)"
+    echo -e "  ${CYAN}15${NC}. ChromaFlow Studio (운영 ChromaDB GUI Docker, 127.0.0.1:5000)"
     echo ""
     echo -n -e "  번호 입력 (q=종료): "
 }
@@ -1130,6 +1159,15 @@ execute_service() {
                 logs)    tail -n 100 -f "$LOG_DIR/scheduler.log" 2>/dev/null ;;
             esac
             ;;
+        15) # ChromaFlowStudio — 운영 ChromaDB GUI (Docker, 127.0.0.1:5000)
+            case "$action" in
+                start)   chromaflow_start ;;
+                stop)    chromaflow_stop ;;
+                restart) chromaflow_restart ;;
+                status)  printf "  ChromaFlowStudio: "; check_status "ChromaFlowStudio" port 5000 ;;
+                logs)    sudo docker logs --tail 100 -f chromaflow ;;
+            esac
+            ;;
         10) # Web Build (농장관리 React + Spring Boot)
             case "$action" in
                 start|restart) web_build ;;
@@ -1193,6 +1231,7 @@ usage() {
     echo -e "   12. ALL Build       (Web + Shop 전체 빌드)"
     echo -e "   13. RPi Camera      (5199 USB 카메라 원격 — port 8095)"
     echo -e "   14. Camera Archive  (시간별 캡처/이력/보존정책)"
+    echo -e "   15. ChromaFlow      (운영 ChromaDB GUI Docker — 127.0.0.1:5000)"
     echo ""
     echo -e "  ${BOLD}예시:${NC}"
     echo -e "    agriAiCore restart        # 메뉴에서 서비스 선택"

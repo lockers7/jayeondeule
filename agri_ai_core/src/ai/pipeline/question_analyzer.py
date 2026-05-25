@@ -16,7 +16,7 @@ from datetime import datetime
 from agri_ai_core.src.utils.json_utils import safe_json_load
 
 from agri_ai_core.logs import setup_logger
-from agri_ai_core.src.ai.pipeline.prompts import ANALYZER_SYSTEM_PROMPT
+from agri_ai_core.src.ai.pipeline.prompts import ANALYZER_SYSTEM_PROMPT, get_analyzer_system_prompt
 
 logger = setup_logger(__name__)
 
@@ -212,7 +212,8 @@ def analyze_question(user_query, conversation_context=None, farm_id=None, house_
 
         model_name = _get_model_name()
 
-        messages = [{"role": "system", "content": ANALYZER_SYSTEM_PROMPT}]
+        # [프롬프트 자동화 · Phase 3-(6)-4] DB 우선 / module 폴백 (placeholder 동적 치환)
+        messages = [{"role": "system", "content": get_analyzer_system_prompt()}]
 
         # 직전 대화 컨텍스트 — 1단계는 질문유형 분류만 하므로 직전 1턴(user+assistant)만 포함
         # prompt_eval 토큰 최소화로 LLM 응답 속도 향상

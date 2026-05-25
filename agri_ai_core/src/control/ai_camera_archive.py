@@ -238,7 +238,7 @@ def capture_all_active_houses():
     )
     try:
         with db_session() as db:
-            rows = db.fetch_all(query=sql) or []
+            rows = db.fetch_all(query=sql, as_dict=True) or []
     except Exception as e:
         logger.error(f'[카메라아카이브] 활성 재배사 조회 실패: {e}')
         return {'success': 0, 'failed': 0, 'skipped': 0}

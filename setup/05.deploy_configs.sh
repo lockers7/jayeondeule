@@ -1,7 +1,7 @@
 #!/bin/bash
 # =========================================================================
-# [5단계] 설정 파일 배치 + SSL 인증서 + SearXNG + 심볼릭 링크
-# Nginx, Systemd, PostgreSQL, SSL, SearXNG, agriAiCore 링크
+# [5단계] 설정 파일 배치 + SSL 인증서 + SearXNG + ChromaFlowStudio +
+#         DB 마이그레이션 + 심볼릭 링크
 # =========================================================================
 
 set -e
@@ -97,9 +97,48 @@ else
 fi
 
 # -----------------------------------------------------------------
-# 6. agriAiCore 심볼릭 링크 + 실행 권한
+# 6. ChromaFlowStudio Docker — 운영 ChromaDB 관리 GUI
 # -----------------------------------------------------------------
-log_info "[6/6] agriAiCore 링크 설정..."
+log_info "[6/8] ChromaFlowStudio Docker 빌드 + 시작..."
+CHROMAFLOW_DIR="$PROJECT_DIR/setup/chromaflow"
+if [ -f "$CHROMAFLOW_DIR/Dockerfile" ]; then
+    sudo docker build -q -t chromaflow:py310 "$CHROMAFLOW_DIR" 2>&1 | tail -3
+    if sudo docker ps -a --format '{{.Names}}' | grep -q '^chromaflow$'; then
+        log_info "  ChromaFlowStudio 컨테이너 이미 등록됨 — 재시작"
+        sudo docker restart chromaflow >/dev/null
+    else
+        sudo docker run -d --name chromaflow --restart=unless-stopped \
+            --network=host chromaflow:py310
+        log_info "  ChromaFlowStudio 컨테이너 신규 시작 (127.0.0.1:5000)"
+    fi
+else
+    log_warn "  setup/chromaflow/Dockerfile 없음 — 건너뜀"
+fi
+
+# -----------------------------------------------------------------
+# 7. PostgreSQL 마이그레이션 자동 적용
+# -----------------------------------------------------------------
+log_info "[7/8] DB 마이그레이션 적용..."
+MIG_DIR="$PROJECT_DIR/agri_ai_core/src/postgresql/migrations"
+if [ -d "$MIG_DIR" ]; then
+    PGDB_NAME=$(grep '^PGDB_DATABASE=' "$PROJECT_DIR/.env" 2>/dev/null | cut -d= -f2)
+    PGDB_USER=$(grep '^PGDB_USER=' "$PROJECT_DIR/.env" 2>/dev/null | cut -d= -f2)
+    PGDB_PASS=$(grep '^PGDB_PASSWORD=' "$PROJECT_DIR/.env" 2>/dev/null | cut -d= -f2)
+    if [ -n "$PGDB_NAME" ] && [ -n "$PGDB_USER" ]; then
+        for sql in $(ls "$MIG_DIR"/*.sql 2>/dev/null | sort); do
+            log_info "  적용: $(basename "$sql")"
+            PGPASSWORD="$PGDB_PASS" psql -h 127.0.0.1 -U "$PGDB_USER" -d "$PGDB_NAME" \
+                -v ON_ERROR_STOP=0 -f "$sql" 2>&1 | tail -2
+        done
+    else
+        log_warn "  .env 의 PGDB_* 미설정 — 마이그레이션 건너뜀"
+    fi
+fi
+
+# -----------------------------------------------------------------
+# 8. agriAiCore 심볼릭 링크 + 실행 권한
+# -----------------------------------------------------------------
+log_info "[8/8] agriAiCore 링크 설정..."
 CTRL_SCRIPT="$PROJECT_DIR/setup/agriCoreCtrl.sh"
 LINK_PATH="$PROJECT_DIR/agriAiCore"
 

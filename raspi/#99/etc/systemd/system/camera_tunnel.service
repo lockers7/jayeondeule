@@ -1,0 +1,13 @@
+[Unit]
+Description=Camera Reverse SSH Tunnel to Main Server
+After=network.target camera_stream.service
+Wants=camera_stream.service
+
+[Service]
+User=jayeondeule
+ExecStart=/usr/bin/autossh -M 0 -N   -o "ServerAliveInterval=30"   -o "ServerAliveCountMax=3"   -o "StrictHostKeyChecking=no"   -o "ExitOnForwardFailure=yes"   -i /home/jayeondeule/.ssh/id_rsa   -R 8095:localhost:8090   -p 22 jayeondeule@222.112.126.152
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

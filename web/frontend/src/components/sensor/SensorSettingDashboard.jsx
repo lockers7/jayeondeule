@@ -7,6 +7,10 @@ import AlertModal from "../common/AlertModal.jsx";
 const compactInput = { maxWidth: "100px" };
 const labelStyle  = { minWidth: "110px", fontWeight: "bold", marginBottom: 0, whiteSpace: "nowrap" };
 const greenCard   = { backgroundColor: "#fff", border: "2px solid #28a745" };
+// 조명/관수 시간 설정 의 h5 와 동일 폰트 크기 (1.25rem · bold)
+const sectionHeader = { fontWeight: "bold", fontSize: "1.25rem", marginBottom: "8px", textAlign: "center" };
+const normalHeader  = { ...sectionHeader, color: "#28a745" };
+const criticalHeader = { ...sectionHeader, color: "#dc3545" };
 
 // 24시간 시:분 입력 (숫자 직접 입력)
 const timeInputStyle = { width: "44px", padding: "4px 6px", fontSize: "0.95rem", textAlign: "center" };
@@ -50,10 +54,18 @@ export default function SensorSettingDashboard({farmId, selectedHouse}) {
     const [deleteTarget, setDeleteTarget] = useState({});
 
     const [sensorSetting, setSensorSetting] = useState({
-        tprtMin: "", tprtMax: "",
-        watrTprtMin: "", watrTprtMax: "",
-        hmdtMin: "", hmdtMax: "",
-        co2Min: "", co2Max: "",
+        // 정상 범위 (min ~ otml ~ max)
+        tprtMin: "", tprtOtml: "", tprtMax: "",
+        watrTprtMin: "", watrTprtOtml: "", watrTprtMax: "",
+        hmdtMin: "", hmdtOtml: "", hmdtMax: "",
+        co2Min: "", co2Otml: "", co2Max: "",
+        // 비상 임계 (정상 범위 밖 → 강제 emergency 자동제어)
+        tprtCritMin: "", tprtCritMax: "",
+        watrTprtCritMin: "", watrTprtCritMax: "",
+        hmdtCritMin: "", hmdtCritMax: "",
+        co2CritMax: "",
+        // 발이기 단계 전용 온도 범위
+        budTprtMin: "", budTprtMax: "",
     });
 
     const [lightSchedules, setLightSchedules] = useState([]);
@@ -133,10 +145,15 @@ export default function SensorSettingDashboard({farmId, selectedHouse}) {
             setSensorSetting(newSensorSetting);
         } else {
             setSensorSetting({
-                tprtMin: "", tprtMax: "",
-                watrTprtMin: "", watrTprtMax: "",
-                hmdtMin: "", hmdtMax: "",
-                co2Min: "", co2Max: "",
+                tprtMin: "", tprtOtml: "", tprtMax: "",
+                watrTprtMin: "", watrTprtOtml: "", watrTprtMax: "",
+                hmdtMin: "", hmdtOtml: "", hmdtMax: "",
+                co2Min: "", co2Otml: "", co2Max: "",
+                tprtCritMin: "", tprtCritMax: "",
+                watrTprtCritMin: "", watrTprtCritMax: "",
+                hmdtCritMin: "", hmdtCritMax: "",
+                co2CritMax: "",
+                budTprtMin: "", budTprtMax: "",
             });
         }
 
@@ -241,54 +258,75 @@ export default function SensorSettingDashboard({farmId, selectedHouse}) {
     return (
         <div className="p-3">
             <Card className="mb-3 p-3" style={greenCard}>
-                <div className="d-flex align-items-center justify-content-center mb-2">
-                    <span style={labelStyle}>온도(&#8451;)</span>
-                    <InputGroup style={{ maxWidth: "260px" }}>
-                        <Form.Control style={compactInput} value={sensorSetting && sensorSetting.tprtMin}
-                            onChange={(e) => handleSensorSettingChange("tprtMin", e.target.value)}
-                            onBlur={handleSensorSettingInsert} type="number" placeholder="최소"/>
-                        <InputGroup.Text>~</InputGroup.Text>
-                        <Form.Control style={compactInput} value={sensorSetting && sensorSetting.tprtMax}
-                            onChange={(e) => handleSensorSettingChange("tprtMax", e.target.value)}
-                            onBlur={handleSensorSettingInsert} type="number" placeholder="최대"/>
-                    </InputGroup>
-                </div>
-                <div className="d-flex align-items-center justify-content-center mb-2">
-                    <span style={labelStyle}>수온(&#8451;)</span>
-                    <InputGroup style={{ maxWidth: "260px" }}>
-                        <Form.Control style={compactInput} value={sensorSetting && sensorSetting.watrTprtMin}
-                            onChange={(e) => handleSensorSettingChange("watrTprtMin", e.target.value)}
-                            onBlur={handleSensorSettingInsert} type="number" placeholder="최소"/>
-                        <InputGroup.Text>~</InputGroup.Text>
-                        <Form.Control style={compactInput} value={sensorSetting && sensorSetting.watrTprtMax}
-                            onChange={(e) => handleSensorSettingChange("watrTprtMax", e.target.value)}
-                            onBlur={handleSensorSettingInsert} type="number" placeholder="최대"/>
-                    </InputGroup>
-                </div>
-                <div className="d-flex align-items-center justify-content-center mb-2">
-                    <span style={labelStyle}>습도(%)</span>
-                    <InputGroup style={{ maxWidth: "260px" }}>
-                        <Form.Control style={compactInput} value={sensorSetting && sensorSetting.hmdtMin}
-                            onChange={(e) => handleSensorSettingChange("hmdtMin", e.target.value)}
-                            onBlur={handleSensorSettingInsert} type="number" placeholder="최소"/>
-                        <InputGroup.Text>~</InputGroup.Text>
-                        <Form.Control style={compactInput} value={sensorSetting && sensorSetting.hmdtMax}
-                            onChange={(e) => handleSensorSettingChange("hmdtMax", e.target.value)}
-                            onBlur={handleSensorSettingInsert} type="number" placeholder="최대"/>
-                    </InputGroup>
-                </div>
-                <div className="d-flex align-items-center justify-content-center mb-2">
-                    <span style={labelStyle}>CO&#8322;(ppm)</span>
-                    <InputGroup style={{ maxWidth: "260px" }}>
-                        <Form.Control style={compactInput} value={sensorSetting && sensorSetting.co2Min}
-                            onChange={(e) => handleSensorSettingChange("co2Min", e.target.value)}
-                            onBlur={handleSensorSettingInsert} type="number" placeholder="최소"/>
-                        <InputGroup.Text>~</InputGroup.Text>
-                        <Form.Control style={compactInput} value={sensorSetting && sensorSetting.co2Max}
-                            onChange={(e) => handleSensorSettingChange("co2Max", e.target.value)}
-                            onBlur={handleSensorSettingInsert} type="number" placeholder="최대"/>
-                    </InputGroup>
-                </div>
+                {/* 헤더 — 좌측: 정상(min ~ 적정 ~ max), 우측: 비상(min ~ max) */}
+                <Row className="mb-2">
+                    <Col xs={2}/>
+                    <Col xs={6}><div style={normalHeader}>정상 범위 (최소 ~ 적정 ~ 최대)</div></Col>
+                    <Col xs={4}><div style={criticalHeader}>비상 임계 (강제 자동제어)</div></Col>
+                </Row>
+                {[
+                    {label: "온도(℃)",   nMin: "tprtMin",     nOtml: "tprtOtml",     nMax: "tprtMax",     cMin: "tprtCritMin",     cMax: "tprtCritMax"},
+                    {label: "수온(℃)",   nMin: "watrTprtMin", nOtml: "watrTprtOtml", nMax: "watrTprtMax", cMin: "watrTprtCritMin", cMax: "watrTprtCritMax"},
+                    {label: "습도(%)",   nMin: "hmdtMin",     nOtml: "hmdtOtml",     nMax: "hmdtMax",     cMin: "hmdtCritMin",     cMax: "hmdtCritMax"},
+                    {label: "CO₂(ppm)",  nMin: "co2Min",      nOtml: "co2Otml",      nMax: "co2Max",      cMin: null,              cMax: "co2CritMax"},
+                ].map((row) => (
+                    <Row key={row.label} className="align-items-center mb-2">
+                        <Col xs={2} className="text-center">
+                            <span style={labelStyle}>{row.label}</span>
+                        </Col>
+                        <Col xs={6} className="d-flex justify-content-center">
+                            <InputGroup style={{ maxWidth: "380px" }}>
+                                <Form.Control style={compactInput} value={sensorSetting?.[row.nMin] ?? ""}
+                                    onChange={(e) => handleSensorSettingChange(row.nMin, e.target.value)}
+                                    onBlur={handleSensorSettingInsert} type="number" placeholder="최소"/>
+                                <InputGroup.Text>~</InputGroup.Text>
+                                <Form.Control style={compactInput} value={sensorSetting?.[row.nOtml] ?? ""}
+                                    onChange={(e) => handleSensorSettingChange(row.nOtml, e.target.value)}
+                                    onBlur={handleSensorSettingInsert} type="number" placeholder="적정"/>
+                                <InputGroup.Text>~</InputGroup.Text>
+                                <Form.Control style={compactInput} value={sensorSetting?.[row.nMax] ?? ""}
+                                    onChange={(e) => handleSensorSettingChange(row.nMax, e.target.value)}
+                                    onBlur={handleSensorSettingInsert} type="number" placeholder="최대"/>
+                            </InputGroup>
+                        </Col>
+                        <Col xs={4} className="d-flex justify-content-center">
+                            <InputGroup style={{ maxWidth: "260px" }}>
+                                {row.cMin ? (
+                                    <Form.Control style={compactInput} value={sensorSetting?.[row.cMin] ?? ""}
+                                        onChange={(e) => handleSensorSettingChange(row.cMin, e.target.value)}
+                                        onBlur={handleSensorSettingInsert} type="number" placeholder="비상 최저"/>
+                                ) : (
+                                    <Form.Control style={compactInput} value="" disabled placeholder="—"/>
+                                )}
+                                <InputGroup.Text>~</InputGroup.Text>
+                                <Form.Control style={compactInput} value={sensorSetting?.[row.cMax] ?? ""}
+                                    onChange={(e) => handleSensorSettingChange(row.cMax, e.target.value)}
+                                    onBlur={handleSensorSettingInsert} type="number" placeholder="비상 최대"/>
+                            </InputGroup>
+                        </Col>
+                    </Row>
+                ))}
+
+                {/* 발이기 단계 전용 온도 범위 — 생육단계=발이기 시 적용 */}
+                <Row className="align-items-center mb-2 pt-2" style={{ borderTop: "1px dashed #ccc" }}>
+                    <Col xs={2} className="text-center">
+                        <span style={labelStyle}>발이기 온도(℃)</span>
+                    </Col>
+                    <Col xs={6} className="d-flex justify-content-center">
+                        <InputGroup style={{ maxWidth: "260px" }}>
+                            <Form.Control style={compactInput} value={sensorSetting?.budTprtMin ?? ""}
+                                onChange={(e) => handleSensorSettingChange("budTprtMin", e.target.value)}
+                                onBlur={handleSensorSettingInsert} type="number" placeholder="최저"/>
+                            <InputGroup.Text>~</InputGroup.Text>
+                            <Form.Control style={compactInput} value={sensorSetting?.budTprtMax ?? ""}
+                                onChange={(e) => handleSensorSettingChange("budTprtMax", e.target.value)}
+                                onBlur={handleSensorSettingInsert} type="number" placeholder="최고"/>
+                        </InputGroup>
+                    </Col>
+                    <Col xs={4} className="d-flex justify-content-center align-items-center">
+                        <small className="text-muted">생육단계 = "발이기" 시 정상 범위 대신 적용</small>
+                    </Col>
+                </Row>
             </Card>
 
             <Row>

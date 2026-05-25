@@ -169,14 +169,15 @@ def _execute_control(
     # 순환 밸브 설정
     phase1_semantic.update(circ['dampers'])
 
-    # 수온히터, 포그생성, 배수밸브 즉시 적용
-    # [2026-05-01] drainage_motor_flag 도 device_settings 에 명시되면 그대로 반영
-    # — mappers.py 룰: 수온히터·배수밸브 상호배타. environment_logic 이 결정한 값을
-    # 누락 없이 Phase 1 으로 흘려야 가온 효과가 정상 발휘됨.
-    phase1_semantic['water_heater_flag'] = device_settings.get('water_heater_flag', False)
-    phase1_semantic['fog_occurs_flag'] = device_settings.get('fog_occurs_flag', False)
-    if 'drainage_motor_flag' in device_settings:
-        phase1_semantic['drainage_motor_flag'] = bool(device_settings.get('drainage_motor_flag'))
+    # ────────────────────────────────────────────────────────────────
+    # [2026-05-04 Phase B] 현상유지 패턴 — None 또는 미명시 키는 current_relay 보존.
+    # 사용자 원칙: 운용모드(또는 비상 오버라이드) 가 명시한 장치만 변경.
+    # 명시 안 한 장치는 _build_relay_values 가 current_relay 값으로 채움.
+    # ────────────────────────────────────────────────────────────────
+    for _key in ('water_heater_flag', 'fog_occurs_flag', 'drainage_motor_flag'):
+        _v = device_settings.get(_key)
+        if _v is not None:
+            phase1_semantic[_key] = bool(_v)
 
     # 팬: Phase 1 = current AND target (rev4 · 2026-04-27)
     # [변경 사유] 기존 "현재 상태 유지" 는 새 mode 에서 OFF 가 될 팬을 ON 으로
@@ -242,33 +243,31 @@ def _execute_water_temp_emergency(
     current_relay,
     harvest_mode,
     order_label="",
-    fog_on=False,  # [2026-04-28 rev2] 명시적 fog 인자 — 호출자(_check_emergency
-                   # → _apply_fog_coupling)가 이미 정정한 값을 그대로 반영.
+    fog_on=None,       # [2026-05-04] None=current 보존 (사용자 정책 #4 — 현상유지)
+                       # True/False = 명시 강제. 수온저하비상은 True, 수온과열비상은 None.
     drainage_on=None,  # [2026-05-01] 수온히터·배수밸브 상호배타 룰 적용용.
                        # None=current 보존 / True=ON / False=OFF.
-                       # 호출자(environment_logic._build_device_settings) 가
-                       # water_heater 의 역상관 값을 미리 결정해 전달.
+                       # 사용자 정책 #4: 수온과열비상 시 None (현상유지).
 ):
     pin_map = _get_pin_map(house_id)
 
     relay_values = {f"relay_{i}st_flag": False for i in range(1, RELAY_COUNT + 1)}
 
-    # 현재 상태 전체 복사
+    # 현재 상태 전체 복사 — 명시 강제(True/False) 가 아닌 장치는 그대로 유지.
     if current_relay:
         for key in relay_values:
             relay_values[key] = bool(current_relay.get(key, False))
 
-    # [2026-04-28 rev2] 수온히터/포그 결정 — heater_on 으로부터 fog 를 추론하지 않음.
-    # 수온저하비상(수온 < 35℃): heater=ON, fog=OFF (수온 < 40 이라 차가운 안개 무의미)
-    # 수온과열비상(수온 > 60℃): heater=OFF, fog=OFF (안전, 뜨거운 물 분사 방지)
+    # [2026-05-04 rev3] 수온히터/포그 결정 — None 시 current 보존.
+    # 수온저하비상(수온 < critical_low): heater=ON, fog=ON (가열 시퀀스).
+    # 수온과열비상(수온 > critical_high): heater=OFF, fog/drainage=None (현상유지).
     water_heater_pin = pin_map.get('water_heater_flag')
     if water_heater_pin:
         relay_values[water_heater_pin] = bool(water_heater_on)
     fog_pin = pin_map.get('fog_occurs_flag')
-    if fog_pin:
+    if fog_pin and fog_on is not None:
         relay_values[fog_pin] = bool(fog_on)
-    # [2026-05-01] 배수밸브 — 수온히터와 상호배타 (mappers.py 룰).
-    # 수온히터 ON 시 가온 위해 OFF, OFF 시 자연 흐름 ON 으로 자동 적용.
+    # 배수밸브 — None 이면 current 보존 (사용자 정책 #4).
     drainage_pin = pin_map.get('drainage_motor_flag')
     if drainage_pin and drainage_on is not None:
         relay_values[drainage_pin] = bool(drainage_on)
@@ -341,7 +340,7 @@ def _handle_ai_emergency(farm_id, house_id, growth_stage, order_label=""):
             f"센서 스냅샷: 내부 {sensor_data.get('indoor_temperature')}℃ / "
             f"{sensor_data.get('indoor_humidity')}% / CO2 {sensor_data.get('co2')}ppm / "
             f"수온 {sensor_data.get('water_temperature')}℃",
-            "→ LLM 14단계 SKIP, 다른 장치는 현상 유지 (water_temp_only)",
+            "→ 운용모드 fallback, 다른 장치는 현상 유지 (water_temp_only)",
         )
     else:
         steps = AiStepLogger(scope=scope_pref, total=3, prefix='AI비상')
@@ -353,7 +352,7 @@ def _handle_ai_emergency(farm_id, house_id, growth_stage, order_label=""):
             f"센서 스냅샷: 내부 {sensor_data.get('indoor_temperature')}℃ / "
             f"{sensor_data.get('indoor_humidity')}% / CO2 {sensor_data.get('co2')}ppm / "
             f"외부 {sensor_data.get('outdoor_temperature')}℃ / 수온 {sensor_data.get('water_temperature')}℃",
-            "→ LLM 14단계 SKIP, 즉시 비상 강제 적용",
+            "→ 운용모드 fallback, 비상 오버라이드만 강제 적용",
         )
         steps.step("강제 결정 산출",
                    extra=f"순환={emergency_circulation} / 강제장치={format_device_decision(emergency_devices)}")
@@ -365,12 +364,15 @@ def _handle_ai_emergency(farm_id, house_id, growth_stage, order_label=""):
 
     if water_temp_only:
         steps.step("수온비상 적용 실행", extra="다른 장치 현상유지")
+        # [2026-05-04] fog_on/drainage_on 둘 다 None 허용 — 사용자 정책 #4 의
+        # "수온히터만 OFF, 다른 장치 현상유지" 흐름 보존. _check_emergency 가
+        # 능동 냉각이 필요할 때만 True/False 명시.
         result = _execute_water_temp_emergency(
             farm_id, house_id,
             emergency_devices.get('water_heater_flag', False),
             current_relay, harvest_mode, order_label=order_label,
-            fog_on=emergency_devices.get('fog_occurs_flag', False),
-            drainage_on=emergency_devices.get('drainage_motor_flag'),  # 룰: 수온히터와 역상관
+            fog_on=emergency_devices.get('fog_occurs_flag'),
+            drainage_on=emergency_devices.get('drainage_motor_flag'),
         )
         steps.detail(
             f"수온히터 강제={'ON' if emergency_devices.get('water_heater_flag') else 'OFF'}",
@@ -389,7 +391,7 @@ def _handle_ai_emergency(farm_id, house_id, growth_stage, order_label=""):
             )
         except Exception:
             pass
-        # [2026-05-01] 비상제어 (LLM SKIP) 분기에도 결정 이력 DB 적재
+        # [2026-05-01] 비상제어 fallback 분기에도 결정 이력 DB 적재
         # — 사용자 정오 운영 내역 조회 시 1/2/3호 비상제어가 누락되지 않도록.
         try:
             from agri_ai_core.src.control.ai_decision_log import record_decision
@@ -405,12 +407,12 @@ def _handle_ai_emergency(farm_id, house_id, growth_stage, order_label=""):
             logger.debug(f"[수온비상] 결정이력 기록 실패: {_e}")
         steps.done(summary="수온비상 적용 완료")
     else:
-        steps.step("강제 적용 (2-phase)", extra=f"{emergency_circulation} / LLM 우회")
+        steps.step("강제 적용 (2-phase)", extra=f"{emergency_circulation} / 운용모드 fallback")
         result = _execute_control(
             farm_id, house_id, emergency_devices, emergency_circulation,
             current_relay, harvest_mode, reason="AI모드_비상제어", order_label=order_label
         )
-        # [2026-05-01] 환경비상 (LLM SKIP) 분기에도 결정 이력 DB 적재
+        # [2026-05-01] 환경비상 fallback 분기에도 결정 이력 DB 적재
         try:
             from agri_ai_core.src.control.ai_decision_log import record_decision
             record_decision(
@@ -480,27 +482,13 @@ def _determine_environment_action(sensor_data, growth_stage, farm_id, house_id):
     ts = get_thresholds(farm_id, house_id)
     bud_low, bud_high = ts.budding_temp_low, ts.budding_temp_high
 
-    # (1) 비상제어 판단
-    is_emergency, emergency_devices, emergency_circulation, water_temp_only = _check_emergency(sensor_data, ts)
-    if is_emergency:
-        # [2026-04-28] 비상제어 결과에도 포그 결합 규칙 적용 (고온비상 제외 자동 처리)
-        emergency_devices = _apply_fog_coupling(emergency_devices, sensor_data, scope="[비상]")
-        if water_temp_only:
-            water_on = emergency_devices.get('water_heater_flag', False)
-            return {
-                "sensor": sensor_str, "growth_stage": growth_stage,
-                "reason": f"수온비상_수온히터{'ON' if water_on else 'OFF'}",
-                "devices": emergency_devices, "circulation": None,
-                "device_summary": format_device_decision(emergency_devices),
-                "is_emergency": True, "water_temp_only": True,
-            }
-        return {
-            "sensor": sensor_str, "growth_stage": growth_stage,
-            "reason": "비상제어",
-            "devices": emergency_devices, "circulation": emergency_circulation,
-            "device_summary": format_device_decision(emergency_devices),
-            "is_emergency": True, "water_temp_only": False,
-        }
+    # ────────────────────────────────────────────────────────────────
+    # [2026-05-04 Phase C] 사용자 원칙 — 비상 시에도 64케이스 결정 산출 후
+    # 그 위에 비상 오버라이드 적용. 더 이상 조기 반환 안 함.
+    # is_emergency 만 추출하여 결과 dict 의 메타로 표시 (적용은 호출자에서).
+    # ────────────────────────────────────────────────────────────────
+    from agri_ai_core.src.control.environment_logic import _emergency_override
+    _is_emerg_meta, _, _, _wto_meta = _emergency_override(sensor_data, ts)
 
     # (2) 발이기 판단 — 가열 시 수온히터 ON
     # [2026-04-28] 수온히터 ON 시 포그생성도 동반 ON (열기 재배사 유입 매개체)
@@ -517,11 +505,16 @@ def _determine_environment_action(sensor_data, growth_stage, farm_id, house_id):
             devices = _build_device_settings()
             reason, circ = "발이기_정상", "순환정지"
         devices = _apply_fog_coupling(devices, sensor_data, scope="[발이기]")
+        # [2026-05-04 Phase C] 발이기 결정 위에 비상 오버라이드
+        from agri_ai_core.src.control.environment_logic import apply_emergency_override as _aeo
+        devices, circ, applied = _aeo(devices, circ, sensor_data, ts)
+        if applied:
+            reason = f"{reason} + 비상오버라이드"
         return {
             "sensor": sensor_str, "growth_stage": growth_stage, "reason": reason,
             "devices": devices, "circulation": circ,
             "device_summary": format_device_decision(devices),
-            "is_emergency": False, "water_temp_only": False,
+            "is_emergency": applied, "water_temp_only": _wto_meta,
         }
 
     # (3) 외부정상 + 내부비정상 → 외부순환
@@ -529,11 +522,15 @@ def _determine_environment_action(sensor_data, growth_stage, farm_id, house_id):
        _is_internal_abnormal(indoor_temp, indoor_humidity, co2, ts):
         devices = _build_device_settings()
         devices = _apply_fog_coupling(devices, sensor_data, scope="[외부순환]")
+        # [2026-05-04 Phase C] 외부정상+내부비정상 결정 위에 비상 오버라이드
+        from agri_ai_core.src.control.environment_logic import apply_emergency_override as _aeo
+        devices, circ_x, applied = _aeo(devices, "외부순환", sensor_data, ts)
         return {
-            "sensor": sensor_str, "growth_stage": growth_stage, "reason": "외부정상+내부비정상",
-            "devices": devices, "circulation": "외부순환",
+            "sensor": sensor_str, "growth_stage": growth_stage,
+            "reason": "외부정상+내부비정상" + (" + 비상오버라이드" if applied else ""),
+            "devices": devices, "circulation": circ_x,
             "device_summary": format_device_decision(devices),
-            "is_emergency": False, "water_temp_only": False,
+            "is_emergency": applied, "water_temp_only": _wto_meta,
         }
 
     # (4) 64케이스 — 임계값은 ts 우선, 없으면 control_common 폴백
@@ -555,14 +552,39 @@ def _determine_environment_action(sensor_data, growth_stage, farm_id, house_id):
     devices = _build_device_settings(water_heater, fog_pump)
     devices = _apply_fog_coupling(devices, sensor_data, scope="[64케이스]")
 
-    reason = f"64케이스(온도:{temp_state},습도:{humidity_state},CO2:{co2_state})"
+    # ────────────────────────────────────────────────────────────────
+    # [2026-05-04 사용자 정의] 64-케이스 결정 위에 계절 분기 override 적용.
+    # 저온계절(외기<내부+내부<적정하한): 가열 시퀀스 그대로, 실내≥적정상한 시 heater OFF
+    # 고온계절(외기≥내부 또는 내부 적정 안): heater 절대 OFF, 내부>적정상한 시 fog+drainage+내부순환
+    # ────────────────────────────────────────────────────────────────
+    from agri_ai_core.src.control.environment_logic import (
+        _determine_season, _apply_season_override,
+    )
+    season = _determine_season(indoor_temp, outdoor_temp, ts)
+    devices, circulation_mode = _apply_season_override(
+        devices, circulation_mode, season, indoor_temp, ts,
+    )
+
+    reason = f"64케이스(온도:{temp_state},습도:{humidity_state},CO2:{co2_state},계절:{season})"
+
+    # ────────────────────────────────────────────────────────────────
+    # [2026-05-04 Phase C] 사용자 원칙 — 운용 결정 위에 비상 오버라이드.
+    # 64케이스 결정 + 계절 override 산출 후 비상 위반 항목만 덮어쓰기.
+    # 비상은 계절 룰보다 항상 우선.
+    # ────────────────────────────────────────────────────────────────
+    from agri_ai_core.src.control.environment_logic import apply_emergency_override
+    final_devices, final_circ, applied_emerg = apply_emergency_override(
+        devices, circulation_mode, sensor_data, ts,
+    )
+    if applied_emerg:
+        reason = f"{reason} + 비상오버라이드"
 
     return {
         "sensor": sensor_str, "growth_stage": growth_stage,
         "reason": reason,
-        "devices": devices, "circulation": circulation_mode,
-        "device_summary": format_device_decision(devices),
-        "is_emergency": False, "water_temp_only": False,
+        "devices": final_devices, "circulation": final_circ,
+        "device_summary": format_device_decision(final_devices),
+        "is_emergency": applied_emerg, "water_temp_only": _wto_meta,
     }
 
 
@@ -798,31 +820,85 @@ def _determine_mode_label(house, growth_stage):
 # AI 제어 모드 재배사 처리 — 비상제어(하드 리밋) + 모니터링(소프트 긴급).
 # Returns: (result_dict_or_None, success_delta, fail_delta).
 # ────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────
+# [2026-05-04] LLM 호출 연속 실패 카운터 (재배사별).
+# AI 모드에서 LLM 응답 실패가 반복되면 algorithm 모드 결정으로 자동 전환.
+# 임계 N회 도달 시 _determine_environment_action 의 64케이스 결정 적용.
+# 카운터는 LLM 정상 응답 시 0 으로 reset.
+# ────────────────────────────────────────────────────────────────────
+_LLM_FAIL_COUNTER = {}
+_LLM_FAIL_THRESHOLD = 3
+
+
 def _process_ai_mode_house(farm_id, house_id, growth_stage, order_label):
+    # [2026-05-04 G6] AI 모드 5초 주기 호출 — 결정/제어 미적용.
+    #   60초 _ai_control_loop 가 단독 결정자 (LLM + emergency_override 통합).
+    #   본 함수는 모니터링 로깅만 수행하여 비상 임계 근접/트렌드 급변 가시성 유지.
+    #   배경 — 5초 주기 algorithm_fallback 적용 시 ai_decision_log 가 fallback 으로
+    #   도배되어 다음 LLM cycle 의 "직전 결정 이력" 컨텍스트가 오염되는 부작용 방지.
+    #   사용자 원칙 "AI 제어 완료 → 비상 → 완료" 와 일치. 비상 즉응성은 60초 cycle 내.
     try:
         import importlib
         _ai_mod = importlib.import_module('agri_ai_core.src.control.ai_control')
         monitor_ai_emergency = _ai_mod.monitor_ai_emergency
-        control_ai_environment = _ai_mod.control_ai_environment
 
-        # 1. 비상제어 (하드 리밋 — AI보다 우선)
-        result, handled = _handle_ai_emergency(farm_id, house_id, growth_stage, order_label)
-        if handled:
-            return result, (1 if result.get("success") else 0), (0 if result.get("success") else 1)
+        from agri_ai_core.src.control.environment_logic import _check_emergency
+        from agri_ai_core.src.control.ai_thresholds import get_thresholds as _get_ts
+        sensor_data = read_current_sensor_info(farm_id, house_id) or {}
+        ts = _get_ts(farm_id, house_id)
+        is_emerg, _, _, _ = _check_emergency(sensor_data, ts) if sensor_data else (False, None, None, False)
 
-        # 2. AI 모니터링 (소프트 긴급: 임계치 근접 / 트렌드 급변)
-        needs_intervention = monitor_ai_emergency(farm_id, house_id, order_label)
-        if needs_intervention:
-            result = control_ai_environment(farm_id, house_id, growth_stage, order_label)
-            return result, (1 if result.get("success") else 0), (0 if result.get("success") else 1)
+        # 모니터링 로깅 — 결과는 활용하지 않으나 가시성 유지
+        monitor_ai_emergency(farm_id, house_id, order_label)
+
         scope = _house_prefix(order_label, farm_id, house_id)
-        # [변경12 · 2026-04-30] INFO → DEBUG: 5초 주기마다 같은 라인 = 노이즈.
-        # 정상 동작 중에는 굳이 INFO 로그 불필요. 트러블슈팅 시 DEBUG 로 활성화.
-        logger.debug(f"{scope}: 정상 - [AI] 판단: 대기 (LLM 미호출 주기)")
+        if is_emerg:
+            logger.info(f"{scope}: [AI모니터링] 비상 감지 — 60초 주기 LLM cycle 에서 emergency_override 적용 예정")
+        else:
+            logger.debug(f"{scope}: [AI모니터링] 정상 — LLM 미호출 주기")
         return None, 0, 0
     except Exception as e:
         logger.error(f"{order_label} AI 제어 예외: {e}")
         return None, 0, 0
+
+
+# ────────────────────────────────────────────────────────────────────
+# [2026-05-04] LLM 실패 반복 시 algorithm 모드 결정 적용.
+# _determine_environment_action 의 64케이스 결정 (비상/발이기/외부정상+내부비정상/일반)
+# 을 그대로 사용하여 _execute_control 로 적용.
+# ────────────────────────────────────────────────────────────────────
+def _execute_algorithm_fallback(farm_id, house_id, growth_stage, sensor_data, order_label):
+    try:
+        action = _determine_environment_action(sensor_data, growth_stage, farm_id, house_id)
+        if not action:
+            return None
+        current_relay = read_latest_relay_info(farm_id, house_id) or {}
+        harvest_mode = (growth_stage == '수확기')
+        result = _execute_control(
+            farm_id, house_id,
+            action.get('devices') or {},
+            action.get('circulation'),
+            current_relay, harvest_mode,
+            reason=f"algorithm_fallback({action.get('reason')})",
+            order_label=order_label,
+        )
+        try:
+            from agri_ai_core.src.control.ai_decision_log import record_decision
+            devices = action.get('devices') or {}
+            record_decision(
+                farm_id, house_id, growth_stage=growth_stage,
+                action='change', circulation=action.get('circulation'),
+                water_heater=bool(devices.get('water_heater_flag')),
+                fog_occurs=bool(devices.get('fog_occurs_flag')),
+                reason=f"[algorithm_fallback] {action.get('reason')}",
+                sensor_snapshot=sensor_data,
+            )
+        except Exception:
+            pass
+        return result
+    except Exception as e:
+        logger.error(f"{order_label} algorithm fallback 예외: {e}")
+        return None
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -1078,15 +1154,32 @@ def _ai_control_loop():
                     _ai_mod = importlib.import_module('agri_ai_core.src.control.ai_control')
                     control_ai_environment = _ai_mod.control_ai_environment
 
-                    # 비상제어 체크 (AI보다 우선)
-                    result, handled = _handle_ai_emergency(farm_id, house_id, growth_stage, order_label)
-                    if handled:
-                        action = result.get("action", result.get("reason", "비상"))
-                        logger.info(f"{order_label} 재배사 {house_id}: 비상제어 완료 → {action}")
+                    # [2026-05-04 Phase D rev2] 사용자 원칙 — LLM 호출 후 실패 시
+                    # algorithm fallback (운용+비상 통합). _handle_ai_emergency 우회 제거.
+                    result = control_ai_environment(farm_id, house_id, growth_stage, order_label)
+                    action = result.get("action", "unknown")
+                    llm_failed = (
+                        action == 'keep' and 'LLM' in str(result.get('message', ''))
+                    )
+                    if llm_failed:
+                        key = (farm_id, house_id)
+                        _LLM_FAIL_COUNTER[key] = _LLM_FAIL_COUNTER.get(key, 0) + 1
+                        cnt = _LLM_FAIL_COUNTER[key]
+                        sensor_data = read_current_sensor_info(farm_id, house_id) or {}
+                        algo_result = _execute_algorithm_fallback(
+                            farm_id, house_id, growth_stage, sensor_data, order_label)
+                        if algo_result is not None:
+                            result = algo_result
+                            action = result.get("action", "algorithm_fallback")
+                            logger.warning(
+                                f"{order_label} 재배사 {house_id}: LLM 실패 {cnt}회 → "
+                                f"algorithm fallback → {action}"
+                            )
+                        else:
+                            logger.info(f"{order_label} 재배사 {house_id}: LLM 실패 → algorithm 결정 없음, keep 유지")
                     else:
-                        # AI LLM 정기 호출
-                        result = control_ai_environment(farm_id, house_id, growth_stage, order_label)
-                        action = result.get("action", "unknown")
+                        if _LLM_FAIL_COUNTER.get((farm_id, house_id)):
+                            _LLM_FAIL_COUNTER[(farm_id, house_id)] = 0
                         logger.info(f"{order_label} 재배사 {house_id}: AI 제어 완료 → {action}")
 
                 except Exception as e:

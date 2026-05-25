@@ -1,0 +1,15 @@
+[Unit]
+Description=Jayeondeule Smart Farm Control Service
+After=network.target
+
+[Service]
+ExecStart=/home/jayeondeule/jayeondeule/bin/python3 /home/jayeondeule/FarmUnits/jayeondeule.py
+WorkingDirectory=/home/jayeondeule/FarmUnits/
+StandardOutput=inherit
+StandardError=inherit
+Restart=always
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

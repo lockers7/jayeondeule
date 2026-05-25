@@ -33,7 +33,10 @@ def validate_with_llm(user_query, analysis_result, collected_data_summary):
 
     try:
         from agri_ai_core.src.ai.llm_client import _ollama_chat, _get_model_name, _extract_message_content
-        from agri_ai_core.src.ai.pipeline.prompts import DATA_VALIDATOR_PROMPT
+        from agri_ai_core.src.ai.pipeline.prompts import DATA_VALIDATOR_PROMPT, get_data_validator_prompt
+
+        # [프롬프트 자동화 · Phase 3-(6)] USE_DB_PROMPTS=1 시 ChromaDB 우선, 실패 시 inline.
+        validator_prompt = get_data_validator_prompt()
 
         model_name = _get_model_name()
 
@@ -48,7 +51,7 @@ def validate_with_llm(user_query, analysis_result, collected_data_summary):
         )
 
         messages = [
-            {"role": "system", "content": DATA_VALIDATOR_PROMPT},
+            {"role": "system", "content": validator_prompt},
             {"role": "user", "content": user_content},
         ]
 

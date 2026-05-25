@@ -55,7 +55,8 @@ class LCDControl:
         self._marquee_stop = threading.Event()
 
         if CharLCD is None:
-            logger.warning("[LCD] RPLCD 미설치 — 표시 비활성")
+            # [2026-05-23] LCD 패널 미장착 호기 다수 — silent skip (debug 로그만)
+            logger.debug("[LCD] RPLCD 미설치 — 표시 비활성 (정상)")
             return
         try:
             self.lcd = CharLCD(
@@ -79,7 +80,9 @@ class LCDControl:
             else:
                 self._write_static_greeting()
         except Exception as e:
-            logger.warning(f"[LCD] 초기화 실패 (LCD 표시 비활성): {e}")
+            # [2026-05-23] LCD 패널 I/O error (Errno 5) 같은 미장착 케이스는 정상으로 처리.
+            # 운영 로그 스팸 방지를 위해 debug 레벨로 낮춤 (LCD 미장착 호기 다수).
+            logger.debug(f"[LCD] 초기화 실패 (LCD 표시 비활성, 정상): {e}")
             self.lcd = None
 
     # ─────────────────────────────────────────────────────────────────

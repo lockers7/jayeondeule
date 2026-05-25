@@ -1,0 +1,13 @@
+[Unit]
+Description=RPi Camera MJPEG Stream Server
+After=network.target
+
+[Service]
+ExecStart=/home/jayeondeule/jayeondeule/bin/python3 /home/jayeondeule/camera_stream.py
+WorkingDirectory=/home/jayeondeule
+User=jayeondeule
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -25,6 +25,10 @@ logger = setup_logger(__name__)
 _DOC_TOP_K = 2
 _DOC_PREVIEW = 220
 
+# [Phase 3-c · 2026-05-09] TTL 캐시 폐기.
+# 사용자 지침: "비용 무시. 모든 데이터 실시간." → 매 호출 임베딩 + 검색.
+# document_collection 의 사용자 추가 도메인 지식이 즉시 반영됨.
+
 
 # ────────────────────────────────────────────────────────────────────
 # document_collection 에서 query_text 로 상위 N건 검색 → list[dict].
@@ -33,6 +37,7 @@ _DOC_PREVIEW = 220
 def query_domain_knowledge(query_text: str, top_k: int = _DOC_TOP_K) -> List[Dict[str, Any]]:
     if not query_text:
         return []
+    # [Phase 3-c · 2026-05-09] 캐시 폐기 — 매 호출 임베딩 + chroma 검색.
     try:
         from agri_ai_core.src.ai.embedder import embed_text
         from agri_ai_core.src.chroma.collections import document_collection

@@ -18,7 +18,9 @@ from agri_ai_core.config.mappers import (
 # ═════════════════════════════
 # [1단계] 질문유형분석 프롬프트
 # ═════════════════════════════
-ANALYZER_SYSTEM_PROMPT = """당신은 질문 분석기입니다. 사용자 질문을 분석하여 데이터 수집 계획을 JSON으로 출력합니다.
+# [프롬프트 자동화 · Phase 3-(6)-4] raw 본문 (placeholder 포함) 별도 변수로 보존.
+# get_analyzer_system_prompt() 가 DB 우선/raw 폴백 + 매 호출 시 placeholder 치환.
+ANALYZER_SYSTEM_PROMPT_RAW = """당신은 질문 분석기입니다. 사용자 질문을 분석하여 데이터 수집 계획을 JSON으로 출력합니다.
 반드시 순수 JSON만 출력하세요. 설명, 인사말, 마크다운 없이 JSON만 출력합니다.
 
 출력 형식:
@@ -141,12 +143,39 @@ complex (여러 유형 혼합): 필요한 모든 도구를 required_data에 나�
 #   __CONTROL_MODES__     : mappers.CONTROL_MODES 상수 (3종)
 #   __CIRCULATION_MODES__ : control_common.CIRCULATION_MODES.keys (5종)
 ANALYZER_SYSTEM_PROMPT = (
-    ANALYZER_SYSTEM_PROMPT
+    ANALYZER_SYSTEM_PROMPT_RAW
     .replace('__DEVICE_MAPPING__',    _device_mapping_text())
     .replace('__GROWTH_STAGES__',     '|'.join(_growth_stages_enum()))
     .replace('__CONTROL_MODES__',     '|'.join(_control_modes_enum()))
     .replace('__CIRCULATION_MODES__', '|'.join(_circulation_mode_enum()))
 )
+
+
+# ────────────────────────────────────────────────────────────────────
+# [프롬프트 자동화 · Phase 3-(6)-4] ANALYZER 시스템 프롬프트 동적 read.
+# USE_DB_PROMPTS=1 일 때 ChromaDB prompt_chunk(chat_analyzer_raw) 우선,
+# 없으면 module 의 ANALYZER_SYSTEM_PROMPT_RAW 폴백.
+# 본문에는 4개 placeholder (__DEVICE_MAPPING__ 등) 가 있어 매 호출 시 치환.
+# question_analyzer.py 가 본 함수 호출 → 매핑 변경 시 즉시 반영.
+# ────────────────────────────────────────────────────────────────────
+def get_analyzer_system_prompt() -> str:
+    import os as _os
+    raw = ANALYZER_SYSTEM_PROMPT_RAW
+    if _os.getenv("USE_DB_PROMPTS", "0") == "1":
+        try:
+            from agri_ai_core.src.prompt_registry import get_chunk_by_id as _get
+            db_text = _get('chat_analyzer_raw')
+            if db_text:
+                raw = db_text
+        except Exception:
+            pass
+    return (
+        raw
+        .replace('__DEVICE_MAPPING__',    _device_mapping_text())
+        .replace('__GROWTH_STAGES__',     '|'.join(_growth_stages_enum()))
+        .replace('__CONTROL_MODES__',     '|'.join(_control_modes_enum()))
+        .replace('__CIRCULATION_MODES__', '|'.join(_circulation_mode_enum()))
+    )
 
 
 # ═══════════════════════════════════
@@ -188,6 +217,25 @@ sufficient=false일 때 supplement 형식:
 /no_think"""
 
 
+# ────────────────────────────────────────────────────────────────────
+# [프롬프트 자동화 · Phase 3-(6)] DATA_VALIDATOR_PROMPT 동적 read.
+# USE_DB_PROMPTS=1 일 때 ChromaDB prompt_chunk(chat_data_validator) 우선,
+# DB 비어있거나 예외 시 모듈 상수 DATA_VALIDATOR_PROMPT 폴백.
+# 호출자(validators.py) 가 본 함수 호출하면 자동으로 최신 본문 read.
+# ────────────────────────────────────────────────────────────────────
+def get_data_validator_prompt() -> str:
+    import os as _os
+    if _os.getenv("USE_DB_PROMPTS", "0") == "1":
+        try:
+            from agri_ai_core.src.prompt_registry import get_chunk_by_id as _get
+            db_text = _get('chat_data_validator')
+            if db_text:
+                return db_text
+        except Exception:
+            pass
+    return DATA_VALIDATOR_PROMPT
+
+
 # ═════════════════════════
 # [3단계] 답변작성 프롬프트
 # ═════════════════════════
@@ -214,9 +262,8 @@ def _build_general_prompt(speech_style: str, farm_name: str = None, farm_info: s
     if farm_info:
         farm_block = f"\n**농장 기본 정보:**\n{farm_info}\n"
 
-    return (
-        f"{identity}{farm_block}\n"
-        f"{tone}\n\n"
+    # [프롬프트 자동화 · Phase 3-(6)] 답변 규칙 정형 부분 — DB 우선 / 코드 폴백.
+    answer_rules_inline = (
         "**답변 규칙:**\n"
         "1. 농장명·주소·작물·재배사 수 등 농장 기본정보 질문은 반드시 위 [농장 기본 정보]에서만 답변하세요.\n"
         "2. 단위 변환·계산·상식·정의·번역·농업 이론은 당신의 지식만으로 즉시 답변하세요.\n"
@@ -225,6 +272,20 @@ def _build_general_prompt(speech_style: str, farm_name: str = None, farm_info: s
         "5. 답변은 질문 난이도에 맞게 간결하게. 불필요한 배경 설명·예시·표는 넣지 마세요.\n"
         "6. 내부 추론/think 태그 절대 미출력.\n"
         "/no_think"
+    )
+    answer_rules = answer_rules_inline
+    import os as _os
+    if _os.getenv("USE_DB_PROMPTS", "0") == "1":
+        try:
+            from agri_ai_core.src.prompt_registry import get_chunk_by_id as _get
+            answer_rules = _get('chat_general_answer_rules') or answer_rules_inline
+        except Exception:
+            pass
+
+    return (
+        f"{identity}{farm_block}\n"
+        f"{tone}\n\n"
+        f"{answer_rules}"
     )
 
 
@@ -371,20 +432,35 @@ def build_answer_system_prompt(farm_name, farm_info, speech_style="male",
             "E. **control_relay 결과의 `post_state` 우선 적용 (절대 규칙)**: control_relay 응답에 `post_state: {ON:[...], OFF:[...]}` 가 있으면 그 값이 **변경 직후 실제 DB 상태**입니다. 같은 답변 안에 get_farm_realtime_data 의 (control 이전 시점) ON/OFF 가 함께 있어도, 표·요약·상태 보고는 반드시 `post_state` 를 기준으로 작성하세요. control_relay가 'all' 로 호출된 경우 `results[*].post_state` 가 각 재배사별 최종 상태입니다.\n"
         )
 
-    prompt = f"""{farm_section}{tone_rules}
-{intent_guide}{data_rules}{source_instruction}
-**답변 원칙:**
-- 기본 3~5문장 이상 설명. 핵심 요약 후 세부 정리. 숫자/날짜 등 구체적 정보 포함.
-- 사용자가 분량을 명시하면 요청 분량에 맞춰 충분히 상세하게 답변.
-- 여러 항목을 비교·나열할 때는 반드시 마크다운 표로 작성.
-- 조건을 만족하는 재배사를 나열·비교할 때(예: "이미 ○○인 재배사", "○○이 꺼진 재배사") 해당 조건을 만족하는 모든 재배사를 빠짐없이 명시하세요. 강조 목적으로 일부만 대표로 언급하는 것은 금지.
-- 센서값 적정 여부: 데이터의 environment_thresholds와 비교하여 판단.
-- 내부 추론/독백/think/reasoning 절대 미출력. 순수 답변 본문만 출력.
-- <think> 태그 사용 절대 금지.
+    # [프롬프트 자동화 · Phase 3-(6)] 답변 원칙 + 과거 대화 활용 정형 부분 — DB 우선 / 코드 폴백.
+    answer_principles_inline = (
+        "**답변 원칙:**\n"
+        "- 기본 3~5문장 이상 설명. 핵심 요약 후 세부 정리. 숫자/날짜 등 구체적 정보 포함.\n"
+        "- 사용자가 분량을 명시하면 요청 분량에 맞춰 충분히 상세하게 답변.\n"
+        "- 여러 항목을 비교·나열할 때는 반드시 마크다운 표로 작성.\n"
+        "- 조건을 만족하는 재배사를 나열·비교할 때(예: \"이미 ○○인 재배사\", \"○○이 꺼진 재배사\") 해당 조건을 만족하는 모든 재배사를 빠짐없이 명시하세요. 강조 목적으로 일부만 대표로 언급하는 것은 금지.\n"
+        "- 센서값 적정 여부: 데이터의 environment_thresholds와 비교하여 판단.\n"
+        "- 내부 추론/독백/think/reasoning 절대 미출력. 순수 답변 본문만 출력.\n"
+        "- <think> 태그 사용 절대 금지.\n"
+        "\n"
+        "**과거 대화 활용:**\n"
+        "- 직전 대화와 이어지는 경우 맥락을 이어서 답변하세요.\n"
+        "- 과거 대화의 구체적 수치는 시간이 지나면 변하므로 재사용 금지.\n"
+        "/no_think"
+    )
+    answer_principles = answer_principles_inline
+    import os as _os
+    if _os.getenv("USE_DB_PROMPTS", "0") == "1":
+        try:
+            from agri_ai_core.src.prompt_registry import get_chunk_by_id as _get
+            answer_principles = _get('chat_answer_principles') or answer_principles_inline
+        except Exception:
+            pass
 
-**과거 대화 활용:**
-- 직전 대화와 이어지는 경우 맥락을 이어서 답변하세요.
-- 과거 대화의 구체적 수치는 시간이 지나면 변하므로 재사용 금지.
-/no_think"""
+    prompt = (
+        f"{farm_section}{tone_rules}\n"
+        f"{intent_guide}{data_rules}{source_instruction}\n"
+        f"{answer_principles}"
+    )
 
     return prompt

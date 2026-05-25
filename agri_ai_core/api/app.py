@@ -225,8 +225,10 @@ async def lifespan(app: FastAPI):
     logger.info("[REST API] 시작 (Host=%s, Port=%s, API Key=%s)", api_host, api_port, api_key_set)
 
     # 애플리케이션 초기화 (DB, ChromaDB, 스케줄러, LLM 등)
+    # [2026-05-04] G1+G4 — API 프로세스는 AI 루프 + cron 잡 모두 비활성.
+    #   Scheduler 단독 가동으로 Ollama 큐 동시 호출 경합 차단.
     from agri_ai_core.startup import initialize_app, shutdown_app
-    initialize_app()
+    initialize_app(start_ai_loop=False, register_jobs=False)
 
     # [Phase 3] 알림 버스에 이벤트 루프 바인딩 (sync 스레드 → SSE 브리지)
     try:
@@ -1207,6 +1209,535 @@ async def force_change_sudo_password(request: Request, _=Depends(verify_api_key)
 
     api_logger.info("[admin/sudo-password/force] 동기화 완료 (Spring → FastAPI)")
     return {"success": True, "db_updated_rows": affected}
+
+
+# ════════════════════════════════════════════════════════════
+# [프롬프트 자동화 · Phase 4] 관리 API — prompt_block / tool_definition 편집
+# ════════════════════════════════════════════════════════════
+
+# ────────────────────────────────────────────────────────────────────
+# prompt_block_m 전체 행 조회 (관리자 편집 화면용).
+# ────────────────────────────────────────────────────────────────────
+@app.get("/api/v1/admin/prompt-blocks")
+async def list_prompt_blocks(_=Depends(verify_api_key)):
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+        conn = db._getconn()
+        if conn is None:
+            raise HTTPException(500, "DB 연결 실패")
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT block_id, name, body_text, placeholders, description,
+                           active_yn, updt_dttm
+                    FROM prompt_block_m ORDER BY block_id
+                """)
+                rows = cur.fetchall()
+                return {
+                    "success": True,
+                    "blocks": [
+                        {
+                            "block_id": r[0], "name": r[1], "body_text": r[2],
+                            "placeholders": r[3], "description": r[4],
+                            "active_yn": r[5], "updt_dttm": r[6].isoformat() if r[6] else None,
+                        }
+                        for r in rows
+                    ],
+                }
+        finally:
+            try: db._putconn(conn)
+            except Exception: pass
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"조회 실패: {e}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# prompt_block_m 단건 갱신 — 부분 필드 업데이트(body_text/active_yn/name/
+# placeholders/description). 갱신 후 prompt_registry 캐시 즉시 무효화.
+# body: 갱신할 키만 포함 (모두 선택, 최소 1개 필요).
+# ────────────────────────────────────────────────────────────────────
+@app.put("/api/v1/admin/prompt-blocks/{block_id}")
+async def update_prompt_block(block_id: str, request: Request, _=Depends(verify_api_key)):
+    import json as _json
+    body = await request.json()
+
+    # 갱신 가능 필드 화이트리스트 (None 이 아니면 갱신 대상)
+    updatable = {
+        "body_text": body.get("body_text"),
+        "active_yn": body.get("active_yn"),
+        "name": body.get("name"),
+        "placeholders": body.get("placeholders"),
+        "description": body.get("description"),
+    }
+    fields = {k: v for k, v in updatable.items() if v is not None}
+    if not fields:
+        raise HTTPException(400, "갱신할 필드가 하나도 없습니다.")
+    if "active_yn" in fields and fields["active_yn"] not in ("Y", "N"):
+        raise HTTPException(400, "active_yn 은 'Y' 또는 'N' 이어야 합니다.")
+
+    # placeholders 는 jsonb — dict/list 면 직렬화
+    if "placeholders" in fields and not isinstance(fields["placeholders"], str):
+        fields["placeholders"] = _json.dumps(fields["placeholders"], ensure_ascii=False)
+
+    set_clause = ", ".join(f"{k}=%s" for k in fields) + ", updt_dttm=NOW()"
+    values = list(fields.values()) + [block_id]
+
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+        conn = db._getconn()
+        if conn is None:
+            raise HTTPException(500, "DB 연결 실패")
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE prompt_block_m SET {set_clause} WHERE block_id=%s",
+                    values,
+                )
+                affected = cur.rowcount
+            conn.commit()
+        finally:
+            try: db._putconn(conn)
+            except Exception: pass
+        if affected == 0:
+            raise HTTPException(404, f"block_id='{block_id}' 미존재")
+        try:
+            from agri_ai_core.src.prompt_registry import clear_cache
+            clear_cache()
+        except Exception:
+            pass
+        api_logger.info(f"[admin/prompt-blocks] 갱신: {block_id} 필드={list(fields.keys())}")
+        return {"success": True, "block_id": block_id, "updated_fields": list(fields.keys())}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"갱신 실패: {e}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# prompt_block_m 신규 등록 — Create.
+# body: { block_id, name, body_text, placeholders?, description?, active_yn? }
+# block_id 중복 시 409. active_yn 기본값 'Y'.
+# ────────────────────────────────────────────────────────────────────
+@app.post("/api/v1/admin/prompt-blocks")
+async def create_prompt_block(request: Request, _=Depends(verify_api_key)):
+    import json as _json
+    body = await request.json()
+    block_id = (body.get("block_id") or "").strip()
+    name = (body.get("name") or "").strip()
+    body_text = body.get("body_text") or ""
+    placeholders = body.get("placeholders")
+    description = body.get("description") or ""
+    active_yn = body.get("active_yn", "Y")
+
+    if not block_id:
+        raise HTTPException(400, "block_id 는 필수입니다.")
+    if not name:
+        raise HTTPException(400, "name 은 필수입니다.")
+    if active_yn not in ("Y", "N"):
+        raise HTTPException(400, "active_yn 은 'Y' 또는 'N' 이어야 합니다.")
+    if placeholders is None:
+        placeholders_json = "{}"
+    elif isinstance(placeholders, str):
+        placeholders_json = placeholders
+    else:
+        placeholders_json = _json.dumps(placeholders, ensure_ascii=False)
+
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+        conn = db._getconn()
+        if conn is None:
+            raise HTTPException(500, "DB 연결 실패")
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM prompt_block_m WHERE block_id=%s",
+                    (block_id,),
+                )
+                if cur.fetchone():
+                    raise HTTPException(409, f"block_id='{block_id}' 이미 존재합니다.")
+                cur.execute(
+                    "INSERT INTO prompt_block_m "
+                    "(block_id, name, body_text, placeholders, description, active_yn) "
+                    "VALUES (%s, %s, %s, %s::jsonb, %s, %s)",
+                    (block_id, name, body_text, placeholders_json, description, active_yn),
+                )
+            conn.commit()
+        finally:
+            try: db._putconn(conn)
+            except Exception: pass
+        try:
+            from agri_ai_core.src.prompt_registry import clear_cache
+            clear_cache()
+        except Exception:
+            pass
+        api_logger.info(f"[admin/prompt-blocks] 신규: {block_id} (name='{name}', active={active_yn})")
+        return {"success": True, "block_id": block_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"등록 실패: {e}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# prompt_block_m 단건 삭제. 미존재 시 404.
+# ────────────────────────────────────────────────────────────────────
+@app.delete("/api/v1/admin/prompt-blocks/{block_id}")
+async def delete_prompt_block(block_id: str, _=Depends(verify_api_key)):
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+        conn = db._getconn()
+        if conn is None:
+            raise HTTPException(500, "DB 연결 실패")
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM prompt_block_m WHERE block_id=%s",
+                    (block_id,),
+                )
+                affected = cur.rowcount
+            conn.commit()
+        finally:
+            try: db._putconn(conn)
+            except Exception: pass
+        if affected == 0:
+            raise HTTPException(404, f"block_id='{block_id}' 미존재")
+        try:
+            from agri_ai_core.src.prompt_registry import clear_cache
+            clear_cache()
+        except Exception:
+            pass
+        api_logger.info(f"[admin/prompt-blocks] 삭제: {block_id}")
+        return {"success": True, "block_id": block_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"삭제 실패: {e}")
+
+
+# ════════════════════════════════════════════════════════════
+# ChromaDB prompt_chunk 컬렉션 관리 API (대화 LLM system prompt 영역)
+# ════════════════════════════════════════════════════════════
+
+# ────────────────────────────────────────────────────────────────────
+# prompt_chunk 컬렉션 전체 목록. include 로 documents/metadatas 같이 반환.
+# ────────────────────────────────────────────────────────────────────
+@app.get("/api/v1/admin/prompt-chunks")
+async def list_prompt_chunks(_=Depends(verify_api_key)):
+    try:
+        from agri_ai_core.src.chroma.operations import get_documents
+        r = get_documents(
+            "prompt_chunk",
+            include=["documents", "metadatas"],
+            limit=500,
+        )
+        if not isinstance(r, dict) or "error" in r:
+            raise HTTPException(500, f"ChromaDB 조회 실패: {r}")
+        ids = r.get("ids") or []
+        docs = r.get("documents") or []
+        metas = r.get("metadatas") or []
+        chunks = []
+        for i, _id in enumerate(ids):
+            chunks.append({
+                "chunk_id": _id,
+                "content": docs[i] if i < len(docs) else "",
+                "metadata": metas[i] if i < len(metas) else {},
+            })
+        # chunk_id 사전순 정렬 (안정 출력)
+        chunks.sort(key=lambda c: c["chunk_id"])
+        return {"success": True, "chunks": chunks, "total": len(chunks)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"조회 실패: {e}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# prompt_chunk 단건 상세.
+# ────────────────────────────────────────────────────────────────────
+@app.get("/api/v1/admin/prompt-chunks/{chunk_id}")
+async def get_prompt_chunk(chunk_id: str, _=Depends(verify_api_key)):
+    try:
+        from agri_ai_core.src.chroma.operations import get_documents
+        r = get_documents(
+            "prompt_chunk",
+            ids=[chunk_id],
+            include=["documents", "metadatas"],
+        )
+        if not isinstance(r, dict) or "error" in r:
+            raise HTTPException(500, f"ChromaDB 조회 실패: {r}")
+        ids = r.get("ids") or []
+        if not ids:
+            raise HTTPException(404, f"chunk_id='{chunk_id}' 미존재")
+        docs = r.get("documents") or []
+        metas = r.get("metadatas") or []
+        return {
+            "success": True,
+            "chunk": {
+                "chunk_id": ids[0],
+                "content": docs[0] if docs else "",
+                "metadata": metas[0] if metas else {},
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"조회 실패: {e}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# prompt_chunk 신규 등록 (의미 검색용 임베딩은 운영 정책상 별도 채움 — 본 API
+# 는 zero-embedding 으로 등록. content + metadata 직접 read 가 primary path).
+# body: { chunk_id, content, metadata? }
+# ────────────────────────────────────────────────────────────────────
+@app.post("/api/v1/admin/prompt-chunks")
+async def create_prompt_chunk(request: Request, _=Depends(verify_api_key)):
+    body = await request.json()
+    chunk_id = (body.get("chunk_id") or "").strip()
+    content = body.get("content") or ""
+    metadata = body.get("metadata") or {}
+    if not chunk_id:
+        raise HTTPException(400, "chunk_id 는 필수입니다.")
+    if not isinstance(metadata, dict):
+        raise HTTPException(400, "metadata 는 객체(JSON dict) 이어야 합니다.")
+
+    try:
+        from agri_ai_core.src.chroma.operations import get_documents, add_document
+        # 중복 확인
+        existing = get_documents(
+            "prompt_chunk", ids=[chunk_id], include=["metadatas"]
+        )
+        if isinstance(existing, dict) and existing.get("ids"):
+            raise HTTPException(409, f"chunk_id='{chunk_id}' 이미 존재합니다.")
+
+        metadata.setdefault("chunk_id", chunk_id)
+        result = add_document("prompt_chunk", chunk_id, content, metadata)
+        if not isinstance(result, dict) or "error" in result:
+            raise HTTPException(500, f"등록 실패: {result}")
+        api_logger.info(f"[admin/prompt-chunks] 신규: {chunk_id}")
+        return {"success": True, "chunk_id": chunk_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"등록 실패: {e}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# prompt_chunk 단건 갱신 — upsert 형태 (content/metadata 통째로 교체).
+# body: { content?, metadata? } — 부분 갱신은 metadata 도 통째로 교체.
+# 본문/메타 모두 변경되도록 기존 doc 을 가져와 병합한 뒤 upsert.
+# ────────────────────────────────────────────────────────────────────
+@app.put("/api/v1/admin/prompt-chunks/{chunk_id}")
+async def update_prompt_chunk(chunk_id: str, request: Request, _=Depends(verify_api_key)):
+    body = await request.json()
+    new_content = body.get("content")
+    new_metadata = body.get("metadata")
+    if new_content is None and new_metadata is None:
+        raise HTTPException(400, "content 또는 metadata 중 하나는 필요합니다.")
+    if new_metadata is not None and not isinstance(new_metadata, dict):
+        raise HTTPException(400, "metadata 는 객체(JSON dict) 이어야 합니다.")
+
+    try:
+        from agri_ai_core.src.chroma.operations import (
+            get_documents, delete_document, add_document,
+        )
+        # 기존 doc 가져오기 (없으면 404)
+        cur = get_documents(
+            "prompt_chunk", ids=[chunk_id],
+            include=["documents", "metadatas"],
+        )
+        if not isinstance(cur, dict) or not cur.get("ids"):
+            raise HTTPException(404, f"chunk_id='{chunk_id}' 미존재")
+
+        cur_docs = cur.get("documents") or []
+        cur_metas = cur.get("metadatas") or []
+        merged_content = new_content if new_content is not None else (cur_docs[0] if cur_docs else "")
+        merged_meta = (cur_metas[0] if cur_metas else {}).copy()
+        if new_metadata is not None:
+            merged_meta = new_metadata  # 통째로 교체
+        merged_meta["chunk_id"] = chunk_id  # 식별자 보존
+
+        # ChromaDB 는 update 단일 호출이 안정적이지 않아 delete + add 패턴 사용
+        del_r = delete_document("prompt_chunk", [chunk_id])
+        if isinstance(del_r, dict) and "error" in del_r:
+            raise HTTPException(500, f"기존 삭제 실패: {del_r}")
+        add_r = add_document("prompt_chunk", chunk_id, merged_content, merged_meta)
+        if not isinstance(add_r, dict) or "error" in add_r:
+            raise HTTPException(500, f"재등록 실패: {add_r}")
+
+        api_logger.info(f"[admin/prompt-chunks] 갱신: {chunk_id}")
+        return {"success": True, "chunk_id": chunk_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"갱신 실패: {e}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# prompt_chunk 단건 삭제. 미존재 시 404.
+# ────────────────────────────────────────────────────────────────────
+@app.delete("/api/v1/admin/prompt-chunks/{chunk_id}")
+async def delete_prompt_chunk(chunk_id: str, _=Depends(verify_api_key)):
+    try:
+        from agri_ai_core.src.chroma.operations import get_documents, delete_document
+        cur = get_documents("prompt_chunk", ids=[chunk_id], include=["metadatas"])
+        if not isinstance(cur, dict) or not cur.get("ids"):
+            raise HTTPException(404, f"chunk_id='{chunk_id}' 미존재")
+        r = delete_document("prompt_chunk", [chunk_id])
+        if isinstance(r, dict) and "error" in r:
+            raise HTTPException(500, f"삭제 실패: {r}")
+        api_logger.info(f"[admin/prompt-chunks] 삭제: {chunk_id}")
+        return {"success": True, "chunk_id": chunk_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"삭제 실패: {e}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# tool_definition_m 전체 행 조회.
+# ────────────────────────────────────────────────────────────────────
+@app.get("/api/v1/admin/tool-definitions")
+async def list_tool_definitions(_=Depends(verify_api_key)):
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+        conn = db._getconn()
+        if conn is None:
+            raise HTTPException(500, "DB 연결 실패")
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT tool_id, schema_json, description, category, priority,
+                           active_yn, updt_dttm
+                    FROM tool_definition_m ORDER BY priority, tool_id
+                """)
+                rows = cur.fetchall()
+                return {
+                    "success": True,
+                    "tools": [
+                        {
+                            "tool_id": r[0], "schema_json": r[1], "description": r[2],
+                            "category": r[3], "priority": r[4],
+                            "active_yn": r[5], "updt_dttm": r[6].isoformat() if r[6] else None,
+                        }
+                        for r in rows
+                    ],
+                }
+        finally:
+            try: db._putconn(conn)
+            except Exception: pass
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"조회 실패: {e}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# tool_definition_m active_yn 토글 — body: { "active_yn": "Y|N" }
+# ────────────────────────────────────────────────────────────────────
+@app.patch("/api/v1/admin/tool-definitions/{tool_id}")
+async def toggle_tool_active(tool_id: str, request: Request, _=Depends(verify_api_key)):
+    body = await request.json()
+    new_active = body.get("active_yn")
+    if new_active not in ("Y", "N"):
+        raise HTTPException(400, "active_yn 은 'Y' 또는 'N' 이어야 합니다.")
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+        conn = db._getconn()
+        if conn is None:
+            raise HTTPException(500, "DB 연결 실패")
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE tool_definition_m SET active_yn=%s, updt_dttm=NOW() WHERE tool_id=%s",
+                    (new_active, tool_id),
+                )
+                affected = cur.rowcount
+            conn.commit()
+        finally:
+            try: db._putconn(conn)
+            except Exception: pass
+        if affected == 0:
+            raise HTTPException(404, f"tool_id='{tool_id}' 미존재")
+        try:
+            from agri_ai_core.src.prompt_registry import clear_cache
+            clear_cache()
+        except Exception:
+            pass
+        api_logger.info(f"[admin/tool-definitions] 토글: {tool_id} → active_yn={new_active}")
+        return {"success": True, "tool_id": tool_id, "active_yn": new_active}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"갱신 실패: {e}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# [프롬프트 자동화 · Phase 5] 룰 후보 조회 — 최근 N일 ai_decision_log
+# 정상 결정(action='change') 빈번 패턴을 사용자 학습 가능한 룰 텍스트로
+# 합성하여 반환. 농장주가 검토 후 승인 API 로 ChromaDB 등록.
+# query: farm_id (필수), house_id, days(=7), min_freq(=10), top_k(=20)
+# ────────────────────────────────────────────────────────────────────
+@app.get("/api/v1/admin/rule-candidates")
+async def list_rule_candidates(
+    farm_id: int,
+    house_id: Optional[int] = None,
+    days: int = 7,
+    min_freq: int = 10,
+    top_k: int = 20,
+    _=Depends(verify_api_key),
+):
+    try:
+        from agri_ai_core.src.control.ai_self_evolve import (
+            analyze_decision_patterns, format_candidate_rule,
+        )
+        patterns = analyze_decision_patterns(
+            farm_id=farm_id, house_id=house_id, days=days,
+            min_freq=min_freq, top_k=top_k,
+        )
+        candidates = [
+            {**format_candidate_rule(p), 'pattern': p}
+            for p in patterns
+        ]
+        return {"success": True, "count": len(candidates), "candidates": candidates}
+    except Exception as e:
+        raise HTTPException(500, f"룰 후보 조회 실패: {e}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# [프롬프트 자동화 · Phase 5] 룰 후보 승인 — ChromaDB domain_rule 등록.
+# body: { title, content, category(선택), rule_id(선택),
+#         farm_id(선택), house_id(선택) }
+# 등록 후 prompt_registry 캐시 무효화 → 다음 LLM 호출부터 즉시 반영.
+# ────────────────────────────────────────────────────────────────────
+@app.post("/api/v1/admin/rule-candidates/approve")
+async def approve_rule_candidate(request: Request, _=Depends(verify_api_key)):
+    body = await request.json()
+    title = body.get("title")
+    content = body.get("content")
+    if not (title and content):
+        raise HTTPException(400, "title 과 content 는 필수입니다.")
+    category = body.get("category") or '운영노하우'
+    rule_id = body.get("rule_id")
+    farm_id = body.get("farm_id")
+    house_id = body.get("house_id")
+
+    try:
+        from agri_ai_core.src.control.ai_self_evolve import register_approved_rule
+        result = register_approved_rule(
+            title=title, content=content, category=category,
+            rule_id=rule_id, farm_id=farm_id, house_id=house_id,
+            source='admin_approve',
+        )
+        if not result.get('success'):
+            raise HTTPException(500, f"룰 등록 실패: {result.get('error')}")
+        api_logger.info(f"[admin/rule-candidates] 승인: rule_id={result['rule_id']}")
+        return {"success": True, "rule_id": result['rule_id']}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"룰 승인 처리 실패: {e}")
 
 
 # ════════════════════════════════════════════════════════════

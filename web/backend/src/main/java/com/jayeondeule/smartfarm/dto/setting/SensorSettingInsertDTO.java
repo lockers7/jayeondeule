@@ -20,4 +20,21 @@ public class SensorSettingInsertDTO {
 
     private double heatTprtMin;
     private double heatTprtMax;
+
+    // 비상 임계 (NULL 허용 — 신규 필드)
+    private Double tprtCritMin;
+    private Double tprtCritMax;
+    private Double hmdtCritMin;
+    private Double hmdtCritMax;
+    private Double co2CritMax;
+    private Double watrTprtCritMin;
+    private Double watrTprtCritMax;
+
+    // 적정값 (LLM optimal 매핑) + 발이기 임계
+    private Double tprtOtml;
+    private Double hmdtOtml;
+    private Double co2Otml;
+    private Double watrTprtOtml;
+    private Double budTprtMin;
+    private Double budTprtMax;
 }

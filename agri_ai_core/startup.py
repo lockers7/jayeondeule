@@ -26,9 +26,11 @@ _initialized = False
 # 1) Ollama 연결 확인 + GPU 로드 모델 점검
 # 2) ChromaDB heartbeat + 필수 컬렉션 존재 확인
 # 3) PostgreSQL 연결 + AI 학습 테이블 자동 생성
-# 4) 스케줄러 setup/start + AI 순환 제어 루프 시작
+# 4) 스케줄러 setup/start + AI 순환 제어 루프 시작 (start_ai_loop=True 일 때만)
+# [2026-05-04] start_ai_loop 인자 추가 — API/Scheduler 양쪽에서 중복 가동되던
+#   AI 순환 루프를 Scheduler 단독으로 전환. Ollama 큐 동시 호출 방지.
 # ────────────────────────────────────────────────────────────────────
-def initialize_app():
+def initialize_app(start_ai_loop: bool = True, register_jobs: bool = True):
     global _initialized
     if _initialized:
         return
@@ -163,29 +165,49 @@ def initialize_app():
 
         # -----------------------------------------------------------
         # [4/4] 스케줄러 설정 및 시작
+        # [2026-05-04 G4] register_jobs=False 인 프로세스에서는 cron 잡 등록 자체를
+        #   생략 — API/Scheduler 양쪽 등록되던 camera_archive_hourly·Opinet·로또·
+        #   생육RAG 잡들의 이중 발화로 인한 Ollama 큐 압박 차단.
         # -----------------------------------------------------------
-        logger.info("[4/4] 스케줄러 설정 중...")
-        t0 = time.time()
-        try:
-            from agri_ai_core.src.ai.learning.growth_rag_processor import run_growth_rag
-            from agri_ai_core.src.opinet.opinet_collector import collect_all as opinet_collect_all
-            from agri_ai_core.src.lotto.lotto_collector import update_lotto_db
+        if register_jobs:
+            logger.info("[4/4] 스케줄러 설정 중...")
+            t0 = time.time()
+            try:
+                from agri_ai_core.src.ai.learning.growth_rag_processor import run_growth_rag
+                from agri_ai_core.src.opinet.opinet_collector import collect_all as opinet_collect_all
+                from agri_ai_core.src.lotto.lotto_collector import update_lotto_db
 
-            setup_scheduler()
-            setup_default_jobs(
-                manual_control_func=control_all_manual,
-                growth_rag_func=run_growth_rag,
-                opinet_collect_func=opinet_collect_all,
-                lotto_collect_func=update_lotto_db,
-            )
-            start_scheduler()
-            logger.info("[4/4] 스케줄러 시작됨 (%.1fs) - 수동/알고리즘 (10초) + 생육RAG + Opinet/로또", time.time() - t0)
+                setup_scheduler()
+                setup_default_jobs(
+                    manual_control_func=control_all_manual,
+                    growth_rag_func=run_growth_rag,
+                    opinet_collect_func=opinet_collect_all,
+                    lotto_collect_func=update_lotto_db,
+                )
+                start_scheduler()
+                logger.info("[4/4] 스케줄러 시작됨 (%.1fs) - 수동/알고리즘 (10초) + 생육RAG + Opinet/로또", time.time() - t0)
 
-            # AI 순환 제어 루프 시작 (재배사 순환 + 30초 delay)
-            start_ai_control_loop()
-            logger.info("[4/4] AI 순환 제어 루프 시작됨 (재배사 간 30초 대기)")
-        except Exception as e:
-            logger.warning("[4/4] 스케줄러 설정 실패 (%.1fs): %s", time.time() - t0, e)
+                # [Phase 5 · 2026-05-09] PostgreSQL LISTEN/NOTIFY listener 시작.
+                #   setting 테이블 변경 즉시 캐시 invalidate / scheduler reload.
+                #   register_jobs=True 인 프로세스(scheduler 전용)에서만 가동 — 중복 실행 방지.
+                try:
+                    from agri_ai_core.src.control import setting_listener
+                    setting_listener.start()
+                    logger.info("[4/4] setting_listener daemon 시작됨 (DB NOTIFY 즉시 수신)")
+                except Exception as le:
+                    logger.warning(f"[4/4] setting_listener 시작 실패: {le}")
+
+                # [2026-05-04] start_ai_loop=True 인 프로세스에서만 AI 순환 루프 가동
+                #   (Scheduler 전용 — API 프로세스에서는 비활성으로 Ollama 큐 경합 방지)
+                if start_ai_loop:
+                    start_ai_control_loop()
+                    logger.info("[4/4] AI 순환 제어 루프 시작됨 (재배사 간 60초 대기)")
+                else:
+                    logger.info("[4/4] AI 순환 제어 루프 비활성 (start_ai_loop=False)")
+            except Exception as e:
+                logger.warning("[4/4] 스케줄러 설정 실패 (%.1fs): %s", time.time() - t0, e)
+        else:
+            logger.info("[4/4] 스케줄러/AI 루프 비활성 (register_jobs=False) — Scheduler 단독 가동")
 
         total_elapsed = time.time() - total_start
         logger.info("=" * 60)
@@ -222,7 +244,7 @@ def shutdown_app():
         except Exception as e:
             logger.warning("[1/4] AI 순환 제어 루프 정지 실패 (%.1fs): %s", time.time() - t0, e)
 
-        # [2/4] 스케줄러 중지
+        # [2/4] 스케줄러 중지 + setting_listener 정지
         logger.info("[2/4] 스케줄러 중지 중...")
         t0 = time.time()
         try:
@@ -230,6 +252,11 @@ def shutdown_app():
             logger.info("[2/4] 스케줄러 중지 완료 (%.1fs)", time.time() - t0)
         except Exception as e:
             logger.warning("[2/4] 스케줄러 중지 실패 (%.1fs): %s", time.time() - t0, e)
+        try:
+            from agri_ai_core.src.control import setting_listener
+            setting_listener.stop()
+        except Exception as le:
+            logger.debug(f"[2/4] setting_listener 정지 실패: {le}")
 
         # [3/4] ChromaDB 연결 정리
         logger.info("[3/4] ChromaDB 연결 정리 중...")

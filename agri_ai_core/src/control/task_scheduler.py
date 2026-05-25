@@ -303,157 +303,186 @@ def _chunk_cleanup_job():
         logger.error(traceback.format_exc())
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# [Phase 2 · 2026-05-09] SCHEDULE_M_SETTING 기반 동적 스케줄 등록
+#
+# 설계:
+#   - DB row(task_name) → callable 매핑(_JOB_CALLABLES)으로 등록
+#   - cron_expr 은 APScheduler CronTrigger.from_crontab() 으로 변환
+#   - schedule_polling_job (30초 interval) 가 updt_dttm 변경 감지 시 reload
+#   - DB 조회 실패 시 코드 default 폴백 (안전장치)
+#   - ai_control_loop 은 별도 스레드 운영 — 본 모듈에서 등록 X
+# ════════════════════════════════════════════════════════════════════════════
+_JOB_CALLABLES = {}             # task_name -> callable (setup 시점 주입)
+_LAST_SCHEDULE_UPDT = None      # 마지막으로 본 max(updt_dttm)
+_SCHEDULE_POLLING_INTERVAL = 30 # schedule_m_setting polling 주기(초)
+
+
 # ────────────────────────────────────────────────────────────────────
-# 기본 스케줄 작업 일괄 등록 — 학습/통계/환경제어/RAG/로그/PG풀/외부수집 등.
-# 호출자가 주입한 callable 만 실제 등록되며, 미주입 항목은 자동 skip.
+# 단일 row 를 APScheduler 에 등록 (cron 또는 interval).
+# ────────────────────────────────────────────────────────────────────
+def _add_job_from_row(row):
+    task_name = row.get('task_name')
+    func = _JOB_CALLABLES.get(task_name)
+    if func is None:
+        return False   # 호출자가 주입 안 한 callable — skip
+
+    schedule_type = row.get('schedule_type')
+    if schedule_type == 'interval':
+        return add_job(
+            job_id=task_name,
+            func=func,
+            trigger_type='interval',
+            seconds=int(row['interval_seconds']),
+        )
+    if schedule_type == 'cron':
+        try:
+            trigger = CronTrigger.from_crontab(row['cron_expr'])
+        except Exception as e:
+            logger.error(f"[schedule] {task_name} cron 파싱 실패 ({row.get('cron_expr')}): {e}")
+            return False
+        try:
+            existing = _scheduler.get_job(task_name) if _scheduler else None
+            if existing:
+                _scheduler.remove_job(task_name)
+            _scheduler.add_job(func, trigger=trigger, id=task_name, replace_existing=True)
+            logger.info(f"작업 '{task_name}' 추가됨 (cron: {row['cron_expr']})")
+            return True
+        except Exception as e:
+            logger.error(f"[schedule] {task_name} 등록 실패: {e}")
+            return False
+    logger.warning(f"[schedule] {task_name} 알 수 없는 schedule_type={schedule_type}")
+    return False
+
+
+# ────────────────────────────────────────────────────────────────────
+# DB 의 schedule_m_setting 전체를 다시 읽어 jobs 등록/제거.
+# enabled=False 인 row 는 등록 해제. ai_control_loop 은 별도 스레드라 skip.
+# ────────────────────────────────────────────────────────────────────
+def _reload_jobs_from_db():
+    global _LAST_SCHEDULE_UPDT
+    try:
+        from agri_ai_core.src.postgresql.reader import (
+            read_schedule_settings, read_schedule_max_updt,
+        )
+        rows = read_schedule_settings() or []
+    except Exception as e:
+        logger.error(f"[schedule] DB 읽기 실패 — 기존 jobs 유지: {e}")
+        return False
+
+    if not rows:
+        logger.warning("[schedule] schedule_m_setting 비어있음 — jobs 변경 없음")
+        return False
+
+    for row in rows:
+        task_name = row.get('task_name')
+        if task_name == 'ai_control_loop':
+            continue   # 별도 스레드 — task_scheduler 등록 X (interval_seconds 만 read 해서 사용)
+        if task_name not in _JOB_CALLABLES:
+            continue   # 매핑 안 된 task — skip
+        if not row.get('enabled', True):
+            if _scheduler and _scheduler.get_job(task_name):
+                remove_job(task_name)
+                logger.info(f"[schedule] {task_name} 비활성 — 등록 해제")
+            continue
+        _add_job_from_row(row)
+
+    try:
+        _LAST_SCHEDULE_UPDT = read_schedule_max_updt()
+    except Exception:
+        pass
+    return True
+
+
+# ────────────────────────────────────────────────────────────────────
+# polling tick — 30초마다 DB 의 max(updt_dttm) 변경 감지 시 reload.
+# ────────────────────────────────────────────────────────────────────
+def _schedule_polling_tick():
+    global _LAST_SCHEDULE_UPDT
+    try:
+        from agri_ai_core.src.postgresql.reader import read_schedule_max_updt
+        current = read_schedule_max_updt()
+    except Exception as e:
+        logger.debug(f"[schedule] polling 조회 실패: {e}")
+        return
+    if current is None:
+        return
+    if _LAST_SCHEDULE_UPDT is None or current > _LAST_SCHEDULE_UPDT:
+        logger.info(f"[schedule] DB 변경 감지 ({_LAST_SCHEDULE_UPDT} → {current}) — 재등록")
+        _reload_jobs_from_db()
+
+
+# ────────────────────────────────────────────────────────────────────
+# 기본 스케줄 작업 일괄 등록 — SCHEDULE_M_SETTING 기반(Phase 2).
+# 호출자 주입 callable 을 task_name 별 매핑한 후 DB row 로 register.
+# 시그니처는 기존과 동일(호환). DB 조회 실패 시 등록 0건이 될 수 있음.
 # ────────────────────────────────────────────────────────────────────
 def setup_default_jobs(learning_func=None, stats_func=None,
                        manual_control_func=None, growth_rag_func=None,
                        opinet_collect_func=None, lotto_collect_func=None):
+    global _JOB_CALLABLES
     try:
-        # 학습 작업 (매일 지정 시간)
-        if learning_func:
-            add_job(
-                job_id="learning_job",
-                func=learning_func,
-                trigger_type="cron",
-                hour=SCHEDULE_LEARNING_HOUR,
-                minute=SCHEDULE_LEARNING_MINUTE
-            )
-
-        # 통계 처리 작업 (매 10분)
-        if stats_func:
-            add_job(
-                job_id="stats_job",
-                func=stats_func,
-                trigger_type="interval",
-                minutes=STATS_INTERVAL_MINUTES
-            )
-
-        # 수동/알고리즘 환경제어 + AI 비상모니터링 (매 5초)
-        # [변경11 · 2026-04-30] 잡 주기는 5초 유지 — manual 사용자 토글 즉시 반영용.
-        # algorithm 모드만 control_all_manual 내부에서 _ALGO_THROTTLE_SEC(기본 180초)
-        # throttle 적용 — 사용자 설정 변경 시 trigger_algorithm_now() 로 즉시 1회 실행.
-        # AI 모드는 별도 _ai_control_loop 운영. 본 잡은 AI 비상제어/모니터링만 5초 주기.
-        if manual_control_func:
-            add_job(
-                job_id="relay_control_job",
-                func=manual_control_func,
-                trigger_type="interval",
-                seconds=5,
-            )
-
-        # AI 인공지능 환경제어: 별도 순환 루프 스레드로 운영 (startup.py에서 시작)
-        # 재배사 순환 + 30초 delay 방식으로 변경되어 스케줄러 등록 불필요
-
-        # 생육 RAG 작업 (일 2회: 12:00, 00:00)
-        # 생육 데이터 입력 시점 기반으로 센서/릴레이 환경 통계를 RAG 데이터로 저장
-        if growth_rag_func:
-            add_job(
-                job_id="growth_rag_job_noon",
-                func=growth_rag_func,
-                trigger_type="cron",
-                hour=12,
-                minute=0
-            )
-            add_job(
-                job_id="growth_rag_job_midnight",
-                func=lambda: growth_rag_func(is_midnight=True),
-                trigger_type="cron",
-                hour=0,
-                minute=5   # 로그 정리(00:00) 직후
-            )
-
-        # 로그 정리 작업 (매일 00:00:00)
-        # 100일 이전 로그 파일 삭제, 단일 파일 트리밍
-        add_job(
-            job_id="daily_log_cleanup",
-            func=_daily_log_cleanup,
-            trigger_type="cron",
-            hour=0,
-            minute=0
-        )
-
-        # [Wave 11] PostgreSQL 커넥션 풀 상태 주기 로그 (기본 5분)
-        # 운영 중 풀 고갈·커넥션 누수 조기 감지. PGDB_POOL_HEARTBEAT_MIN=0 이면 비활성.
-        import os as _os
-        _pg_hb_min = int(_os.getenv("PGDB_POOL_HEARTBEAT_MIN", "5") or 0)
-        if _pg_hb_min > 0:
-            add_job(
-                job_id="pg_pool_heartbeat",
-                func=_pg_pool_heartbeat,
-                trigger_type="interval",
-                minutes=_pg_hb_min,
-            )
-
-        # 청크 정리 작업 (매일 03:00)
-        # farm_knowledge 컬렉션에서 180일 이상 오래된 데이터 삭제
-        add_job(
-            job_id="chunk_cleanup_job",
-            func=_chunk_cleanup_job,
-            trigger_type="cron",
-            hour=3,
-            minute=0
-        )
-
-        # Opinet 유가정보 수집 (매일 10:00) — 상위 계층이 주입
-        if opinet_collect_func:
-            def _opinet_daily_job():
-                try:
-                    opinet_collect_func()
-                except Exception as oe:
-                    logger.error(f"[Opinet] 일일 수집 실패: {oe}")
-
-            add_job(
-                job_id="opinet_daily_job",
-                func=_opinet_daily_job,
-                trigger_type="cron",
-                hour=10,
-                minute=0
-            )
-
-        # ─── [변경8 · 2026-04-30] 재배사 카메라 시간별 아카이브 ───
-        # 매시간 정각(:00)에 활성 호기 캡처 + 휴리스틱 + Vision LLM + RAG 임베딩.
-        # max_instances=1 — 캡처가 1시간 이상 걸리는 경우 다음 실행 스킵.
+        # ── callable 매핑 — schedule_m_setting.task_name 과 1:1 ──
         try:
             from agri_ai_core.src.control.ai_camera_archive import (
                 capture_all_active_houses, cleanup_old_images,
             )
-            add_job(
-                job_id="camera_archive_hourly",
-                func=capture_all_active_houses,
-                trigger_type="cron",
-                minute=0,
-            )
-            # 보존 정책 정리 (매일 04:00)
-            add_job(
-                job_id="camera_archive_cleanup",
-                func=cleanup_old_images,
-                trigger_type="cron",
-                hour=4,
-                minute=0,
-            )
         except ImportError as _cam_e:
             logger.warning(f"[스케줄] 카메라 아카이브 모듈 import 실패: {_cam_e}")
+            capture_all_active_houses = None
+            cleanup_old_images = None
 
-        # 로또 당첨번호 수집 (매주 토요일 22:00) — 상위 계층이 주입
-        if lotto_collect_func:
-            def _lotto_weekly_job():
+        def _wrap_safe(name, fn):
+            """callable 호출 시 예외 안전 wrapper."""
+            if fn is None:
+                return None
+            def _inner(*a, **kw):
                 try:
-                    lotto_collect_func()
-                except Exception as le:
-                    logger.error(f"[로또수집] 주간 수집 실패: {le}")
+                    return fn(*a, **kw)
+                except Exception as ee:
+                    logger.error(f"[{name}] 실행 실패: {ee}")
+            _inner.__name__ = name
+            return _inner
 
-            add_job(
-                job_id="lotto_weekly_job",
-                func=_lotto_weekly_job,
-                trigger_type="cron",
-                day_of_week="sat",
-                hour=22,
-                minute=0
-            )
+        _JOB_CALLABLES = {
+            'learning_job':            learning_func,
+            'stats_job':               stats_func,
+            'relay_control_job':      manual_control_func,
+            'growth_rag_job_noon':    growth_rag_func,
+            'growth_rag_job_midnight': (lambda: growth_rag_func(is_midnight=True)) if growth_rag_func else None,
+            'daily_log_cleanup':      _daily_log_cleanup,
+            'pg_pool_heartbeat':      _pg_pool_heartbeat,
+            'chunk_cleanup_job':      _chunk_cleanup_job,
+            'opinet_daily_job':       _wrap_safe('Opinet', opinet_collect_func),
+            'camera_archive_hourly':  capture_all_active_houses,
+            'camera_archive_cleanup': cleanup_old_images,
+            'lotto_weekly_job':       _wrap_safe('로또수집', lotto_collect_func),
+            # 'ai_control_loop' 은 별도 스레드(_ai_control_loop)에서 직접 가동
+        }
 
-        logger.info("기본 스케줄 작업 설정 완료")
+        # ── DB 기반 등록 ──
+        ok = _reload_jobs_from_db()
+
+        # 환경변수 PGDB_POOL_HEARTBEAT_MIN=0 호환 (기존 정책 보존)
+        # — DB enabled 가 우선이지만 환경변수=0 이면 추가로 끔
+        import os as _os
+        if int(_os.getenv("PGDB_POOL_HEARTBEAT_MIN", "5") or 0) == 0:
+            if _scheduler and _scheduler.get_job("pg_pool_heartbeat"):
+                remove_job("pg_pool_heartbeat")
+                logger.info("[schedule] pg_pool_heartbeat 환경변수 비활성")
+
+        # ── polling job 자체 등록 (DB 변경 감지 → reload) ──
+        add_job(
+            job_id="_schedule_polling_job",
+            func=_schedule_polling_tick,
+            trigger_type="interval",
+            seconds=_SCHEDULE_POLLING_INTERVAL,
+        )
+
+        if ok:
+            logger.info(f"기본 스케줄 작업 설정 완료 (SCHEDULE_M_SETTING 기반, polling={_SCHEDULE_POLLING_INTERVAL}초)")
+        else:
+            logger.warning("기본 스케줄 작업 설정 — DB 로드 실패 또는 빈 결과 (polling 만 가동)")
         return True
 
     except Exception as e:

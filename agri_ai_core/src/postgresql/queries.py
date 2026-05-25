@@ -262,6 +262,45 @@ GET_LIGHT_IRRIGATION = """SELECT strt_time
                              AND dlte_yn          = FALSE
                            ORDER BY strt_time"""
 
+# ═══════════════════════════════════════════════
+# 통합 스케줄 설정 (SCHEDULE_M_SETTING) — Phase 1
+# ═══════════════════════════════════════════════
+GET_ALL_SCHEDULE_SETTINGS = """SELECT task_name
+                                    , enabled
+                                    , schedule_type
+                                    , interval_seconds
+                                    , cron_expr
+                                    , target_farm_id
+                                    , target_house_id
+                                    , params_json
+                                    , description
+                                    , updt_dttm
+                                 FROM SCHEDULE_M_SETTING
+                                ORDER BY task_name"""
+
+GET_SCHEDULE_MAX_UPDT = """SELECT MAX(updt_dttm) AS max_updt
+                             FROM SCHEDULE_M_SETTING"""
+
+# ═══════════════════════════════════════════════════════════
+# 센서 임계값 변경 감지용 (Phase 3-a) — SENSOR_M_SETTING
+# updt_dttm 컬럼은 migration 002 에서 추가됨.
+# ═══════════════════════════════════════════════════════════
+GET_SENSOR_SETTING_MAX_UPDT = """SELECT MAX(updt_dttm) AS max_updt
+                                   FROM SENSOR_M_SETTING
+                                  WHERE farm_id = %s
+                                    AND hous_id = %s"""
+
+# ═══════════════════════════════════════════════════════
+# 프롬프트/도구 변경 감지 (Phase 3-b)
+# ═══════════════════════════════════════════════════════
+GET_PROMPT_BLOCK_UPDT = """SELECT updt_dttm
+                             FROM prompt_block_m
+                            WHERE block_id = %s"""
+
+GET_TOOL_DEFINITION_MAX_UPDT = """SELECT MAX(updt_dttm) AS max_updt
+                                    FROM tool_definition_m
+                                   WHERE active_yn = 'Y'"""
+
 # ══════════════════
 # 릴레이 설정 저장
 # ══════════════════
@@ -914,4 +953,49 @@ SELECT COUNT(*)                                                                 
   FROM RELAY_L_RECORDING
  WHERE farm_id = %s AND hous_id = %s
    AND recd_dttm >= NOW() - INTERVAL '24 hours';
+"""
+
+
+# ════════════════════════════════════════════════════════════════════
+# [프롬프트 자동화 · Phase 1] context 외부화용 신규 테이블 DDL
+#
+# 분리 원칙 (사용자 지침 2026-05-03):
+#   · 가능한 ChromaDB(벡터 학습 데이터) 로 관리 → 학습 누적·자체 고도화
+#   · 사용자가 직접 관리해야 할 정확 데이터만 PostgreSQL
+#
+# 테이블 (PostgreSQL — 사용자 관리):
+#   tool_definition_m  : query_handler 도구 schema (정확 JSON, 활성/비활성 토글)
+#   prompt_block_m     : 시스템 프롬프트 정형 블록 (순환모드표 등 사용자 편집 단위)
+#
+# (ChromaDB 컬렉션 — 학습 진화):
+#   prompt_chunk_v     : 시스템/유저/분석/답변 프롬프트 chunk
+#   domain_rule_v      : 결합 규칙·안전 룰·사용자 학습 룰
+# ════════════════════════════════════════════════════════════════════
+
+CREATE_TOOL_DEFINITION_M_TABLE = """
+CREATE TABLE IF NOT EXISTS tool_definition_m (
+    tool_id         VARCHAR(64) PRIMARY KEY,
+    schema_json     JSONB NOT NULL,
+    description     TEXT NOT NULL,
+    category        VARCHAR(32),
+    priority        INTEGER NOT NULL DEFAULT 100,
+    active_yn       CHAR(1) NOT NULL DEFAULT 'Y',
+    rgst_dttm       TIMESTAMP NOT NULL DEFAULT NOW(),
+    updt_dttm       TIMESTAMP NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_tool_def_category
+    ON tool_definition_m (category, active_yn, priority);
+"""
+
+CREATE_PROMPT_BLOCK_M_TABLE = """
+CREATE TABLE IF NOT EXISTS prompt_block_m (
+    block_id        VARCHAR(64) PRIMARY KEY,
+    name            VARCHAR(128) NOT NULL,
+    body_text       TEXT NOT NULL,
+    placeholders    JSONB,
+    description     VARCHAR(512),
+    active_yn       CHAR(1) NOT NULL DEFAULT 'Y',
+    rgst_dttm       TIMESTAMP NOT NULL DEFAULT NOW(),
+    updt_dttm       TIMESTAMP NOT NULL DEFAULT NOW()
+);
 """

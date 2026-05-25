@@ -13,6 +13,11 @@
 # read_current_sensor_info       : 재배사 최신 센서값 한 건
 # read_latest_relay_info         : 재배사 최근 릴레이 상태 한 건
 # read_light_irrigation_settings : 조명/관수 스케줄 설정
+# read_schedule_settings         : 통합 스케줄(SCHEDULE_M_SETTING) 전체 row 조회
+# read_schedule_max_updt         : 통합 스케줄 최대 updt_dttm — 변경 감지용 polling key
+# read_sensor_setting_max_updt   : 호기별 SENSOR_M_SETTING 최대 updt_dttm
+# read_prompt_block_updt         : PROMPT_BLOCK_M 단건 updt_dttm (캐시 invalidate)
+# read_tool_definition_max_updt  : TOOL_DEFINITION_M 활성행 최대 updt_dttm
 # ════════════════════════════════════════════════════════════════════
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.postgresql.connection import db_session
@@ -107,5 +112,56 @@ def read_latest_relay_info(farm_id, house_id):
 def read_light_irrigation_settings(farm_id, house_id, unit_type):
     return _db_query(dbQry.GET_LIGHT_IRRIGATION, (farm_id, house_id, unit_type.lower()),
                      error_msg=f"{unit_type} 설정 조회 farm={farm_id} house={house_id}", default=[])
+
+
+# ────────────────────────────────────────────────────────────────────
+# 통합 스케줄 설정(SCHEDULE_M_SETTING) 전체 row 반환 — task_scheduler 폴링 진입점.
+# ────────────────────────────────────────────────────────────────────
+def read_schedule_settings():
+    return _db_query(dbQry.GET_ALL_SCHEDULE_SETTINGS,
+                     error_msg="schedule 설정 조회", default=[])
+
+
+# ────────────────────────────────────────────────────────────────────
+# 통합 스케줄 테이블의 최대 updt_dttm 한 건 반환 — 변경 감지 polling key.
+# 결과 없으면 None.
+# ────────────────────────────────────────────────────────────────────
+def read_schedule_max_updt():
+    row = _db_query(dbQry.GET_SCHEDULE_MAX_UPDT, fetch="one",
+                    error_msg="schedule 최대 updt_dttm 조회")
+    return row.get("max_updt") if row else None
+
+
+# ────────────────────────────────────────────────────────────────────
+# 호기별 SENSOR_M_SETTING 최대 updt_dttm — ai_thresholds 캐시 invalidate key.
+# row 없으면 None.
+# ────────────────────────────────────────────────────────────────────
+def read_sensor_setting_max_updt(farm_id, house_id):
+    row = _db_query(dbQry.GET_SENSOR_SETTING_MAX_UPDT,
+                    (int(farm_id), int(house_id)), fetch="one",
+                    error_msg=f"sensor_setting max_updt 조회 farm={farm_id} house={house_id}")
+    return row.get("max_updt") if row else None
+
+
+# ────────────────────────────────────────────────────────────────────
+# PROMPT_BLOCK_M 단건 updt_dttm — prompt_registry 블록 캐시 invalidate key.
+# block_id row 없으면 None.
+# ────────────────────────────────────────────────────────────────────
+def read_prompt_block_updt(block_id):
+    row = _db_query(dbQry.GET_PROMPT_BLOCK_UPDT, (block_id,),
+                    fetch="one",
+                    error_msg=f"prompt_block updt_dttm 조회 block={block_id}")
+    return row.get("updt_dttm") if row else None
+
+
+# ────────────────────────────────────────────────────────────────────
+# TOOL_DEFINITION_M 활성행 최대 updt_dttm — tools 캐시 invalidate key.
+# 활성 row 없으면 None.
+# ────────────────────────────────────────────────────────────────────
+def read_tool_definition_max_updt():
+    row = _db_query(dbQry.GET_TOOL_DEFINITION_MAX_UPDT, (),
+                    fetch="one",
+                    error_msg="tool_definition max_updt 조회")
+    return row.get("max_updt") if row else None
 
 
