@@ -73,6 +73,23 @@ class TestExecuteTool:
         assert r.get("success") is True
         assert r["n"] == 0
 
+    def test_write_tool_trigger_type_injected(self):
+        # [Phase 3] write 도구 호출 시 trigger_type 자동 주입 — LLM 이 안 줘도 통과
+        # 실제 큐 INSERT 가 일어나지 않도록 cooldown 으로 차단 (daily_limit 도 가능)
+        import agri_ai_core.src.ai.tools_agent_write as W
+        from datetime import datetime
+        from unittest.mock import patch
+        recent = datetime.now()  # 방금 호출한 척 → cooldown 위반
+        with patch.object(W, "_last_call_at", return_value=recent), \
+             patch.object(W, "_count_today", return_value=0):
+            r = _execute_tool(
+                "send_user_alert",
+                {"level": "info", "message": "ping"},
+                trigger_type="schedule")
+        # cooldown 으로 거부 — 다만 호출 자체는 인자 불일치 예외 없이 통과해야 함
+        assert r.get("success") is False
+        assert r.get("reason") == "cooldown"
+
 
 # ════════════════════════════════════════════════════════════════════
 # 3) Loop 감지

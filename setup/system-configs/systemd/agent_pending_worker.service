@@ -1,0 +1,35 @@
+[Unit]
+Description=AgriAI Agent Pending Action Worker (queue executor, Phase 3)
+Documentation=file:///workspace/jayeondeule/docs/dev_agent.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=jayeondeule
+Group=jayeondeule
+WorkingDirectory=/workspace/jayeondeule
+EnvironmentFile=/workspace/jayeondeule/.env
+
+# Polling 주기 (초). 운영에서는 .env 로 덮어쓰기 가능.
+Environment=AGENT_WORKER_POLL_SEC=2
+Environment=AGENT_WORKER_BATCH=10
+
+ExecStart=/workspace/jayeondeule/venv/bin/python -m agri_ai_core.src.control.agent_pending_worker
+
+# 우아한 종료 — 진행중 row 마무리 후 종료
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+Restart=on-failure
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agent_pending_worker
+
+[Install]
+WantedBy=multi-user.target

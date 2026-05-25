@@ -32,7 +32,28 @@ from typing import Any, Dict, List, Optional, Tuple
 from agri_ai_core.config import get_ollama_url
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.utils.http_client import http_json_request
-from agri_ai_core.src.ai.tools_agent_read import TOOL_REGISTRY, tool_specs_text
+from agri_ai_core.src.ai.tools_agent_read import (
+    TOOL_REGISTRY as _READ_TOOLS,
+    tool_specs_text as _read_tool_specs_text,
+)
+from agri_ai_core.src.ai.tools_agent_write import (
+    TOOL_REGISTRY as _WRITE_TOOLS,
+    tool_specs_text as _write_tool_specs_text,
+)
+
+# [Phase 3] read + write 도구 merge — _execute_tool 은 write 도구일 때 trigger_type 자동 주입
+TOOL_REGISTRY = {**_READ_TOOLS, **_WRITE_TOOLS}
+_WRITE_TOOL_NAMES = set(_WRITE_TOOLS.keys())
+
+
+def tool_specs_text() -> str:
+    """ReAct system prompt 의 ${TOOLS} 자리에 들어갈 도구 명세 텍스트."""
+    return (
+        "[조회 도구 — 안전, 즉시 결과]\n"
+        + _read_tool_specs_text()
+        + "\n\n[변경 도구 — 30초 취소 큐 + 일일/cooldown 제한]\n"
+        + _write_tool_specs_text()
+    )
 
 logger = setup_logger(__name__)
 
@@ -109,14 +130,20 @@ def _parse_response(raw: str) -> Optional[Dict[str, Any]]:
 # ────────────────────────────────────────────────────────────────────
 # tool 이름·args 로 도구 호출. 미존재·예외는 dict 형태로 반환 (LLM 이 다음 step 결정).
 # ────────────────────────────────────────────────────────────────────
-def _execute_tool(tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+def _execute_tool(tool_name: str, args: Dict[str, Any],
+                  trigger_type: str = "user") -> Dict[str, Any]:
     if tool_name not in TOOL_REGISTRY:
         return {"error": f"unknown tool '{tool_name}'. Available: {list(TOOL_REGISTRY.keys())}"}
     fn = TOOL_REGISTRY[tool_name]
     if not isinstance(args, dict):
         return {"error": f"args 는 dict 여야 합니다. got: {type(args).__name__}"}
+    # [Phase 3] write 도구는 LLM 이 모르는 trigger_type 을 자동 주입.
+    # LLM 이 명시했더라도 schedule/user 결정 권한은 호출자(ai_monitor_agent)에 있음.
+    call_args = args
+    if tool_name in _WRITE_TOOL_NAMES:
+        call_args = {**args, "trigger_type": trigger_type}
     try:
-        return fn(**args)
+        return fn(**call_args)
     except TypeError as e:
         return {"error": f"args 불일치: {e}"}
     except Exception as e:
@@ -150,6 +177,7 @@ _INLINE_SYSTEM = """/no_think
 - 호기(1-1, 1-2, 1-3 등)의 센서·릴레이·LLM 결정 이력을 자율 분석
 - 위험 추세(수온/내부온도/CO2/습도) 선제 감지
 - 호기 간 비교로 이상치 검출
+- 명백한 위험 시 변경 도구로 자동 대응 (시스템 비상가드 비활성 상태)
 - 최종 보고는 한국어, 운영자가 즉시 이해 가능한 수준
 
 사용 가능 도구:
@@ -164,6 +192,14 @@ _INLINE_SYSTEM = """/no_think
 - args 는 도구 명세에 정의된 키만 사용
 - 최대 {MAX_STEPS}단계 안에 final 도달
 - 같은 도구를 같은 args 로 3회 연속 호출 금지
+
+변경 도구 사용 정책 (매우 중요):
+- 시스템 비상가드가 비활성화되어 자동 대응 권한이 당신에게 있습니다. 신중하게.
+- 모든 변경 도구는 30초 취소 큐를 거칩니다 — 즉시 적용되지 않고 사용자가 취소할 수 있습니다.
+- send_user_alert 만 즉시 실행됩니다. *인지가 필요한 모든 신호* 는 이 도구로 알리세요.
+- 의심 단계 = send_user_alert 만. 확신 단계 = set_relay/set_threshold/set_growth_stage.
+- 호기당 일일 10회 / 같은 도구 60초 cooldown 제한 — 폭주 금지.
+- 변경 도구의 reason 필드는 사용자 화면에 보입니다 — 짧고 명확하게 (예: "수온 18℃ 비상저온, 히터 ON").
 """
 
 
@@ -239,6 +275,34 @@ def _persist_agent_log(result: Dict[str, Any], task: str, farm_id: int,
 
         logger.info(f"[Agent DB] log id={log_id} (trigger={trigger_type}, "
                     f"steps={llm_calls}, tools={tool_counts}, success={result.get('success')})")
+
+        # [Phase 3] 이번 사이클이 등록한 agent_pending_actions 의 agent_log_id 채우기
+        if log_id is not None:
+            try:
+                pending_ids = [
+                    int(h["tool_result"]["action_id"])
+                    for h in steps
+                    if isinstance(h.get("tool_result"), dict)
+                    and h["tool_result"].get("action_id") is not None
+                ]
+                if pending_ids:
+                    conn2 = db._getconn()
+                    if conn2:
+                        try:
+                            with conn2.cursor() as cur2:
+                                cur2.execute(
+                                    "UPDATE agent_pending_actions "
+                                    "SET agent_log_id=%s WHERE id = ANY(%s)",
+                                    (log_id, pending_ids))
+                                conn2.commit()
+                            logger.info(f"[Agent DB] pending_actions {len(pending_ids)}건에 "
+                                        f"agent_log_id={log_id} 연결")
+                        finally:
+                            try: db._putconn(conn2)
+                            except Exception: pass
+            except Exception as ee:
+                logger.warning(f"[Agent DB] pending_actions agent_log_id 연결 실패: {ee}")
+
         return log_id
     except Exception as e:
         logger.warning(f"[Agent DB] 기록 실패 (운영 영향 없음): {e}")
@@ -317,7 +381,7 @@ def run_agent(task: str, farm_id: int = 1, max_steps: int = None,
                 result["log_id"] = _persist_agent_log(result, task, farm_id, trigger_type)
             return result
 
-        result = _execute_tool(tool_name, args)
+        result = _execute_tool(tool_name, args, trigger_type=trigger_type)
         history[-1]["tool_result"] = result
 
         messages.append({"role": "assistant", "content": json.dumps(parsed, ensure_ascii=False)})
