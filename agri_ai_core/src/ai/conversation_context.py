@@ -141,10 +141,14 @@ def _search_related_conversations(user_query, farm_id):
             return None
 
         _t1 = time.time()
-        query_embedding = embed_text(user_query)
+        # [2026-05-27 hotfix7] 짧은 timeout + 1 retry 로 변경.
+        # default (60s × 5 retry = 5분) 시 채팅 hang. embedder 실패 시 _search_related_conversations
+        # 가 None 반환 → load_hybrid_context 가 recent_turns 만으로 진행 (graceful degradation).
+        query_embedding = embed_text(user_query, timeout=8, max_retries=1)
         _embed_ms = (time.time() - _t1) * 1000
-        logger.debug(f"[PERF:대화] 관련대화-임베딩={_embed_ms:.0f}ms")
+        logger.info(f"[PERF:대화] 관련대화-임베딩={_embed_ms:.0f}ms")
         if not query_embedding:
+            logger.info(f"[하이브리드] 임베딩 실패/skip — recent_turns 만으로 진행")
             return None
 
         # farm_id 기반 필터: 시스템 농장(0)은 전체 검색, 일반 농장은 자기 농장 + 시스템 농장 대화 검색
@@ -300,8 +304,10 @@ def _async_vectordb_save(session_id, user_query, response_text, farm_id):
         # Q+A 결합 문서
         combined_text = f"질문: {user_query}\n답변: {(response_text or '')[:500]}"
 
-        embedding = embed_text(combined_text)
+        # [2026-05-27 hotfix7] 저장 임베딩도 짧은 timeout. 실패 시 대화 저장 skip (PostgreSQL 만).
+        embedding = embed_text(combined_text, timeout=8, max_retries=1)
         if not embedding:
+            logger.debug(f"[하이브리드] 저장 임베딩 실패 skip (PG 만 저장됨)")
             return
 
         # [FIX] 동일 Q&A 중복 저장 방지: 질문+응답 내용 기반 해시 → 같은 내용이면 같은 doc_id로 upsert
