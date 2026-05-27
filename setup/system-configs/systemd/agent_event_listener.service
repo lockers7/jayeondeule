@@ -1,0 +1,44 @@
+[Unit]
+Description=AgriAI Event Listener — Phase 5 즉시 이벤트 트리거 daemon
+Documentation=file:///workspace/jayeondeule/docs/dev_agent.md
+After=network-online.target postgresql.service agent_monitor.service
+Wants=network-online.target
+# PostgreSQL 없이는 LISTEN 불가 — 필수 종속
+Requires=postgresql.service
+# agent_monitor(scheduler) 가 먼저 기동돼야 subscription 이 존재
+After=agent_monitor.service
+# 재시작 빈도 제한 (300초 안에 5회 이상이면 중단)
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=jayeondeule
+Group=jayeondeule
+WorkingDirectory=/workspace/jayeondeule
+EnvironmentFile=/workspace/jayeondeule/.env
+
+# 환경변수 — .env 로 덮어쓰기 가능
+Environment=AGENT_EVENT_FARM_IDS=1
+Environment=AGENT_EVENT_COOLDOWN_SEC=300
+Environment=AGENT_EVENT_HEARTBEAT_SEC=300
+Environment=AGENT_EVENT_RECONNECT_SEC=5
+
+# venv Python 으로 모듈 실행
+ExecStart=/workspace/jayeondeule/venv/bin/python -m agri_ai_core.src.control.agent_event_listener
+
+# 우아한 종료: SIGTERM → _stop_event.set() → 루프 종료
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# 실패 시 5초 후 자동 재시작 (빈도 제한은 [Unit] StartLimit*)
+Restart=on-failure
+RestartSec=5
+
+# 로그 — journald (journalctl -u agent_event_listener -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agent_event_listener
+
+[Install]
+WantedBy=multi-user.target
