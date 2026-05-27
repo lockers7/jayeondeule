@@ -264,6 +264,9 @@ app = FastAPI(
 app.include_router(voice_router)
 app.include_router(rpi_router)
 app.include_router(ai_feedback_router)  # [2026-04-28]
+# [2026-05-25 Phase 4 W] AI Agent 관리 — history/pending/trigger/subscriptions/alerts
+from agri_ai_core.api.agent_router import agent_router
+app.include_router(agent_router)
 app.add_middleware(JsonLoggingMiddleware)
 
 # CORS 미들웨어
