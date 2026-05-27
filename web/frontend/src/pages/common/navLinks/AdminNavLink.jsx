@@ -20,6 +20,7 @@ export default function AdminNavLink() {
             <Nav.Link as={Link} to={farmId != null ? `/farm/${farmId}/user-management` : "/farm-management"}>사용자관리</Nav.Link>
             <Nav.Link as={Link} to="/prompt-management">프롬프트관리</Nav.Link>
             <Nav.Link as={Link} to="/rule-candidates">룰 후보</Nav.Link>
+            <Nav.Link as={Link} to="/agent-history">Agent 이력</Nav.Link>
         </>
     );
 }
