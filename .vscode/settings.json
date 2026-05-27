@@ -1,5 +1,26 @@
 {
     "java.compile.nullAnalysis.mode": "automatic",
     "java.import.maven.enabled": true,
-    "java.configuration.updateBuildConfiguration": "automatic"
+    "java.configuration.updateBuildConfiguration": "automatic",
+
+    "terminal.integrated.profiles.linux": {
+        "tmux-main": {
+            "path": "tmux",
+            "args": ["new-session", "-A", "-s", "main"]
+        },
+        "bash": {
+            "path": "bash",
+            "args": ["-l"]
+        }
+    },
+    "terminal.integrated.defaultProfile.linux": "tmux-main",
+    "terminal.integrated.enablePersistentSessions": true,
+    "terminal.integrated.persistentSessionReviveProcess": "onExitAndWindowClose",
+    "terminal.integrated.scrollback": 50000,
+
+    "workbench.panel.defaultLocation": "bottom",
+    "workbench.panel.alignment": "right",
+
+    "workbench.startupEditor": "none",
+    "workbench.tips.enabled": false
 }

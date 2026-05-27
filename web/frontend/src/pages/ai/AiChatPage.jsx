@@ -1,6 +1,7 @@
 import React, {useCallback, useEffect, useRef, useState} from "react";
 import {Button, Spinner, Container} from "react-bootstrap";
 import {useSelector} from "react-redux";
+import {useNavigate} from "react-router-dom";
 import ChatSidebar from "../../components/ai/ChatSidebar.jsx";
 import ChatMessageList from "../../components/ai/ChatMessageList.jsx";
 import ChatInput from "../../components/ai/ChatInput.jsx";
@@ -43,8 +44,8 @@ export default function AiChatPage() {
     const isSysMonitor = userInfo?.authLvel === "SYS_MONITOR";
     const isMonitor = isSysMonitor || userInfo?.authLvel === "FARM_MONITOR";
 
-    const [messages, setMessages] = useState(() => loadMessagesFromSession() || []);
-    const [historyLoaded, setHistoryLoaded] = useState(() => !!sessionStorage.getItem(MESSAGES_STORAGE_KEY));
+    const [messages, setMessages] = useState([]);   // ⛔ 브라우저 글로벌 캐시 복원 금지(사용자 혼입 방지) — 서버에서 사용자별 이력 로드
+    const loadedSessionRef = useRef(null);            // 서버 대화이력을 로드한 session 추적(사용자별 격리)
     const [currentInput, setCurrentInput] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [ragLoading, setRagLoading] = useState("");
@@ -68,6 +69,7 @@ export default function AiChatPage() {
     const contentRef = useRef(null);
     const abortControllerRef = useRef(null);
     const ragAbortRef = useRef(null);
+    const navigate = useNavigate();
     const [buttonsLeft, setButtonsLeft] = useState(0);
     const [sessionId, setSessionId] = useState(() => {
         // ADMIN 또는 userInfo 미확정: localStorage 기반 UUID 세션 (현행)
@@ -83,11 +85,14 @@ export default function AiChatPage() {
     // 농장 사용자: farm_id 기반 고정 세션 (브라우저 무관, 동일 농장 = 동일 세션)
     useEffect(() => {
         if (!userInfo) return;
-        if (userInfo.authLvel !== "ADMIN" && userInfo.authLvel !== "SYS_MONITOR" && userInfo.farmId) {
-            const farmSid = `farm_${userInfo.farmId}`;
-            setSessionId(prev => prev === farmSid ? prev : farmSid);
-        }
-    }, [userInfo?.authLvel, userInfo?.farmId]);
+        // ⛔ 대화이력은 로그인 사용자별로 격리한다 — 브라우저 공유 UUID 금지(다른 관리자 대화가
+        //   보이던 버그 수정, 2026-07-26). 로그인 ID(userId) 기반 고정 세션 → 같은 브라우저라도
+        //   사용자가 다르면 세션이 달라 서버가 각자의 이력만 반환한다.
+        const sid = (userInfo.userId != null && String(userInfo.userId).trim())
+            ? `user_${userInfo.userId}`
+            : (userInfo.farmId != null ? `farm_${userInfo.farmId}` : null);
+        if (sid) setSessionId(prev => prev === sid ? prev : sid);
+    }, [userInfo?.userId, userInfo?.farmId]);
 
     // 메시지 변경 시 sessionStorage 동기화
     useEffect(() => {
@@ -96,24 +101,22 @@ export default function AiChatPage() {
 
     // 최초 로드 시 sessionStorage가 비어 있으면 서버에서 최근 10개 Q&A 조회
     useEffect(() => {
-        if (historyLoaded) return;
         if (!sessionId) return;
-        setHistoryLoaded(true);
+        // 사용자 확정(userInfo) 전 초기 UUID 세션으로는 로드하지 않는다 — 사용자별 세션 확정 후 로드.
+        if (!userInfo) return;
+        if (loadedSessionRef.current === sessionId) return;   // 이 세션(=사용자)은 이미 로드함
+        loadedSessionRef.current = sessionId;
+        setMessages([]);                                       // 세션(사용자) 전환 시 이전 사용자 대화 잔여 제거
         getConversationHistory(sessionId, 10)
             .then((res) => {
                 const rows = res.data?.history || [];
                 if (rows.length === 0) return;
-                // user/assistant 쌍을 메시지 배열로 변환
-                const restored = rows.map((r) => ({
-                    role: r.role,
-                    content: r.content,
-                    timestamp: undefined,
-                    _fromHistory: true,
-                }));
-                setMessages(restored);
+                setMessages(rows.map((r) => ({
+                    role: r.role, content: r.content, timestamp: undefined, _fromHistory: true,
+                })));
             })
             .catch(() => { /* 서버 이력 없으면 빈 화면 유지 */ });
-    }, [sessionId, historyLoaded]);
+    }, [sessionId, userInfo]);
 
     // ADMIN/SYS_MONITOR만 localStorage에 세션 저장 (농장 사용자는 farm_id로 고정이므로 저장 불필요)
     useEffect(() => {
@@ -413,13 +416,15 @@ export default function AiChatPage() {
         setMessages([]);
         sessionStorage.removeItem(MESSAGES_STORAGE_KEY);
         if (!userInfo || userInfo.authLvel === "ADMIN" || userInfo.authLvel === "SYS_MONITOR") {
-            // ADMIN/SYS_MONITOR: 새 UUID 세션 생성
+            // ADMIN/SYS_MONITOR: 새 빈 세션(UUID) 생성 — 새 대화 스레드
             const nextSessionId = generateSessionId();
+            loadedSessionRef.current = nextSessionId; // 새 세션은 재조회 불필요(빈 이력)
             setSessionId(nextSessionId);
             localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);
+        } else {
+            // 농장 사용자: farm_id 기반 세션 유지 — 현재 세션 재조회 방지(화면만 초기화)
+            loadedSessionRef.current = sessionId;
         }
-        // 농장 사용자: farm_id 기반 세션 유지 (ID 변경 없음)
-        setHistoryLoaded(true); // 이력 재조회 불필요 (화면만 초기화)
     };
 
     // 농장 변경 시 메시지 초기화 후 최근 10개 재조회
@@ -427,7 +432,7 @@ export default function AiChatPage() {
         if (selectedFarm && farm && selectedFarm.farmId !== farm.farmId) {
             setMessages([]);
             sessionStorage.removeItem(MESSAGES_STORAGE_KEY);
-            setHistoryLoaded(false); // 최근 10개 재조회 트리거
+            loadedSessionRef.current = null; // 재조회 트리거(현재 세션 이력 다시 로드)
         }
         setSelectedFarm(farm);
     };
@@ -469,6 +474,17 @@ export default function AiChatPage() {
                         >
                             {ragLoading === "save" ? <Spinner animation="border" size="sm"/> : "RAG저장"}
                         </Button>
+                        {isAdmin && (
+                            // ⛔ 주식자동매매 = 시스템관리자(ADMIN) 전용 — 프롬프트관리·룰후보·
+                            //   Agent이력·LLM제어관리 메뉴와 동일 권한(authLvel==='ADMIN'). 그 외 숨김.
+                            <Button
+                                variant="outline-success"
+                                size="sm"
+                                onClick={() => window.open("/stock-trading", "stock_trading_window")}
+                            >
+                                주식자동매매
+                            </Button>
+                        )}
                     </>
                 )}
             </div>

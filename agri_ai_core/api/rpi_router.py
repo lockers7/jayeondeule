@@ -192,9 +192,9 @@ class RelayWriteRequest(BaseModel):
 # ────────────────────────────────────────────────────────────────────
 # 릴레이 쓰기 — relay_manager.set_relay_value(raw_mode=True) 위임.
 # 인터록 위반 항목은 응답 interlock_violations 에 누적 반환.
-# [2026-05-17] 본 endpoint 는 web UI 수동 명령 단일 진입점이므로
+# 본 endpoint 는 web UI 수동 명령 단일 진입점이므로
 #   skip_emergency_guard=True 로 비상 오버라이드 미적용 (사용자 정책).
-#   알고리즘 자동(_execute_control) / 스케줄(schedule_control) 은 기존 비상가드 유지.
+#   알고리즘 자동(_execute_control) / 스케줄(schedule_control) 은 비상가드 유지.
 # ────────────────────────────────────────────────────────────────────
 @rpi_router.post("/relay/{farm_id}/{house_id}")
 async def write_relay(farm_id: int, house_id: int, request: RelayWriteRequest):

@@ -1,14 +1,12 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # test_analyzer_fallback — Ollama 503 fallback 의 키워드 기반 분기 검증
-#                          [2026-05-25 C 단계 hotfix3]
 #
 # 대상: agri_ai_core.src.ai.pipeline.question_analyzer._build_safe_fallback
-#   · 기존 (사고 시점): 무조건 web_search
-#   · 수정: 모니터링/농장 키워드 매칭 시 합리적 type 으로 분기
+#   · 모니터링/농장 키워드 매칭 시 합리적 type 으로 분기, 그 외 web_search
 #
 # 이 회귀 테스트가 PASS 하지 않으면 채팅창에서 "릴레이/재배사/모니터링"
 # 같은 명백한 농장 쿼리가 Ollama 503 시 외부 web_search 로 떨어져
-# 무의미한 답변을 받게 됨 (2026-05-25 19:42 사고 이력).
+# 무의미한 답변을 받게 됨.
 #
 # 파일 시작 함수 목록:
 #   TestMonitorTimeBranch     : 모니터링 + 시간 → agent_monitor
@@ -24,7 +22,7 @@ from agri_ai_core.src.ai.pipeline.question_analyzer import _build_safe_fallback
 # ────────────────────────────────────────────────────────────────────
 class TestMonitorTimeBranch:
     def test_5min_monitoring(self):
-        # B 단계 보강: "5분 단위로 모니터링하라" 는 *등록 의도* — agent_subscribe
+        # "5분 단위로 모니터링하라" 는 *등록 의도* — agent_subscribe
         p = _build_safe_fallback("1호 재배사를 5분 단위로 모니터링하라", 1, 1)
         assert p["question_type"] == "agent_monitor"
         tools = [d["tool"] for d in p["required_data"]]
@@ -32,7 +30,7 @@ class TestMonitorTimeBranch:
             f"등록 의도는 agent_subscribe 로 분기되어야 함 (got tools={tools})"
 
     def test_5min_monitoring_typo(self):
-        # 실 사용자 쿼리 (2026-05-25 19:40) — "모티터링" 오타 + "5분단위"
+        # 실 사용자 쿼리 — "모티터링" 오타 + "5분단위"
         p = _build_safe_fallback("1호 재배사의 릴레이 세싱을 5분단위로 모티터링하고 결과 출력하라.", 1, 1)
         assert p["question_type"] == "agent_monitor"
 
@@ -44,7 +42,7 @@ class TestMonitorTimeBranch:
         assert "agent_subscribe" in tools
 
     def test_jiyeobwa_keyword(self):
-        # 사용자가 실제 19:48 보낸 쿼리 (오타 포함)
+        # 실 사용자 쿼리 (오타 포함)
         p = _build_safe_fallback("지금부터 1시간 단위로각 재배사의 릴레이 제어 상태를 모니터링하고 요약해서 내게 설명하라", None, None)
         assert p["question_type"] == "agent_monitor"
 
@@ -54,7 +52,7 @@ class TestMonitorTimeBranch:
 
 
 # ────────────────────────────────────────────────────────────────────
-# B 단계 보강 — 등록/조회/취소/알림 세분화 fallback
+# 등록/조회/취소/알림 세분화 fallback
 # ────────────────────────────────────────────────────────────────────
 class TestSubscriptionFallback:
     def test_register_extracts_interval(self):
@@ -109,7 +107,7 @@ class TestSubscriptionFallback:
 # ────────────────────────────────────────────────────────────────────
 class TestFarmSensorBranch:
     def test_relay_keyword(self):
-        # 사용자가 실제 19:40 보낸 쿼리 — 모니터링은 없지만 릴레이 키워드
+        # 실 사용자 쿼리 — 모니터링은 없지만 릴레이 키워드
         p = _build_safe_fallback("1호 재배사의 릴레이 상태 알려줘", 1, 1)
         assert p["question_type"] == "farm_sensor"
         tools = [d["tool"] for d in p["required_data"]]

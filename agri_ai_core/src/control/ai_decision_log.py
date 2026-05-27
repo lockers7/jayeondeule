@@ -1,6 +1,6 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # AI 환경제어 — 자기결정 이력 모듈 (M6)
-# [2026-04-28 신규] LLM 의 모든 의사결정을 ai_decision_log 테이블에 기록.
+# LLM 의 모든 의사결정을 ai_decision_log 테이블에 기록.
 # 다음 호출 시 직전 N건을 user prompt 에 주입 → oscillation 방지·일관성 향상.
 # 사용자 피드백(좋아요/싫어요)은 별도 모듈 M15 에서 update_feedback() 호출.
 #
@@ -10,6 +10,7 @@
 #   • 테이블 부재 시 자동 생성(IF NOT EXISTS) — 첫 실행 안전.
 # --->
 # ensure_table:          최초 1회 테이블 생성 시도 (idempotent)
+# record_external_action: 채팅·Agent 제어 조치를 동일 이력에 기록 (source 태그)
 # record_decision:       의사결정 1건 INSERT → id 반환
 # get_recent:            직전 N건 조회 list[dict]
 # format_recent_block:   user prompt 한 블록 텍스트로 변환
@@ -54,11 +55,33 @@ def ensure_table() -> bool:
 
 # ────────────────────────────────────────────────────────────────────
 # LLM 의사결정 1건 INSERT → id 반환. 실패해도 LLM 흐름 보존(None 반환).
-# [버그수정 · 2026-05-01] 기존 db.fetch_one(INSERT...RETURNING) 은 connection.py 가
-#   commit 호출을 안 하므로 트랜잭션 종료 시 자동 롤백 — sequence 만 진행되고
-#   row 가 사라져 ai_decision_log 가 항상 비어 있던 원인. ai_camera_archive 와
-#   동일한 _getconn() 직접 패턴(execute + fetchone + commit)으로 교체.
+# ⚠ connection.py 의 fetch_one 은 commit 을 하지 않아 INSERT...RETURNING 이
+#   자동 롤백됨 — _getconn() 직접 패턴(execute + fetchone + commit) 필수.
 # ────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────
+# AI 사이클 외 제어 주체(채팅 지시·Agent 조치)의 릴레이 변경도 동일 이력에 기록.
+# "왜 이렇게 제어했나" 질문에 모든 주체의 사유가 ai_decision_log 한 곳에서 조회된다.
+# best-effort — 기록 실패가 제어 흐름을 깨지 않는다.
+# ────────────────────────────────────────────────────────────────────
+def record_external_action(source, farm_id, house_id, devices, reason):
+    try:
+        dv = devices or {}
+        detail = ", ".join(f"{k}={'ON' if v else 'OFF'}" for k, v in dv.items())
+        return record_decision(
+            int(farm_id), int(house_id),
+            growth_stage='',
+            action=f"{source}_control",
+            circulation=None,
+            water_heater=dv.get('water_heater_flag'),
+            fog_occurs=dv.get('fog_occurs_flag'),
+            drainage_motor=dv.get('drainage_motor_flag'),
+            reason=f"[{source}] {reason} ({detail})"[:250],
+        )
+    except Exception as e:
+        logger.debug(f"[AI결정이력] 외부주체 기록 실패(무시): {e}")
+        return None
+
+
 def record_decision(farm_id, house_id, *,
                     growth_stage: str,
                     action: str,
@@ -66,7 +89,8 @@ def record_decision(farm_id, house_id, *,
                     water_heater: Optional[bool],
                     fog_occurs: Optional[bool],
                     reason: str,
-                    sensor_snapshot: Optional[Dict[str, Any]] = None) -> Optional[int]:
+                    sensor_snapshot: Optional[Dict[str, Any]] = None,
+                    drainage_motor: Optional[bool] = None) -> Optional[int]:
     if not ensure_table():
         return None
 
@@ -81,6 +105,7 @@ def record_decision(farm_id, house_id, *,
         str(circulation) if circulation else None,
         bool(water_heater) if water_heater is not None else None,
         bool(fog_occurs) if fog_occurs is not None else None,
+        bool(drainage_motor) if drainage_motor is not None else None,
         str(reason or '')[:256],
         snap_json,
     )
@@ -98,7 +123,8 @@ def record_decision(farm_id, house_id, *,
         if new_id is not None:
             logger.info(
                 f"[AI결정이력] 기록 farm={farm_id} house={house_id} id={new_id} "
-                f"action={action} circ={circulation} 히터={water_heater} 포그={fog_occurs}"
+                f"action={action} circ={circulation} "
+                f"히터={water_heater} 포그={fog_occurs} 배수={drainage_motor}"
             )
         return new_id
     except Exception as e:
@@ -146,11 +172,12 @@ def format_recent_block(rows: List[Dict[str, Any]]) -> str:
         circ = r.get('circulation') or '-'
         wh = 'ON' if r.get('water_heater') else 'OFF'
         fg = 'ON' if r.get('fog_occurs') else 'OFF'
+        dm = 'ON' if r.get('drainage_motor') else 'OFF'
         reason = (r.get('reason') or '')[:30]
         fb = r.get('feedback') or ''
         fb_str = f" [피드백={fb}]" if fb else ""
         lines.append(
-            f"  · {ts} · {action} · {circ} · 히터={wh} 포그={fg} · {reason}{fb_str}"
+            f"  · {ts} · {action} · {circ} · 히터={wh} 포그={fg} 배수={dm} · {reason}{fb_str}"
         )
     return "\n".join(lines)
 

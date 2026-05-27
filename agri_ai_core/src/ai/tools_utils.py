@@ -1,5 +1,5 @@
 # ════════════════════════════════════════════════════════════════
-# 도구 실행 공용 유틸 — tools_executor.py에서 분리된 pure helper
+# 도구 실행 공용 유틸 — pure helper 모음.
 # ID 정규화, JSON 직렬화 fallback, AI vs 사용자 상태 충돌 비교 등.
 # --->
 # normalize_id: LLM이 준 ID 문자열에서 순수 숫자만 추출
@@ -18,7 +18,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 # ══════════════════════════════════════════════════════════════════════════
-# [D3] 도구별 세션 컨텍스트 자동 주입 명세 (선언형 테이블)
+# 도구별 세션 컨텍스트 자동 주입 명세 (선언형 테이블)
 # query_handler_simple._build_default_tool_args 가 이 테이블을 읽어
 # 각 도구의 default 인자를 자동 생성한다. 새 도구를 추가할 때 이 표에 한 줄만
 # 등록하면 세션의 farm_id/house_id/auth_farm_id 가 자동 주입된다.
@@ -30,20 +30,34 @@ from typing import Any, Dict, List, Optional
 #   "file_name":     질문에서 감지된 파일명을 도구 default 로 주입 (RAG 전용)
 # ══════════════════════════════════════════════════════════════════════════
 TOOL_DEFAULT_CONTEXT: Dict[str, Dict[str, bool]] = {
-    # RAG 조회/삭제
+    # RAG 조회/삭제/저장
     "search_farm_knowledge": {"farm_id": True, "house_id": True, "auth_farm_id": True, "file_name": True},
+    "save_domain_knowledge": {"farm_id": True, "auth_farm_id": True},
     "delete_farm_knowledge": {"farm_id": True, "auth_farm_id": True, "file_name": True},
     # 센서/릴레이 조회·제어
     "get_farm_realtime_data": {"farm_id": True, "house_id": True},
+    "get_weather_forecast":   {"farm_id": True, "house_id": True},
     "control_relay":          {"farm_id": True, "house_id": True, "auth_farm_id": True},
-    # Phase 1 관리 도구
+    # 관리 도구
+    "set_admin_directive":     {"farm_id": True, "auth_farm_id": True},
+    "manage_control_prompt":   {"auth_farm_id": True},
+    "manage_external_api":     {"auth_farm_id": True},
+    "manage_analysis_lesson":  {"auth_farm_id": True},
+    "manage_system_knowledge": {"auth_farm_id": True},
+    "db_write_query":          {"auth_farm_id": True},
+    "release_admin_directive": {"farm_id": True, "auth_farm_id": True},
     "set_house_control_mode": {"farm_id": True, "auth_farm_id": True},
+    "override_ai_thresholds": {"farm_id": True, "auth_farm_id": True},
     "set_growth_stage":       {"farm_id": True, "auth_farm_id": True},
     "set_circulation_mode":   {"farm_id": True, "auth_farm_id": True},
     "set_schedule":           {"farm_id": True, "auth_farm_id": True},
     "get_system_status":      {"farm_id": True},
-    # Phase 4 Agent 모니터링
+    # Agent 모니터링
     "schedule_monitor":       {"farm_id": True},
+    "set_alert_interval":     {"farm_id": True, "auth_farm_id": True},
+    "set_alert_level":        {"auth_farm_id": True},
+    # DB 자유조회 — 농장관리자 세션은 자기 농장만 (tools_db._check_farm_scope)
+    "db_read_query":          {"auth_farm_id": True},
 }
 
 
@@ -92,6 +106,9 @@ _HOUSE_IDS_TTL = 60.0  # 초
 # ────────────────────────────────────────────────────────────────────
 def get_farm_house_ids(farm_id: Any, include_zero: bool = False, ttl: float = _HOUSE_IDS_TTL) -> List[str]:
     fid = normalize_id(farm_id) or str(farm_id or "").strip() or "1"
+    # 시스템 농장(farm_id=0)은 실제 운영 재배사가 없으므로 항상 빈 목록 반환
+    if fid == "0":
+        return []
     cache_key = f"{fid}:{int(bool(include_zero))}"
 
     now = time.time()

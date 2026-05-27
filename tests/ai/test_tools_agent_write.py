@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# test_tools_agent_write — Phase 3.2 단위 테스트 [2026-05-25]
+# test_tools_agent_write — agent 쓰기 도구 단위 테스트
 #
 # 대상: agri_ai_core/src/ai/tools_agent_write.py
 #   · args validation (4개 도구)
@@ -141,14 +141,74 @@ class TestArgsValidation:
 # ────────────────────────────────────────────────────────────────────
 class TestSafetyGuardMocked:
     def test_daily_limit_block(self, W):
-        # daily_limit 도달 — 큐 INSERT 안 됨
+        # daily_limit 도달 — 큐 INSERT 안 됨.
+        # set_relay 는 override 한도(500)를 쓰므로 유효 한도 기준으로 검증.
+        eff_limit = W.TOOL_DAILY_LIMIT_OVERRIDE.get("set_relay", W.DAILY_LIMIT)
         with patch.object(W, "_enqueue", return_value=99) as enq, \
-             patch.object(W, "_count_today", return_value=W.DAILY_LIMIT), \
+             patch.object(W, "_count_today", return_value=eff_limit), \
              patch.object(W, "_last_call_at", return_value=None):
             r = W.set_relay(farm_id=1, house_id=2, semantic="water_heater_flag", on=False)
         assert r["success"] is False
         assert r["reason"] == "daily_limit"
         enq.assert_not_called()
+
+    def test_set_relay_limit_covers_normal_usage(self, W):
+        # 정상 운용량(사이클당 2~3콜 × 144사이클 = 최대 432건)이
+        # 한도에 걸리지 않아야 함.
+        assert W.TOOL_DAILY_LIMIT_OVERRIDE["set_relay"] >= 500
+
+    def test_set_relay_pass_below_limit(self, W):
+        # 한도 직전(499)까지는 정상 통과 — agent 자율권 보장
+        eff_limit = W.TOOL_DAILY_LIMIT_OVERRIDE["set_relay"]
+        with patch.object(W, "_enqueue", return_value=120) as enq, \
+             patch.object(W, "_count_today", return_value=eff_limit - 1), \
+             patch.object(W, "_last_call_at", return_value=None):
+            r = W.set_relay(farm_id=1, house_id=2, semantic="water_heater_flag", on=False)
+        assert r["success"] is True
+        enq.assert_called_once()
+
+
+# ────────────────────────────────────────────────────────────────────
+# send_user_alert 중복 억제(dedupe)
+# ────────────────────────────────────────────────────────────────────
+class TestAlertDedup:
+    def test_duplicate_alert_blocked(self, W):
+        # 동일 message 가 dedupe 창 내 발송됨 — 큐 INSERT 억제 + LLM 안내 메시지
+        recent = datetime.now() - timedelta(minutes=5)
+        with patch.object(W, "_enqueue", return_value=99) as enq, \
+             patch.object(W, "_count_today", return_value=0), \
+             patch.object(W, "_last_call_at", return_value=None), \
+             patch.object(W, "_same_alert_recent", return_value=recent):
+            r = W.send_user_alert(level="warning", message="습도 높음")
+        assert r["success"] is False
+        assert r["reason"] == "duplicate_alert"
+        assert "중복" in r["message"]          # LLM 에게 사유 전달
+        assert "다시 알리세요" in r["message"]  # 갱신 재발송 안내
+        enq.assert_not_called()
+
+    def test_new_alert_passes(self, W):
+        # 새 내용 알림 — 정상 발송
+        with patch.object(W, "_enqueue", return_value=101) as enq, \
+             patch.object(W, "_count_today", return_value=0), \
+             patch.object(W, "_last_call_at", return_value=None), \
+             patch.object(W, "_same_alert_recent", return_value=None):
+            r = W.send_user_alert(level="critical", message="습도 100% 신규 위기")
+        assert r["success"] is True
+        enq.assert_called_once()
+
+    def test_dedup_lookup_failure_does_not_block(self, W):
+        # dedupe 조회 실패(None 반환) 시 알림은 발송되어야 — 누락 방지 우선
+        with patch.object(W, "_enqueue", return_value=102) as enq, \
+             patch.object(W, "_count_today", return_value=0), \
+             patch.object(W, "_last_call_at", return_value=None), \
+             patch.object(W, "_same_alert_recent", return_value=None):
+            r = W.send_user_alert(level="info", message="정기 보고")
+        assert r["success"] is True
+        enq.assert_called_once()
+
+    def test_alert_limit_raised(self, W):
+        # 한도 100 이상 보장 (폭주 차단 전용)
+        assert W.TOOL_DAILY_LIMIT_OVERRIDE["send_user_alert"] >= 100
 
     def test_cooldown_block(self, W):
         # 30초 전 동일 호출 — cooldown(60s) 위반

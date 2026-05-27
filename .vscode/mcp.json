@@ -1,26 +1,11 @@
 {
   "servers": {
-    "postgres": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-postgres",
-        "postgresql://postgres:Wkdusemfdp1%40@127.0.0.1:5432/jayeondeule"
-      ]
-    },
     "filesystem": {
       "command": "npx",
       "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
         "/workspace/jayeondeule"
-      ]
-    },
-    "fetch": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@kazuph/mcp-fetch"
       ]
     },
     "searxng": {
@@ -53,15 +38,131 @@
       ]
     },
     "korea-weather": {
-      "command": "uvx",
+      "command": "uv",
       "args": [
-        "--from",
+        "run",
+        "--with",
         "git+https://github.com/ohhan777/korea_weather.git",
-        "korea_weather"
+        "python",
+        "-c",
+        "from korea_weather import create_server; create_server().run(transport='stdio')"
       ],
       "env": {
         "KOREA_WEATHER_API_KEY": "${KOREA_WEATHER_API_KEY}"
       }
+    },
+    "kis-trading": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/workspace/jayeondeule/external/kis-open-trading-api/MCP/Kis Trading MCP",
+        "python",
+        "server.py"
+      ],
+      "env": {
+        "ENV": "demo",
+        "MCP_TYPE": "stdio",
+        "KIS_PAPER_APP_KEY": "${KIS_PAPER_APP_KEY}",
+        "KIS_PAPER_APP_SECRET": "${KIS_PAPER_APP_SECRET}",
+        "KIS_ACCOUNT": "${KIS_ACCOUNT}"
+      }
+    },
+    "dart": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "mcp",
+        "--with",
+        "requests",
+        "python",
+        "/workspace/jayeondeule/external/dart-mcp/server.py"
+      ],
+      "env": {
+        "DART_API_KEY": "${DART_API_KEY}"
+      }
+    },
+    "wikipedia": {
+      "command": "uvx",
+      "args": [
+        "wikipedia-mcp",
+        "--language",
+        "ko"
+      ]
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-fetch",
+        "--ignore-robots-txt"
+      ]
+    },
+    "ddg-search": {
+      "command": "uvx",
+      "args": [
+        "duckduckgo-mcp-server"
+      ]
+    },
+    "git": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-git",
+        "--repository",
+        "/workspace/jayeondeule"
+      ]
+    },
+    "context7": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ]
+    },
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
+      "env": {
+        "MEMORY_FILE_PATH": "/workspace/jayeondeule/logs/mcp_agent_memory.json"
+      }
+    },
+    "seq-thinking": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
+    },
+    "youtube-transcript": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@kimtaeyoon83/mcp-server-youtube-transcript"
+      ]
+    },
+    "time": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-time",
+        "--local-timezone",
+        "Asia/Seoul"
+      ]
+    },
+    "calculator": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-calculator"
+      ]
+    },
+    "open-meteo": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@dangahagan/weather-mcp"
+      ]
     }
   }
 }

@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════════════════
-# Phase 3-a 단위테스트 (2/2) — ai_thresholds 캐시 invalidate 정책 변경.
+# 단위테스트 — ai_thresholds 캐시 updt_dttm invalidate 정책 검증.
 #
 # 검증:
 #   1) 첫 호출 시 DB 조회 + 캐시에 (updt_dttm, ts) 저장

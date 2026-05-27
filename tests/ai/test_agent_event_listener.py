@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# test_agent_event_listener.py — Phase 5 단위 테스트 [2026-05-27]
+# test_agent_event_listener.py — agent_event_listener 단위 테스트
 #
 # 대상: agri_ai_core/src/control/agent_event_listener.py
 #   · _handle_event         : payload 파싱 / 쿨다운 / trigger 호출

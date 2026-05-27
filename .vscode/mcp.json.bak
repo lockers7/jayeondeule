@@ -1,0 +1,161 @@
+{
+  "servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/workspace/jayeondeule"
+      ]
+    },
+    "searxng": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-searxng"
+      ],
+      "env": {
+        "SEARXNG_URL": "http://127.0.0.1:8888"
+      }
+    },
+    "naver-search": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@isnow890/naver-search-mcp"
+      ],
+      "env": {
+        "NAVER_CLIENT_ID": "${NAVER_CLIENT_ID}",
+        "NAVER_CLIENT_SECRET": "${NAVER_CLIENT_SECRET}"
+      }
+    },
+    "paper-search": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/openags/paper-search-mcp",
+        "paper-search-mcp"
+      ]
+    },
+    "korea-weather": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "git+https://github.com/ohhan777/korea_weather.git",
+        "python",
+        "-c",
+        "from korea_weather import create_server; create_server().run(transport='stdio')"
+      ],
+      "env": {
+        "KOREA_WEATHER_API_KEY": "${KOREA_WEATHER_API_KEY}"
+      }
+    },
+    "kis-trading": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/workspace/jayeondeule/external/kis-open-trading-api/MCP/Kis Trading MCP",
+        "python",
+        "server.py"
+      ],
+      "env": {
+        "ENV": "demo",
+        "MCP_TYPE": "stdio",
+        "KIS_PAPER_APP_KEY": "${KIS_PAPER_APP_KEY}",
+        "KIS_PAPER_APP_SECRET": "${KIS_PAPER_APP_SECRET}",
+        "KIS_ACCOUNT": "${KIS_ACCOUNT}"
+      }
+    },
+    "dart": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "mcp",
+        "--with",
+        "requests",
+        "python",
+        "/workspace/jayeondeule/external/dart-mcp/server.py"
+      ],
+      "env": {
+        "DART_API_KEY": "${DART_API_KEY}"
+      }
+    },
+    "wikipedia": {
+      "command": "uvx",
+      "args": [
+        "wikipedia-mcp",
+        "--language",
+        "ko"
+      ]
+    },
+    "fetch": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-fetch",
+        "--ignore-robots-txt"
+      ]
+    },
+    "ddg-search": {
+      "command": "uvx",
+      "args": [
+        "duckduckgo-mcp-server"
+      ]
+    },
+    "git": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-git",
+        "--repository",
+        "/workspace/jayeondeule"
+      ]
+    },
+    "context7": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ]
+    },
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
+      "env": {
+        "MEMORY_FILE_PATH": "/workspace/jayeondeule/logs/mcp_agent_memory.json"
+      }
+    },
+    "seq-thinking": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
+    },
+    "youtube-transcript": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@kimtaeyoon83/mcp-server-youtube-transcript"
+      ]
+    },
+    "time": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-time",
+        "--local-timezone",
+        "Asia/Seoul"
+      ]
+    },
+    "calculator": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-calculator"
+      ]
+    }
+  }
+}

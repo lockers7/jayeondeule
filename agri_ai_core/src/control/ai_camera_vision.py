@@ -1,6 +1,6 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # AI 환경제어 — 카메라 / 버섯 영상 분석 모듈 (M11)
-# [2026-04-28 신규] 재배사 내부 영상을 캡처해 LLM 의 상황 판단에 활용.
+# 재배사 내부 영상을 캡처해 LLM 의 상황 판단에 활용.
 #
 # 영상 소스 (자동 우선순위 — 사용 가능한 첫 소스만 사용):
 #   1) USB 카메라 (메인 서버 직결) — V4L2 디바이스 또는 OpenCV index
@@ -56,7 +56,7 @@ logger = setup_logger(__name__)
 _CACHE_TTL = 300  # 5분
 _CACHE: Dict[tuple, tuple] = {}
 
-# [2026-04-28 rev2] 영상 휴리스틱 임계 — 환경변수로 운영 조정 가능 (하드코딩 금지)
+# 영상 휴리스틱 임계 — 환경변수로 운영 조정 가능 (하드코딩 금지)
 # ────────────────────────────────────────────────────────────────────
 # 환경변수 값을 int 로 안전 변환. 미설정/실패 시 default.
 # ────────────────────────────────────────────────────────────────────
@@ -130,7 +130,7 @@ def _capture_usb(device: str) -> Optional[bytes]:
 # Source 2) SSH 캡처 — RPi 측 USB 카메라를 메인 서버에서 SSH 통한 v4l2-ctl 캡처
 # ══════════════════════════════════════════════════════════════════════════════
 # ────────────────────────────────────────────────────────────────────
-# [변경8 · 2026-04-30] RPi 의 USB 카메라(/dev/videoN) 를 SSH 로 원격 캡처.
+# RPi 의 USB 카메라(/dev/videoN) 를 SSH 로 원격 캡처.
 # spec 형식: 'user@host:port[:device][:WxH]'  (device 기본 /dev/video0, 기본 1280x720)
 # 메인 서버 ↔ RPi LAN 직접 접근 차단(client isolation) 환경에서도 외부 SSH 포트
 # 포워딩만으로 카메라 영상 확보. 5분 캐시 적용으로 SSH 핸드셰이크 비용 무시 가능.
@@ -211,7 +211,7 @@ def _capture_rpi(url: str) -> Optional[bytes]:
     try:
         import urllib.request
         req = urllib.request.Request(url, headers={'User-Agent': 'agri-ai/1.0'})
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=int(os.getenv('RPI_CAM_TIMEOUT_SEC', '12'))) as resp:
             data = resp.read()
         if not data:
             return None

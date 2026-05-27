@@ -1,0 +1,84 @@
+{
+ "_meta": {
+  "system_prompt_len": 4613,
+  "growth": "생육기"
+ },
+ "정상": {
+  "user_prompt_len": 142,
+  "decision": {
+   "action": "change",
+   "devices": {
+    "water_heater_flag": false,
+    "fog_occurs_flag": false,
+    "drainage_motor_flag": false
+   },
+   "circulation": "내부순환",
+   "reason": "내부온도 적정 범위 내, 내부습도 적정 범위 내, CO2 적정 범위 내, 수온 적정 범위 내. 가온/냉각 불필요하며 습도 조절 필요 없음."
+  }
+ },
+ "저온비상": {
+  "user_prompt_len": 142,
+  "decision": {
+   "action": "change",
+   "devices": {
+    "water_heater_flag": true,
+    "fog_occurs_flag": false,
+    "drainage_motor_flag": false
+   },
+   "circulation": "내부순환",
+   "reason": "저온+적정습도 → heater ON, 내부순환"
+  }
+ },
+ "고온_외기정상": {
+  "user_prompt_len": 142,
+  "decision": {
+   "action": "change",
+   "devices": {
+    "water_heater_flag": false,
+    "fog_occurs_flag": true,
+    "drainage_motor_flag": true
+   },
+   "circulation": "내부순환",
+   "reason": "고온으로 냉각 필요, 수온이 실내보다 낮으므로 fog+drainage+내부순환"
+  }
+ },
+ "고온_외기부적합": {
+  "user_prompt_len": 142,
+  "decision": {
+   "action": "change",
+   "devices": {
+    "water_heater_flag": false,
+    "fog_occurs_flag": true,
+    "drainage_motor_flag": true
+   },
+   "circulation": "내부순환",
+   "reason": "고온으로 냉각 필요, 수온이 실내보다 낮으므로 fog+drainage+내부순환"
+  }
+ },
+ "고CO2": {
+  "user_prompt_len": 143,
+  "decision": {
+   "action": "change",
+   "devices": {
+    "water_heater_flag": false,
+    "fog_occurs_flag": false,
+    "drainage_motor_flag": false
+   },
+   "circulation": "배기순환",
+   "reason": "고CO2 → 배기순환"
+  }
+ },
+ "고습": {
+  "user_prompt_len": 142,
+  "decision": {
+   "action": "change",
+   "devices": {
+    "water_heater_flag": false,
+    "fog_occurs_flag": false,
+    "drainage_motor_flag": false
+   },
+   "circulation": "배기순환",
+   "reason": "내부온도 적정, 내부습도 높음 → 배기순환으로 습도 조절"
+  }
+ }
+}

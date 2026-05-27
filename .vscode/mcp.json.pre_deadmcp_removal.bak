@@ -1,0 +1,106 @@
+{
+  "servers": {
+    "postgres": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-postgres",
+        "postgresql://postgres:Wkdusemfdp1%40@127.0.0.1:5432/jayeondeule"
+      ]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/workspace/jayeondeule"
+      ]
+    },
+    "fetch": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@kazuph/mcp-fetch"
+      ]
+    },
+    "searxng": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-searxng"
+      ],
+      "env": {
+        "SEARXNG_URL": "http://127.0.0.1:8888"
+      }
+    },
+    "naver-search": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@isnow890/naver-search-mcp"
+      ],
+      "env": {
+        "NAVER_CLIENT_ID": "${NAVER_CLIENT_ID}",
+        "NAVER_CLIENT_SECRET": "${NAVER_CLIENT_SECRET}"
+      }
+    },
+    "paper-search": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/openags/paper-search-mcp",
+        "paper-search-mcp"
+      ]
+    },
+    "korea-weather": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "git+https://github.com/ohhan777/korea_weather.git",
+        "python",
+        "-c",
+        "from korea_weather import create_server; create_server().run(transport='stdio')"
+      ],
+      "env": {
+        "KOREA_WEATHER_API_KEY": "${KOREA_WEATHER_API_KEY}"
+      }
+    },
+    "kis-trading": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/workspace/jayeondeule/external/kis-open-trading-api/MCP/Kis Trading MCP",
+        "python",
+        "server.py"
+      ],
+      "env": {
+        "ENV": "demo",
+        "MCP_TYPE": "stdio",
+        "KIS_PAPER_APP_KEY": "${KIS_PAPER_APP_KEY}",
+        "KIS_PAPER_APP_SECRET": "${KIS_PAPER_APP_SECRET}",
+        "KIS_ACCOUNT": "${KIS_ACCOUNT}"
+      }
+    },
+    "farm-mcp-0723": {
+      "command": "uvx",
+      "args": []
+    },
+    "dart": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "mcp",
+        "--with",
+        "requests",
+        "python",
+        "/workspace/jayeondeule/external/dart-mcp/server.py"
+      ],
+      "env": {
+        "DART_API_KEY": "${DART_API_KEY}"
+      }
+    }
+  }
+}

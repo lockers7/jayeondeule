@@ -53,3 +53,12 @@ def prompt_chunk_collection():
 # ────────────────────────────────────────────────────────────────────
 def domain_rule_collection():
     return settings.collections.domain_rule or 'domain_rule'
+
+
+# ────────────────────────────────────────────────────────────────────
+# [주식 자동매매] 판단·분석·실적 등 트레이딩 AI 관리용 RAG 컬렉션 이름 반환.
+# ⛔ 농장관리 컬렉션과 완전 분리(전용 컬렉션) — 향후 트레이딩 데이터만 별도
+#    내보내기·삭제·이관 가능. 수치데이터는 PostgreSQL trading_* 테이블에 둔다.
+# ────────────────────────────────────────────────────────────────────
+def trading_knowledge_collection():
+    return getattr(settings.collections, 'trading_knowledge', None) or 'trading_knowledge'

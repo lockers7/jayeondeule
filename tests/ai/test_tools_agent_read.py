@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════════════════
-# Phase 1 단위테스트 — agent read-only 도구 5종.
+# 단위테스트 — agent read-only 도구 5종.
 # DB 의존 — 운영 DB 의 실 데이터로 검증 (sensor_l_recording, ai_decision_log 등).
 # 빈 DB / 신규 환경에서도 "success=True + n=0" 같은 형태로 통과해야.
 # ═══════════════════════════════════════════════════════════════════════════
@@ -69,7 +69,8 @@ class TestRealDB:
         assert isinstance(r["decisions"], list)
         if r["decisions"]:
             d = r["decisions"][0]
-            assert d["action"] in ("change", "keep")
+            # change/keep(AI 사이클) + 외부 주체 통합 기록(채팅지시_control/Agent조치_control)
+            assert d["action"] in ("change", "keep") or d["action"].endswith("_control")
 
     def test_get_relay_state_shape(self):
         r = get_relay_state(1, 1)

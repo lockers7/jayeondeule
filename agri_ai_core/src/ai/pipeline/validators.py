@@ -10,6 +10,7 @@ import re
 import time
 import traceback
 
+from agri_ai_core.config import NUM_CTX
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.utils.json_utils import safe_json_load
 
@@ -35,7 +36,7 @@ def validate_with_llm(user_query, analysis_result, collected_data_summary):
         from agri_ai_core.src.ai.llm_client import _ollama_chat, _get_model_name, _extract_message_content
         from agri_ai_core.src.ai.pipeline.prompts import DATA_VALIDATOR_PROMPT, get_data_validator_prompt
 
-        # [프롬프트 자동화 · Phase 3-(6)] USE_DB_PROMPTS=1 시 ChromaDB 우선, 실패 시 inline.
+        # USE_DB_PROMPTS=1 시 ChromaDB 우선, 실패 시 inline.
         validator_prompt = get_data_validator_prompt()
 
         model_name = _get_model_name()
@@ -62,7 +63,9 @@ def validate_with_llm(user_query, analysis_result, collected_data_summary):
             options={
                 "temperature": 0.1,
                 "num_predict": 512,
-                "num_ctx": 4096,
+                # ⛔ 다른 gemma3:27b 소비자와 동일(16384). 값이 다르면 90초 모델 리로드
+                #   (27b 가 16GB VRAM 에 겨우 들어가 리로드가 느림, 2026-07-19 실측).
+                "num_ctx": NUM_CTX,
                 "think": False,
             },
             keep_alive='1h',

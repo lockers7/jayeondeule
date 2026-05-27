@@ -27,7 +27,7 @@ logger = setup_logger(__name__)
 _AGENT_JOB_PREFIX = "agent_monitor_"
 _AGENT_JOB_META: Dict[str, Dict[str, Any]] = {}  # job_id → {intent, start, end, houses, interval, created_at}
 
-# [Wave 7] DB 영속화 — alert_l_log 와 동일한 lazy CREATE 패턴 사용
+# DB 영속화 — alert_l_log 와 동일한 lazy CREATE 패턴 사용
 _agent_table_ready = False
 _agent_table_lock = threading.Lock()
 
@@ -52,9 +52,12 @@ CREATE INDEX IF NOT EXISTS idx_agent_job_active
 # ────────────────────────────────────────────────────────────────────
 # '22:00' | '2026-04-19 22:00' | ISO 형식 파싱.
 # ────────────────────────────────────────────────────────────────────
-def _parse_time(t: str, default_date: datetime = None) -> datetime:
+def _parse_time(t: str, default_date: datetime = None, default_now: bool = False) -> datetime:
+    """시각 파싱. 빈 값일 때 default_now=True 이면 default_date(또는 now) 반환."""
     t = (t or "").strip()
     if not t:
+        if default_now:
+            return default_date or datetime.now()
         raise ValueError("시각이 비어있습니다")
 
     # ISO 형식
@@ -78,7 +81,7 @@ def _parse_time(t: str, default_date: datetime = None) -> datetime:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# [Wave 7] DB 영속화 헬퍼 — agent_monitor_m_job 테이블
+# DB 영속화 헬퍼 — agent_monitor_m_job 테이블
 # ═══════════════════════════════════════════════════════════════════════════
 def _ensure_agent_job_table() -> bool:
     global _agent_table_ready
@@ -173,7 +176,7 @@ def restore_active_jobs() -> int:
                     houses = json.loads(houses)
                 start_dt = r["start_dttm"]
                 interval_min = int(r["interval_min"])
-                # [Wave 9] 재시작 gap 동안 놓친 tick 이 있는지 판정
+                # 재시작 gap 동안 놓친 tick 이 있는지 판정
                 # 조건: Job 시작 시각이 이미 지났고, gap 이 interval 의 1.0배 이상이면
                 #       최소 1회 tick 이 누락된 것으로 간주하고 복원 직후 1회 즉시 실행
                 missed = (start_dt <= now
@@ -236,7 +239,7 @@ def _reregister_job(job_id: str, farm_id: str, intent: str,
         "created_at": datetime.now().isoformat(),
     }
 
-    # [Wave 9] 놓친 tick 보완: 복원 직후 1회 즉시 실행 (별도 스레드)
+    # 놓친 tick 보완: 복원 직후 1회 즉시 실행 (별도 스레드)
     # alert_on_normal 은 원본 설정 유지 → 이상 없으면 알림도 없음 (소음 없음)
     if fire_once_now:
         def _gap_catchup():
@@ -262,11 +265,7 @@ def _monitor_job_run(
 ) -> None:
     from agri_ai_core.src.ai.tools_data import get_farm_realtime_data
     from agri_ai_core.src.ai import alert_bus
-    from agri_ai_core.src.control.control_common import (
-        TEMP_LOW, TEMP_HIGH, TEMP_CRITICAL_LOW, TEMP_CRITICAL_HIGH,
-        HUMIDITY_LOW, HUMIDITY_HIGH, HUMIDITY_CRITICAL_LOW, HUMIDITY_CRITICAL_HIGH,
-        CO2_HIGH, CO2_CRITICAL_HIGH,
-    )
+    from agri_ai_core.src.control.ai_thresholds import get_thresholds
 
     for hid in house_ids:
         try:
@@ -276,22 +275,23 @@ def _monitor_job_run(
             h = sensor.get("indoor_humidity")
             c = sensor.get("co2")
 
-            # 이상 판별
+            # 이상 판별 — 임계값은 재배사별 DB(SENSOR_M_SETTING) 실시간 값 사용
+            ts = get_thresholds(farm_id, hid)
             anomalies = []
             if t is not None:
-                if t < TEMP_CRITICAL_LOW or t > TEMP_CRITICAL_HIGH:
+                if t < ts.temp_critical_low or t > ts.temp_critical_high:
                     anomalies.append(("critical", f"온도 비상: {t}℃"))
-                elif t < TEMP_LOW or t > TEMP_HIGH:
+                elif t < ts.temp_low or t > ts.temp_high:
                     anomalies.append(("warning", f"온도 정상범위 이탈: {t}℃"))
             if h is not None:
-                if h < HUMIDITY_CRITICAL_LOW or h > HUMIDITY_CRITICAL_HIGH:
+                if h < ts.humidity_critical_low or h > ts.humidity_critical_high:
                     anomalies.append(("critical", f"습도 비상: {h}%"))
-                elif h < HUMIDITY_LOW or h > HUMIDITY_HIGH:
+                elif h < ts.humidity_low or h > ts.humidity_high:
                     anomalies.append(("warning", f"습도 정상범위 이탈: {h}%"))
             if c is not None:
-                if c > CO2_CRITICAL_HIGH:
+                if c > ts.co2_critical_high:
                     anomalies.append(("critical", f"CO2 비상: {c}ppm"))
-                elif c > CO2_HIGH:
+                elif c > ts.co2_high:
                     anomalies.append(("warning", f"CO2 정상범위 이탈: {c}ppm"))
 
             if anomalies:
@@ -334,30 +334,55 @@ def _monitor_job_run(
 # ────────────────────────────────────────────────────────────────────
 def schedule_monitor(
     intent: str,
-    start_time: str,
-    end_time: str,
-    interval_min: int,
+    start_time: str = "",
+    end_time: str = "",
+    interval_min: int = 10,
     house_ids: Any = None,
     farm_id: str = None,
     alert_on_normal: bool = False,
 ) -> Dict[str, Any]:
+    """모니터링 Job 등록.
+
+    무기한·즉시 시작 모드:
+      · start_time 빈 값  → 즉시 시작 (지금부터)
+      · end_time   빈 값  → 7일 후 자동 종료 (APScheduler 안전 상한)
+      · interval_min 기본 10분
+    """
     from agri_ai_core.src.control.task_scheduler import add_job
-    from apscheduler.triggers.interval import IntervalTrigger
 
     if not intent:
         intent = "모니터링"
 
     try:
-        start_dt = _parse_time(start_time)
-        end_dt = _parse_time(end_time, default_date=start_dt)
+        # 시각 미명시 시 즉시 시작 + 7일 후 자동 종료 허용.
+        start_dt = _parse_time(start_time, default_now=True)
+        end_dt = _parse_time(end_time, default_date=start_dt + timedelta(days=7),
+                             default_now=True)
         if end_dt <= start_dt:
             # 종료가 더 작으면 다음날
             end_dt += timedelta(days=1)
 
+        if interval_min is None:
+            interval_min = 10
         if interval_min < 1 or interval_min > 1440:
             return {"success": False, "error": "interval_min은 1~1440 범위여야 합니다"}
 
         target_farm = _normalize_id(farm_id) or "1"
+        # 시스템 농장(farm_id=0)이 전달되면 첫 번째 실제 농장으로 자동 대체
+        if target_farm == "0":
+            try:
+                from agri_ai_core.src.postgresql.queries import GET_ONE_FARM
+                from agri_ai_core.src.postgresql.connection import db_session
+                with db_session() as _db:
+                    _real = _db.fetch_one(GET_ONE_FARM)
+                if _real and _real.get("farm_id") is not None:
+                    target_farm = str(_real["farm_id"])
+                    logger.info(f"[Agent] farm_id=0(시스템농장) → 실제 농장 자동 대체: farm_id={target_farm}")
+                else:
+                    return {"success": False, "error": "시스템 농장은 모니터링 대상이 아닙니다. 실제 농장을 선택해 주세요."}
+            except Exception as _e:
+                logger.warning(f"[Agent] 시스템 농장 대체 실패: {_e}")
+                return {"success": False, "error": "시스템 농장(farm_id=0)은 모니터링할 수 없어요."}
         farm_houses = _get_farm_house_ids(target_farm) or []
 
         # house_ids 정규화 — 재배사 목록은 농장별로 가변이므로 DB 동적 조회 사용
@@ -382,17 +407,16 @@ def schedule_monitor(
                     _intent=intent, _aon=alert_on_normal):
             _monitor_job_run(_job_id, _farm, _houses, _intent, _aon)
 
-        # APScheduler 동적 등록
-        trigger = IntervalTrigger(
+        # add_job 래퍼: _scheduler=None 이면 setup_scheduler() 로 자동 초기화 후 등록
+        ok = add_job(
+            job_id, _runner,
+            trigger_type="interval",
             minutes=interval_min,
             start_date=start_dt,
             end_date=end_dt,
         )
-        from agri_ai_core.src.control.task_scheduler import _scheduler
-        if _scheduler is None:
-            return {"success": False, "error": "스케줄러가 초기화되지 않았습니다 (FastAPI 재시작 필요)"}
-
-        _scheduler.add_job(_runner, trigger=trigger, id=job_id, replace_existing=True)
+        if not ok:
+            return {"success": False, "error": "스케줄러 초기화 실패 — 서버 재시작이 필요합니다"}
 
         _AGENT_JOB_META[job_id] = {
             "intent": intent,
@@ -405,7 +429,7 @@ def schedule_monitor(
             "created_at": datetime.now().isoformat(),
         }
 
-        # [Wave 7] DB 영속화 (재시작 후 restore_active_jobs 가 복원)
+        # DB 영속화 (재시작 후 restore_active_jobs 가 복원)
         _persist_agent_job(
             job_id=job_id, farm_id=target_farm, intent=intent,
             start_dt=start_dt, end_dt=end_dt, interval_min=interval_min,
@@ -431,8 +455,9 @@ def schedule_monitor(
             "interval_min": interval_min,
             "houses": houses,
             "intent": intent,
-            "message": f"{start_dt.strftime('%H:%M')}~{end_dt.strftime('%H:%M')} 사이 {interval_min}분마다 "
-                       f"{','.join(houses)}호 감시. 이상 감지 시 채팅에 알림 전송. 즉시 초기 점검 1회 실행.",
+            "message": f"{start_dt.strftime('%Y-%m-%d %H:%M')}~{end_dt.strftime('%Y-%m-%d %H:%M')} 사이 {interval_min}분마다 "
+                       f"{','.join(houses)}호 단순 센서 임계치 감시. 이상 감지 시 채팅에 알림 전송. "
+                       f"LLM 판단 보고는 agent_subscribe 구독을 사용해야 합니다. 즉시 초기 점검 1회 실행.",
         }
 
     except Exception as e:
@@ -464,6 +489,16 @@ def list_monitors() -> Dict[str, Any]:
 # 특정 모니터링 Job 취소.
 # ────────────────────────────────────────────────────────────────────
 def cancel_monitor(job_id: str) -> Dict[str, Any]:
+    # LLM 이 구독(agent_subscriptions) 취소에 이 도구를 잘못 고르는 경우가 잦다.
+    # job_id 가 순수 숫자(=구독 ID 형태, 단순감시 Job 은 'agent_monitor_...')면
+    # cancel_agent_subscription 으로 자동 위임 — 어느 취소 도구를 쓰든 구독이 취소된다.
+    _jid = str(job_id or "").strip()
+    if _jid.isdigit():
+        from agri_ai_core.src.ai.tools_agent_sub import cancel_agent_subscription
+        r = cancel_agent_subscription(subscription_id=int(_jid),
+                                      reason="cancel_monitor 위임(구독 ID 감지)")
+        r["delegated_from"] = "cancel_monitor"
+        return r
     from agri_ai_core.src.control.task_scheduler import _scheduler
     if _scheduler is None:
         return {"success": False, "error": "스케줄러 미초기화"}
@@ -475,7 +510,7 @@ def cancel_monitor(job_id: str) -> Dict[str, Any]:
             return {"success": False, "error": f"Job 없음: {job_id} (DB 취소 표시 완료)"}
         _scheduler.remove_job(job_id)
         _AGENT_JOB_META.pop(job_id, None)
-        # [Wave 7] DB 취소 반영 (영속 복원 대상에서 제외)
+        # DB 취소 반영 (영속 복원 대상에서 제외)
         _mark_agent_job_cancelled(job_id)
         logger.info(f"[Agent] 모니터링 Job 취소: {job_id}")
         return {"success": True, "cancelled": job_id}

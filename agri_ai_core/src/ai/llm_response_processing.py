@@ -12,11 +12,18 @@
 # _check_answer_retry: LLM 응답 검증 + 재시도 결정
 # _build_conversation_context: 하이브리드 대화 컨텍스트 messages에 주입
 # ════════════════════════════════════════════════════════════════
+import json
+import os
 import re
 from typing import Any, Dict, List, Optional
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.src.ai.utils import GREETING_RE as _GREETING_RE
+# ⛔ 2026-04-16 llm_client 에서 이 파일을 분리할 때 os/json/is_true 를 안 옮겨,
+#    _emit_question_log_once(33행)·_check_answer_retry(288행)가 호출 즉시 NameError.
+#    그 예외를 llm_client:669 except 가 삼켜 3단계 파이프라인 폴백 전체가 3개월간
+#    사망했다(폴백이 필요한 바로 그 순간 폴백이 죽음). 이 import 를 지우지 말 것.
+from agri_ai_core.src.utils.validators import is_true
 
 logger = setup_logger(__name__)
 
@@ -38,13 +45,6 @@ def _emit_question_log_once(
         f"[질문상세] tools={tools_count} max_iter={max_tool_iterations} "
         f"farm={farm_name or '-'} query_len={len(raw_query)}"
     )
-
-
-
-
-# ═════════════════════════════════════════════════════════════
-# 도구 결과 정제 (tool_result → LLM 메시지 추가 전 지능형 축약)
-# ═════════════════════════════════════════════════════════════
 
 
 
@@ -88,7 +88,7 @@ def _build_structured_result(
         "tools_used": tools_used if tools_used else [],
         "response_type": _determine_response_type(tools_used),
     }
-    # [E1] 도구 호출 추적성 — 감사 로그 포함 (있을 때만)
+    # 도구 호출 추적성 — 감사 로그 포함 (있을 때만)
     if tool_calls_detail:
         result["tool_calls_detail"] = tool_calls_detail
     return result
@@ -150,7 +150,7 @@ def _is_conversational_query(query: str) -> bool:
     q = (query or "").strip()
     if not q:
         return True
-    # 인사 패턴 (기존 GREETING_RE)
+    # 인사 패턴 (GREETING_RE)
     if len(q) <= 30 and _GREETING_RE.search(q):
         return True
     # 추가 감탄/반응 패턴 (짧은 경우만)
@@ -171,21 +171,27 @@ def _is_conversational_query(query: str) -> bool:
 # DB에서 농장/재배사 정보를 조회하여 system prompt에 삽입할 텍스트 생성
 # Returns: str | None: 농장 정보 텍스트
 # ═════════════════════════════════════════════════════════════════════
-def _build_farm_info_text() -> str:
+def _build_farm_info_text(farm_id=None) -> str:
+    # 세션 농장 기준 답변 원칙: 특정 농장 세션이면 그 농장 정보만 주입한다.
+    # 시스템 농장(관리자, farm_id None/'0') 세션만 전체 농장을 나열한다.
     try:
         from agri_ai_core.src.postgresql.reader import read_farm_house_list
         from agri_ai_core.src.postgresql.connection import db_session
 
+        _fid = str(farm_id).strip() if farm_id is not None else ""
+        _single = _fid not in ("", "0", "None")
+
         # 농장 기본 정보 (주요 재배 작물, 주소 포함)
-        with db_session() as db:
-            farms = db.fetch_all(
-                "SELECT f.farm_id, f.farm_name, f.addr, "
+        _sql = ("SELECT f.farm_id, f.farm_name, f.addr, "
                 "c.code_name AS main_crop, f.rmks "
                 "FROM FARM_M_INFO f "
                 "LEFT JOIN CODE_M_INFO c ON c.code_id = 'main_prdt' AND c.code_item = f.main_prdt "
-                "WHERE f.farm_id != 0",
-                as_dict=True,
-            )
+                "WHERE f.farm_id != 0")
+        with db_session() as db:
+            if _single:
+                farms = db.fetch_all(_sql + " AND f.farm_id = %s", (_fid,), as_dict=True)
+            else:
+                farms = db.fetch_all(_sql, as_dict=True)
 
         if not farms:
             return None
@@ -200,11 +206,16 @@ def _build_farm_info_text() -> str:
             if farm.get("rmks"):
                 lines.append(f"- 비고: {farm['rmks']}")
 
-        # 재배사 목록
+        # 재배사 목록 (hous_id=0 통합정보재배사는 학습데이터 저장용 — 센서 없으므로 제외)
         house_list = read_farm_house_list()
         if house_list:
-            house_names = [h.get("hous_name", "") for h in house_list]
-            lines.append(f"- 재배사: {', '.join(house_names)}")
+            house_names = [
+                h.get("hous_name", "") for h in house_list
+                if str(h.get("hous_id", "")).strip() != "0"
+                and (not _single or str(h.get("farm_id", "")).strip() == _fid)
+            ]
+            if house_names:
+                lines.append(f"- 재배사: {', '.join(house_names)}")
 
         return "\n".join(lines) if lines else None
     except Exception as e:

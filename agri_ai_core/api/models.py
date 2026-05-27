@@ -36,7 +36,7 @@ class QueryResponse(BaseModel):
     sources: Optional[List[SourceItem]] = Field(default=None, description="웹 검색 출처 목록")
     tools_used: Optional[List[str]] = Field(default=None, description="사용된 도구 목록")
     response_type: Optional[str] = Field(default=None, description="응답 유형 (web_search|farm_data|knowledge|general)")
-    # [E1] 도구 호출 추적성 — 각 도구가 어떤 args 로 호출되었고 결과 success/에러가 무엇인지 기록
+    # 도구 호출 추적성 — 각 도구가 어떤 args 로 호출되었고 결과 success/에러가 무엇인지 기록
     tool_calls_detail: Optional[List[Dict[str, Any]]] = Field(
         default=None,
         description="각 도구 호출의 세부 정보 (tool, args, success, error, elapsed_ms). 디버깅/감사 로그용.",

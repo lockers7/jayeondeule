@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════════════════
-# Phase 3-a 단위테스트 (1/2) — SENSOR_M_SETTING.updt_dttm 인프라 검증.
+# SENSOR_M_SETTING.updt_dttm 인프라 검증 단위테스트.
 #
 # 검증:
 #   1) read_sensor_setting_max_updt 가 timestamp 반환 (이미 row 있음)

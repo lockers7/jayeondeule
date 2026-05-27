@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# Agent Pending Worker — agent_pending_actions 큐 실행 데몬 (Phase 3) [2026-05-25]
+# Agent Pending Worker — agent_pending_actions 큐 실행 데몬
 #
 # 동작:
 #   매 AGENT_WORKER_POLL_SEC (기본 2) 초마다
@@ -7,7 +7,7 @@
 #     도구별 dispatch → 실제 하드웨어/DB 변경
 #     성공/실패 결과를 status + exec_result + executed_at 으로 기록
 #
-# 안전 정책 (비상가드 disable 상태에서 agent 가 유일한 자동 대응 경로):
+# 안전 정책:
 #   · execute_at < NOW() — 30초 사용자 취소권 보장
 #   · status='cancelled' 인 row 는 절대 실행 안 함
 #   · set_relay 는 relay_manager.set_relay_value 인터록 게이트 통과 (자동 보장)
@@ -27,7 +27,7 @@
 #   _exec_set_relay     : relay_manager 호출
 #   _exec_set_threshold : sensor_m_setting UPDATE
 #   _exec_set_growth    : tools_admin.set_growth_stage 호출
-#   _exec_send_alert    : 알림 (Phase 4 SSE 도입 전엔 logger + DB only)
+#   _exec_send_alert    : 알림 실전달 (로그 + agent_user_alerts + 카카오 푸시)
 #   _execute_action     : dispatch
 #   _on_signal          : SIGTERM 핸들러
 #   main                : polling loop 엔트리포인트
@@ -78,10 +78,9 @@ def _claim_due_actions(limit: int = 10) -> List[Dict[str, Any]]:
     if conn is None:
         return []
     try:
-        # SELECT FOR UPDATE 는 트랜잭션 안에서만 의미가 있음 — claim 후 즉시 commit
-        # 해서 다른 worker 가 이 row 보지 못하게 status='in_progress' 같은 단계 추가도
-        # 검토했으나, polling 주기 짧고 worker 단일 (Phase 3) 가정 → SKIP LOCKED 만으로
-        # 충분. 다중 worker 도입 시 본 함수 +"UPDATE SET status='claimed'" 추가.
+        # SELECT FOR UPDATE 는 트랜잭션 안에서만 유효 — polling 주기가 짧고 worker
+        # 단일 가정이라 SKIP LOCKED 로 충분. 다중 worker 도입 시 claim 직후
+        # "UPDATE SET status='claimed'" 단계 추가 필요.
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(sql, (limit,))
             rows = cur.fetchall()
@@ -144,7 +143,6 @@ def _exec_set_relay(args: Dict[str, Any]) -> Dict[str, Any]:
     semantic = args["semantic"]
     on       = bool(args["on"])
     # set_relay_value 는 raw_mode=False (시멘틱 부분갱신) + 인터록 게이트 자동 통과
-    # skip_emergency_guard 는 default=True (2026-05-17 사용자 정책)
     try:
         ret = set_relay_value(farm_id, house_id, {semantic: on}, raw_mode=False)
         # set_relay_value 반환 형식은 (success_bool, message) 또는 dict — defensive
@@ -157,6 +155,13 @@ def _exec_set_relay(args: Dict[str, Any]) -> Dict[str, Any]:
         else:
             ok = bool(ret)
             msg = str(ret)
+        if ok:
+            try:
+                from agri_ai_core.src.control.ai_decision_log import record_external_action
+                record_external_action("Agent조치", farm_id, house_id, {semantic: on},
+                                       str(args.get("reason") or "Agent 자율 조치"))
+            except Exception:
+                pass
         return {"success": ok, "message": msg,
                 "applied": {"semantic": semantic, "on": on}}
     except Exception as e:
@@ -222,17 +227,26 @@ def _exec_set_growth(args: Dict[str, Any]) -> Dict[str, Any]:
 
 def _exec_send_alert(args: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Phase 3 — 알림은 worker 가 큐 row 자체에 status=executed 로 기록만.
-    Phase 4 에서 web 백엔드 SSE 채널로 푸시 추가.
+    Agent 알림 실전달 — 로그 + agent_user_alerts 저장 + 카카오 푸시.
+    _save_alert 재사용으로 웹 알림탭·카카오 푸시 동시 커버.
     """
     level   = args.get("level", "info")
     message = args.get("message", "")
     # 운영자 즉시 인지 가능하도록 logger level 매핑
+    # critical 도 코드오류가 아닌 '농장 상황 경보'이므로 warning 으로 로깅(오류 스캔 오탐 방지).
+    # 실제 통지는 아래 _save_alert(agent_user_alerts+카카오)가 담당 — 가시성 손실 없음.
     log_method = {"info": logger.info, "warning": logger.warning,
-                  "critical": logger.error}.get(level, logger.info)
+                  "critical": logger.warning}.get(level, logger.info)
     log_method(f"[Agent Alert/{level}] {message}")
-    return {"success": True, "message": "alert delivered (log + queue row)",
-            "delivered_via": "log"}
+    delivered = "log"
+    try:
+        from agri_ai_core.src.control.agent_scheduler import _save_alert
+        _save_alert(None, None, None, level, f"농장 Agent 경보({level})", message)
+        delivered = "log+queue+kakao"
+    except Exception as e:
+        logger.warning(f"[Agent Worker] 알림 저장/푸시 실패(로그만 전달): {e}")
+    return {"success": True, "message": f"alert delivered ({delivered})",
+            "delivered_via": delivered}
 
 
 _DISPATCH = {
@@ -247,6 +261,9 @@ def _execute_action(row: Dict[str, Any]) -> None:
     action_id = int(row["id"])
     tool_name = row["tool_name"]
     args      = row["args"] or {}
+    # 큐 행의 reason(Agent 판단 사유)을 실행 인자에 동봉 — 제어사유 통합 이력용
+    if row.get("reason") and "reason" not in args:
+        args = {**args, "reason": row["reason"]}
     handler = _DISPATCH.get(tool_name)
     if handler is None:
         result = {"success": False, "message": f"unknown tool: {tool_name}"}
@@ -266,6 +283,16 @@ def _execute_action(row: Dict[str, Any]) -> None:
         _mark_executed(action_id, result)
         logger.info(f"[Agent Worker] id={action_id} {tool_name} 실행 완료 "
                     f"({duration}s) — {result.get('message', '')}")
+        # 제어중재 — agent 릴레이 제어 종료 시각 기록 → 스케줄 제어 유예(idle)
+        # 판정 기준. set_relay 실제 실행만 'agent 제어'로 인정.
+        if tool_name == "set_relay":
+            try:
+                from agri_ai_core.src.control import control_arbitration as _arb
+                _fid = args.get("farm_id"); _hid = args.get("house_id")
+                if _fid is not None and _hid is not None:
+                    _arb.stamp_agent_end(_fid, _hid)
+            except Exception as _e:
+                logger.warning(f"[Agent Worker] 중재 agent_end stamp 실패 id={action_id}: {_e}")
     else:
         _mark_failed(action_id, result)
         logger.warning(f"[Agent Worker] id={action_id} {tool_name} 실패 "

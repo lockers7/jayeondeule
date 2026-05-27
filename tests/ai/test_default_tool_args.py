@@ -1,6 +1,6 @@
 # ══════════════════════════════════════════════════════════════════════════
-# default_tool_args 선언형 빌더 회귀 테스트 (Wave 3 D3).
-# 새 도구 추가 시 farm_id/auth_farm_id 누락 버그(A2) 재발 방지.
+# default_tool_args 선언형 빌더 회귀 테스트.
+# 새 도구 추가 시 farm_id/auth_farm_id 누락 재발 방지.
 # ══════════════════════════════════════════════════════════════════════════
 import pytest
 
@@ -14,7 +14,7 @@ class TestDeclarativeSpec:
     """TOOL_DEFAULT_CONTEXT 명세 자체 검증."""
 
     def test_all_admin_tools_registered(self):
-        """Phase 1 관리 도구는 반드시 등록되어 있어야 한다."""
+        """관리 도구는 반드시 등록되어 있어야 한다."""
         required = {
             "set_house_control_mode",
             "set_growth_stage",

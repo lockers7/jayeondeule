@@ -1,6 +1,6 @@
 # ══════════════════════════════════════════════════════════════════════════
 # Analyzer 유효 유형 회귀 테스트.
-# Wave 1 B1 에서 신설한 agent_monitor 유형이 _VALID_TYPES 에 누락되면
+# agent_monitor 유형이 _VALID_TYPES 에 누락되면
 # LLM 이 반환해도 fallback 으로 떨어져 list_monitors 자연어 라우팅이 깨진다.
 # ══════════════════════════════════════════════════════════════════════════
 from agri_ai_core.src.ai.pipeline.question_analyzer import _VALID_TYPES
@@ -8,8 +8,8 @@ from agri_ai_core.src.ai.pipeline.question_analyzer import _VALID_TYPES
 
 EXPECTED_CORE = {
     "farm_sensor", "farm_control", "farm_knowledge", "farm_knowledge_delete",
-    "weather", "web_search", "gas_price",
-    "agent_monitor",                          # B1 / E2E T6 회귀 방지
+    "weather", "web_search",
+    "agent_monitor",                          # list/cancel/schedule_monitor 자연어 라우팅용
     "greeting", "conversation_ref", "general", "complex",
 }
 

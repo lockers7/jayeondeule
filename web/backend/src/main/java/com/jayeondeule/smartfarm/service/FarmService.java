@@ -34,14 +34,14 @@ public class FarmService {
 
     //전체 농장 목록 조회 (관리자용 — 삭제 포함)
     public Page<FarmDTO> getAllFarmsAll(int page, int size) {
-        Pageable pageable = PageRequest.of(page, size, Sort.by("rgstDttm").descending());
+        Pageable pageable = PageRequest.of(page, size, Sort.by("farmId").ascending());
         Page<Farm> farmList = farmRepository.findAllBy(pageable);
         return farmList.map(farm -> mapper.convertValue(farm, FarmDTO.class));
     }
 
     //농장 목록 조회 — dlteYn='N'만 조회
     public Page<FarmDTO> getAllFarms(int page, int size) {
-        Pageable pageable = PageRequest.of(page, size, Sort.by("rgstDttm").descending());
+        Pageable pageable = PageRequest.of(page, size, Sort.by("farmId").ascending());
         Page<Farm> farmList = farmRepository.findAllByDlteYn("N", pageable);
         return farmList.map(farm -> mapper.convertValue(farm, FarmDTO.class));
     }

@@ -1,6 +1,15 @@
 # ════════════════════════════════════════════════════════════════════
-# [Phase A · 2026-05-04] _emergency_override / apply_emergency_override 단위 테스트
+# _emergency_override / apply_emergency_override 단위 테스트
 # 사용자 원칙 검증: 비상 가드는 위반 항목만 강제, 운용모드 결정은 보존.
+#
+# [비활성] emergency guard 전체 skip 정책 하에서는 _emergency_override 가
+# 항상 (False, None, None, False) 반환. 본 파일 전체 케이스는 가드 활성 동작을
+# 가정하므로 module-level skip. 복귀 시:
+#   1) environment_logic.py:357-359 _emergency_override early return 제거
+#   2) 본 파일의 pytest.skip 호출 줄 삭제
+#   3) memory/project_emergency_guard_disabled.md 갱신
+# 관련: tests/ai/test_ai_context_modules.py 의 test_check_emergency_disabled_* 와
+#   동일 정책 잠금 (그쪽은 expected 환원 방식 사용).
 #
 # 파일 시작 함수 목록:
 #   _ts_obj                                : 임계값 mock helper
@@ -9,14 +18,17 @@
 #   test_high_temp_normal_outdoor_external : #2 고온비상 + 외기 정상 → 외부순환
 #   test_high_temp_abnormal_outdoor_exhaust: #2 고온비상 + 외기 부적합 → 배기순환
 #   test_co2_high_circulation_only         : #7 CO2 비상 — circulation 만 강제
-#   test_water_temp_low_heater_drainage    : #6 수온저하 — heater + drainage 강제
-#   test_water_temp_high_indoor_normal     : #4 수온과열 + 실내 정상 → heater 만
-#   test_water_temp_high_indoor_hot        : #4 수온과열 + 실내 고온 → heater + drainage
+#   test_water_temp_alone_is_not_emergency : 수온 단독 이탈은 비상 아님 (3케이스 전담)
 #   test_apply_preserves_user_fog          : 운용모드의 fog 결정이 비상에 의해 변경 안 됨
 # ════════════════════════════════════════════════════════════════════
 import sys
 
+import pytest
+
 sys.path.insert(0, '/workspace/jayeondeule')
+
+# [2026-06-25 재활성화] emergency guard 복구 — _emergency_override early return 제거됨
+# (environment_logic.py). 감사에서 비상가드 실발동 2,777건 확인. stale skip 제거.
 
 from agri_ai_core.src.control.environment_logic import (
     _emergency_override, apply_emergency_override,
@@ -99,37 +111,14 @@ def test_co2_high_circulation_only():
 
 
 # ────────────────────────────────────────────────────────────────────
-# #6 수온저하 — heater ON + drainage OFF (가온 위해 물 가둠). fog 미명시.
+# 수온계(수온히터/배수/포그)는 비상 오버라이드 대상 아님 — apply_water_safety
+# 3케이스(농장주 지정)가 전담. 수온 단독 이탈은 비상으로 취급하지 않는다.
 # ────────────────────────────────────────────────────────────────────
-def test_water_temp_low_heater_drainage():
-    sensor = {'indoor_temperature': 26, 'water_temperature': 14}
-    is_e, dev, circ, wto = _emergency_override(sensor, _ts_obj())
-    assert is_e is True
-    assert dev == {'water_heater_flag': True, 'drainage_motor_flag': False}
-    assert circ is None
-    assert wto is True
-
-
-# ────────────────────────────────────────────────────────────────────
-# #4 수온과열 + 실내 가열 필요/정상 — heater OFF 만. fog/drainage 보존.
-# ────────────────────────────────────────────────────────────────────
-def test_water_temp_high_indoor_normal():
-    sensor = {'indoor_temperature': 26, 'water_temperature': 47}
-    is_e, dev, circ, wto = _emergency_override(sensor, _ts_obj())
-    assert is_e is True
-    assert dev == {'water_heater_flag': False}
-    assert wto is True
-
-
-# ────────────────────────────────────────────────────────────────────
-# #4 수온과열 + 실내 고온 — heater OFF + drainage ON (능동냉각).
-# ────────────────────────────────────────────────────────────────────
-def test_water_temp_high_indoor_hot():
-    sensor = {'indoor_temperature': 30, 'water_temperature': 47}
-    is_e, dev, circ, wto = _emergency_override(sensor, _ts_obj())
-    assert is_e is True
-    assert dev == {'water_heater_flag': False, 'drainage_motor_flag': True}
-    assert wto is True
+def test_water_temp_alone_is_not_emergency():
+    for wt in (14, 47):
+        sensor = {'indoor_temperature': 26, 'water_temperature': wt}
+        is_e, dev, circ, wto = _emergency_override(sensor, _ts_obj())
+        assert is_e is False and dev == {} and circ is None and wto is False
 
 
 # ────────────────────────────────────────────────────────────────────

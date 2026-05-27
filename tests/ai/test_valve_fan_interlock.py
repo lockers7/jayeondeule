@@ -124,13 +124,25 @@ class TestOnInterlock:
         assert corrected[intake_pin] is True
 
     def test_already_on_fan_unaffected(self):
-        # 이미 ON 인 팬은 전이가 아니므로 인터록 패스 (현행 유지)
-        current = _build(1, intake_fan_flag=True)
-        target  = _build(1, intake_fan_flag=True)
+        # 이미 ON 인 팬은 "전이 게이트(dwell)" 는 패스하지만,
+        # 사용자 절대 불변식(팬 ON ⇒ 선행 밸브 ON)에 따라 밸브가 하나라도 ON 인
+        # 상태여야 유지된다. 밸브 ON 동반 시나리오로 현행 유지 검증.
+        current = _build(1, intake_fan_flag=True, air_intake_valve_flag=True)
+        target  = _build(1, intake_fan_flag=True, air_intake_valve_flag=True)
         corrected, viol = ilk.evaluate_interlock(1, 1, current, target)
         intake_pin = get_pin_map(1)['intake_fan_flag']
         assert corrected[intake_pin] is True
         assert viol == []
+
+    def test_already_on_fan_without_valve_forced_off(self):
+        # 밸브 전부 OFF 인데 팬만 ON 잔존 — 강제 OFF
+        # (절대 불변식 최종 강제 — 사용자 명시 지시, 모터 소손 방지)
+        current = _build(1, intake_fan_flag=True)
+        target  = _build(1, intake_fan_flag=True)
+        corrected, viol = ilk.evaluate_interlock(1, 1, current, target)
+        intake_pin = get_pin_map(1)['intake_fan_flag']
+        assert corrected[intake_pin] is False
+        assert any(v['action'] == 'invariant_forced_off' for v in viol)
 
     def test_fan_off_request_always_allowed(self):
         current = _build(1, intake_fan_flag=True)
@@ -165,7 +177,7 @@ class TestOnInterlock:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# evaluate_interlock — OFF 인터록 (rev2: 차단형)
+# evaluate_interlock — OFF 인터록
 # 사양: 밸브가 닫힌 상태에서 팬이 가동되면 팬 모터 손상. 사용자가 팬을 먼저
 # OFF 시키도록 강제. 순환밸브는 흡기측/배기측이 풀가동이면 예외 통과.
 # ══════════════════════════════════════════════════════════════════════════
@@ -224,7 +236,7 @@ class TestOffInterlock:
         assert set(v['blocking_fans']) == {'intake_fan_flag', 'exhaust_fan_flag'}
 
     def test_circulation_valve_off_blocked_when_one_side_dead_end(self):
-        # rev6: 흡입측 풀가동이어도 배출팬 ON & 배출밸브 OFF 면 차단 (배출팬 출구 봉쇄)
+        # 흡입측 풀가동이어도 배출팬 ON & 배출밸브 OFF 면 차단 (배출팬 출구 봉쇄)
         # Rule 1/2 invariant 보존을 위한 AND 식 검증
         current = _build(1, air_circulation_valve_flag=True,
                          air_intake_valve_flag=True, intake_fan_flag=True,
@@ -234,7 +246,7 @@ class TestOffInterlock:
                          exhaust_fan_flag=True)
         corrected, viol = ilk.evaluate_interlock(1, 1, current, target)
         c_pin = get_pin_map(1)['air_circulation_valve_flag']
-        assert corrected[c_pin] is True   # 차단 (rev6)
+        assert corrected[c_pin] is True   # 차단
         v = next(x for x in viol if x['action'] == 'off_blocked')
         assert v['flag'] == 'air_circulation_valve_flag'
         assert 'exhaust_fan_flag' in v['blocking_fans']
@@ -273,7 +285,7 @@ class TestOffInterlock:
         assert corrected[c_pin] is False
         assert all(v['action'] != 'off_blocked' for v in viol)
 
-    # ───── Rule 3 · 4 — 순환밸브 ON + 반대측 팬 ON 예외 (rev5) ─────
+    # ───── Rule 3 · 4 — 순환밸브 ON + 반대측 팬 ON 예외 ─────
     def test_intake_valve_off_allowed_when_circ_on_and_exhaust_fan_on(self):
         # Rule 3: 순환밸브 ON 만 으로는 부족 — 배출팬도 ON 이어야 흡입팬 출구 보장
         current = _build(1, air_intake_valve_flag=True, intake_fan_flag=True,
@@ -288,7 +300,7 @@ class TestOffInterlock:
         assert all(v['action'] != 'off_blocked' for v in viol)
 
     def test_intake_valve_off_blocked_when_circ_on_but_exhaust_fan_off(self):
-        # Rule 3 회귀 (rev5): 순환밸브 ON 인데 배출팬 OFF → 차단
+        # Rule 3 회귀: 순환밸브 ON 인데 배출팬 OFF → 차단
         current = _build(1, air_intake_valve_flag=True, intake_fan_flag=True,
                          air_circulation_valve_flag=True)   # 배출팬 OFF
         target  = _build(1, air_intake_valve_flag=False, intake_fan_flag=True,
@@ -312,7 +324,7 @@ class TestOffInterlock:
         assert all(v['action'] != 'off_blocked' for v in viol)
 
     def test_exhaust_valve_off_blocked_when_circ_on_but_intake_fan_off(self):
-        # Rule 4 회귀 (rev5): 순환밸브 ON 인데 흡입팬 OFF → 차단
+        # Rule 4 회귀: 순환밸브 ON 인데 흡입팬 OFF → 차단
         current = _build(1, air_exhaust_valve_flag=True, exhaust_fan_flag=True,
                          air_circulation_valve_flag=True)   # 흡입팬 OFF
         target  = _build(1, air_exhaust_valve_flag=False, exhaust_fan_flag=True,
@@ -357,7 +369,7 @@ class TestOffInterlock:
 # ══════════════════════════════════════════════════════════════════════════
 class TestUserScenarios:
     def test_intake_circulation_intake_valve_all_on_circulation_off_allowed(self):
-        # 사용자 시나리오 (rev5): 흡입팬 ON, 순환밸브 ON, 흡입밸브 ON, 배출팬 OFF
+        # 사용자 시나리오: 흡입팬 ON, 순환밸브 ON, 흡입밸브 ON, 배출팬 OFF
         # 순환밸브 OFF — Rule 5: 흡입측 풀가동 → 통과
         state = _build(1, intake_fan_flag=True,
                        air_circulation_valve_flag=True,
@@ -369,7 +381,7 @@ class TestUserScenarios:
         assert all(v['action'] != 'off_blocked' for v in viol1)
 
     def test_intake_valve_off_blocked_when_only_circ_on_no_exhaust_fan(self):
-        # 사용자 시나리오 (rev5): 흡입팬 ON, 순환밸브 ON, 흡입밸브 ON, 배출팬 OFF
+        # 사용자 시나리오: 흡입팬 ON, 순환밸브 ON, 흡입밸브 ON, 배출팬 OFF
         # 흡입밸브 OFF — Rule 3: 흡입팬 OFF 도, (순환밸브 ON ∧ 배출팬 ON) 도 모두
         # 만족 안 함 → 차단
         state = _build(1, intake_fan_flag=True,
@@ -382,7 +394,7 @@ class TestUserScenarios:
         assert any(v['action'] == 'off_blocked' and v['flag'] == 'air_intake_valve_flag' for v in viol)
 
     def test_exhaust_full_with_intake_fan_runs_circulation_off_blocked(self):
-        # rev6: 배출측 풀가동 + 흡입팬 ON & 흡입밸브 OFF → 차단 (흡입팬 출구 봉쇄)
+        # 배출측 풀가동 + 흡입팬 ON & 흡입밸브 OFF → 차단 (흡입팬 출구 봉쇄)
         current = _build(1, intake_fan_flag=True,
                          air_circulation_valve_flag=True,
                          air_exhaust_valve_flag=True, exhaust_fan_flag=True)
@@ -391,7 +403,7 @@ class TestUserScenarios:
                         air_exhaust_valve_flag=True, exhaust_fan_flag=True)
         corrected, viol = ilk.evaluate_interlock(1, 1, current, target)
         c_pin = get_pin_map(1)['air_circulation_valve_flag']
-        assert corrected[c_pin] is True   # 차단 (rev6)
+        assert corrected[c_pin] is True   # 차단
         assert any(v['action'] == 'off_blocked' for v in viol)
 
     def test_external_circulation_to_exhaust_circulation_three_changes(self):

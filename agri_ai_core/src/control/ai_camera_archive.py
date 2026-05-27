@@ -233,7 +233,7 @@ def capture_all_active_houses():
 
     sql = (
         "SELECT farm_id, hous_id FROM farmhouse_m_info "
-        "WHERE COALESCE(dlte_yn,'N')<>'Y' AND hous_id > 0 "
+        "WHERE COALESCE(dlte_yn,'N')<>'Y' AND hous_id > 0 AND farm_id > 0 "
         "ORDER BY farm_id, hous_id"
     )
     try:

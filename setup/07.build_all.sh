@@ -72,15 +72,12 @@ fi
 # 4. Shop 프론트엔드 빌드
 # -----------------------------------------------------------------
 log_info "[4/5] Shop 프론트엔드 빌드..."
-SHOP_FRONTEND="$PROJECT_DIR/shop/frontend"
-if [ -f "$SHOP_FRONTEND/package.json" ]; then
-    cd "$SHOP_FRONTEND"
-    npm install --silent 2>&1 | tail -3
-    npm run build 2>&1 | tail -3
-    cd "$PROJECT_DIR"
-    log_info "  Shop 프론트엔드 빌드 완료"
+# [2026-07-07] shop/ → web/ 재구조화: 공통베이스+농장별 오버레이 빌드
+if [ -x "$PROJECT_DIR/setup/build_shop.sh" ]; then
+    "$PROJECT_DIR/setup/build_shop.sh" all 2>&1 | tail -4
+    log_info "  Shop 프론트엔드(전 농장) 빌드 완료"
 else
-    log_warn "  shop/frontend/package.json 없음"
+    log_warn "  setup/build_shop.sh 없음"
 fi
 
 # -----------------------------------------------------------------

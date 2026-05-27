@@ -25,7 +25,6 @@ API_PID="$PID_DIR/api.pid"
 SCHEDULER_PID="$PID_DIR/scheduler.pid"
 AGENT_PID="$PID_DIR/agent_monitor.pid"  # Agent Monitor (Phase 2, 16번)
 AGENT_WORKER_PID="$PID_DIR/agent_pending_worker.pid"  # Agent Pending Worker (Phase 3, 17번)
-# 18번 vLLM 은 systemd unit 직접 — PID 파일 불필요 (systemctl 로 관리)
 
 # 색상 정의
 RED='\033[0;31m'
@@ -157,6 +156,27 @@ _safe_kill() {
     return 1
 }
 
+systemd_unit_exists() {
+    systemctl cat "$1" >/dev/null 2>&1
+}
+
+systemd_main_pid() {
+    systemctl show -p MainPID --value "$1" 2>/dev/null | awk 'NF {print $1; exit}'
+}
+
+kill_matching_processes_except() {
+    local pattern="$1" keep_pid="$2" name="${3:-프로세스}"
+    local pids p
+    [ "$keep_pid" = "0" ] && keep_pid=""
+    pids=$(pgrep -f "$pattern" 2>/dev/null || true)
+    [ -z "$pids" ] && return 0
+    for p in $pids; do
+        [ -n "$keep_pid" ] && [ "$p" = "$keep_pid" ] && continue
+        [ "$p" = "$$" ] && continue
+        _safe_kill "$p" "$name" || true
+    done
+}
+
 # ─── 개별 서비스 관리 함수 ───
 
 # --- Ollama ---
@@ -285,7 +305,13 @@ scheduler_start() {
     pkill -f "agri_ai_core\.scheduler" 2>/dev/null || true
     sleep 1
     cd "$BASE_DIR"
-    $PYTHON_BIN -m agri_ai_core.scheduler >> "$LOG_DIR/scheduler.log" 2>&1 &
+    # ⛔ root 권한면적 축소(F5) — root 로 기동 시 jayeondeule 로 강등해 실행.
+    #   비-root(직접 실행)면 그대로. stop 은 pgrep 패턴으로 runuser+python 모두 종료.
+    if [ "$(id -u)" -eq 0 ]; then
+        /usr/sbin/runuser -u jayeondeule -- $PYTHON_BIN -m agri_ai_core.scheduler >> "$LOG_DIR/scheduler.log" 2>&1 &
+    else
+        $PYTHON_BIN -m agri_ai_core.scheduler >> "$LOG_DIR/scheduler.log" 2>&1 &
+    fi
     local pid=$!
     echo $pid > "$SCHEDULER_PID"
     log_msg "${GREEN}[Scheduler]${NC} 시작 완료 (PID $pid)"
@@ -323,6 +349,19 @@ scheduler_restart() {
 # --- Agent Monitor (Phase 2: 30분 cron ReAct daemon) ---
 agent_monitor_start() {
     log_msg "${BLUE}[Agent Monitor]${NC} 시작 중..."
+    if systemd_unit_exists "agent_monitor.service"; then
+        sudo systemctl start agent_monitor.service || return 1
+        local main_pid
+        main_pid=$(systemd_main_pid "agent_monitor.service")
+        kill_matching_processes_except "agri_ai_core\.src\.control\.agent_scheduler" "$main_pid" "Agent Monitor(중복)"
+        rm -f "$AGENT_PID" 2>/dev/null || true
+        if [ -n "$main_pid" ] && [ "$main_pid" != "0" ]; then
+            log_msg "${GREEN}[Agent Monitor]${NC} 시작 완료 (systemd, PID $main_pid)"
+        else
+            log_msg "${GREEN}[Agent Monitor]${NC} 시작 명령 완료 (systemd)"
+        fi
+        return 0
+    fi
     if [ -f "$AGENT_PID" ]; then
         local pid
         pid=$(cat "$AGENT_PID" 2>/dev/null)
@@ -342,6 +381,13 @@ agent_monitor_start() {
 
 agent_monitor_stop() {
     log_msg "${BLUE}[Agent Monitor]${NC} 종료 중..."
+    if systemd_unit_exists "agent_monitor.service"; then
+        sudo systemctl stop agent_monitor.service || true
+        kill_matching_processes_except "agri_ai_core\.src\.control\.agent_scheduler" "" "Agent Monitor(잔존)"
+        rm -f "$AGENT_PID" 2>/dev/null || true
+        log_msg "${GREEN}[Agent Monitor]${NC} 종료 완료 (systemd)"
+        return 0
+    fi
     if [ -f "$AGENT_PID" ]; then
         local pid
         pid=$(cat "$AGENT_PID" 2>/dev/null)
@@ -372,6 +418,19 @@ agent_monitor_restart() {
 # --- Agent Pending Worker (Phase 3: 30초 큐 → 실제 실행 데몬) ---
 agent_worker_start() {
     log_msg "${BLUE}[Agent Worker]${NC} 시작 중..."
+    if systemd_unit_exists "agent_pending_worker.service"; then
+        sudo systemctl start agent_pending_worker.service || return 1
+        local main_pid
+        main_pid=$(systemd_main_pid "agent_pending_worker.service")
+        kill_matching_processes_except "agri_ai_core\.src\.control\.agent_pending_worker" "$main_pid" "Agent Worker(중복)"
+        rm -f "$AGENT_WORKER_PID" 2>/dev/null || true
+        if [ -n "$main_pid" ] && [ "$main_pid" != "0" ]; then
+            log_msg "${GREEN}[Agent Worker]${NC} 시작 완료 (systemd, PID $main_pid)"
+        else
+            log_msg "${GREEN}[Agent Worker]${NC} 시작 명령 완료 (systemd)"
+        fi
+        return 0
+    fi
     if [ -f "$AGENT_WORKER_PID" ]; then
         local pid
         pid=$(cat "$AGENT_WORKER_PID" 2>/dev/null)
@@ -391,6 +450,13 @@ agent_worker_start() {
 
 agent_worker_stop() {
     log_msg "${BLUE}[Agent Worker]${NC} 종료 중..."
+    if systemd_unit_exists "agent_pending_worker.service"; then
+        sudo systemctl stop agent_pending_worker.service || true
+        kill_matching_processes_except "agri_ai_core\.src\.control\.agent_pending_worker" "" "Agent Worker(잔존)"
+        rm -f "$AGENT_WORKER_PID" 2>/dev/null || true
+        log_msg "${GREEN}[Agent Worker]${NC} 종료 완료 (systemd)"
+        return 0
+    fi
     if [ -f "$AGENT_WORKER_PID" ]; then
         local pid
         pid=$(cat "$AGENT_WORKER_PID" 2>/dev/null)
@@ -418,32 +484,6 @@ agent_worker_restart() {
     agent_worker_start
 }
 
-# --- vLLM (Ollama 대체 옵션, 2026-05-25 신규) ---
-# systemd 직접 관리. .env 의 LLM_BACKEND=vllm 일 때 효과.
-vllm_start() {
-    log_msg "${BLUE}[vLLM]${NC} 시작 중 (systemd)..."
-    if ! systemctl list-unit-files vllm.service 2>/dev/null | grep -q vllm.service; then
-        log_msg "${RED}[vLLM]${NC} unit 미배포 — 먼저 bash setup/vllm_install.sh 실행"
-        return 1
-    fi
-    sudo systemctl start vllm.service && \
-        log_msg "${GREEN}[vLLM]${NC} 시작 명령 송출 (로드 60~180s)" || \
-        log_msg "${RED}[vLLM]${NC} 시작 실패"
-}
-
-vllm_stop() {
-    log_msg "${BLUE}[vLLM]${NC} 종료 중..."
-    sudo systemctl stop vllm.service && \
-        log_msg "${GREEN}[vLLM]${NC} 종료 완료" || \
-        log_msg "${YELLOW}[vLLM]${NC} 종료 신호 송출 (이미 정지 가능)"
-}
-
-vllm_restart() {
-    vllm_stop
-    sleep 1
-    vllm_start
-}
-
 # --- FastAPI ---
 fastapi_start() {
     log_msg "${BLUE}[FastAPI]${NC} 시작 중 (port ${API_PORT:-8002})..."
@@ -459,7 +499,12 @@ fastapi_start() {
     pkill -f "python.*agri_ai_core\.api" 2>/dev/null || true
     sleep 1
     cd "$BASE_DIR"
-    $PYTHON_BIN -m agri_ai_core.api >> "$LOG_DIR/api.log" 2>&1 &
+    # ⛔ root 권한면적 축소(F5) — root 로 기동 시 jayeondeule 로 강등해 실행.
+    if [ "$(id -u)" -eq 0 ]; then
+        /usr/sbin/runuser -u jayeondeule -- $PYTHON_BIN -m agri_ai_core.api >> "$LOG_DIR/api.log" 2>&1 &
+    else
+        $PYTHON_BIN -m agri_ai_core.api >> "$LOG_DIR/api.log" 2>&1 &
+    fi
     local pid=$!
     echo $pid > "$API_PID"
     if wait_port "${API_PORT:-8002}" 15; then
@@ -550,46 +595,34 @@ springboot_restart() {
     fi
 }
 
-# --- Shop Spring Boot (port 9091) ---
-SHOP_PID="$PID_DIR/shop.pid"
+# --- Shop Spring Boot (자연들에 9091 / 고흥뜰에 9092 — systemd 통합) ---
+# [2026-07-07 재구조화] shop/ → web/ 이전:
+#   공통 소스  web/common/shop/{backend, frontend-base}
+#   농장별     web/<farm>/{config, frontend-custom, upload, dist}
+# 두 백엔드는 동일 jar(web/common/shop/backend/target)를 농장별 외부 설정
+# (--spring.config.location)으로 기동 — systemd shop_jayeondeule/shop_goheung.
+# 신규 농장 쇼핑몰 추가 = web/<farm> 폴더 + systemd 유닛 (코드 변경 없음).
 
 shop_start() {
-    if [ -f "$SHOP_PID" ] && [ -d "/proc/$(cat "$SHOP_PID" 2>/dev/null)" ]; then
-        log_msg "${YELLOW}[Shop Backend]${NC} 이미 실행 중 (PID $(cat "$SHOP_PID"))"
-        return 0
-    fi
-    log_msg "${BLUE}[Shop Backend]${NC} 시작 중 (port 9091)..."
-    cd "$BASE_DIR/shop/backend" || return 1
-    nohup java -jar target/shop-0.0.1-SNAPSHOT.jar > "$LOG_DIR/shop_backend.log" 2>&1 &
-    echo $! > "$SHOP_PID"
-    cd "$BASE_DIR"
-    if wait_port 9091 30; then
-        log_msg "${GREEN}[Shop Backend]${NC} 시작 완료 (port 9091, PID $(cat "$SHOP_PID"))"
+    log_msg "${BLUE}[Shop Backend]${NC} 시작 중 (자연들에 9091 / 고흥뜰에 9092)..."
+    systemctl start shop_jayeondeule shop_goheung
+    if wait_port 9091 30 && wait_port 9092 30; then
+        log_msg "${GREEN}[Shop Backend]${NC} 시작 완료 (9091 / 9092)"
     else
-        log_msg "${RED}[Shop Backend]${NC} 시작 실패"
+        log_msg "${RED}[Shop Backend]${NC} 시작 실패 — systemctl status shop_jayeondeule shop_goheung 확인"
         return 1
     fi
 }
 
 shop_stop() {
-    log_msg "${BLUE}[Shop Backend]${NC} 종료 중..."
-    if [ -f "$SHOP_PID" ]; then
-        local pid
-        pid=$(cat "$SHOP_PID" 2>/dev/null)
-        if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
-            kill "$pid" 2>/dev/null
-            sleep 2
-            # 강제 종료
-            [ -d "/proc/$pid" ] && kill -9 "$pid" 2>/dev/null
-        fi
-        rm -f "$SHOP_PID"
-    fi
+    log_msg "${BLUE}[Shop Backend]${NC} 종료 중 (2개 쇼핑몰)..."
+    systemctl stop shop_jayeondeule shop_goheung
     log_msg "${GREEN}[Shop Backend]${NC} 종료 완료"
 }
 
 shop_restart() {
-    log_msg "${BLUE}[Shop Backend]${NC} 빌드 중..."
-    cd "$BASE_DIR/shop/backend" || return 1
+    log_msg "${BLUE}[Shop Backend]${NC} 공통 백엔드 빌드 중..."
+    cd "$BASE_DIR/web/common/shop/backend" || return 1
     mvn package -DskipTests -q > "$LOG_DIR/shop_build.log" 2>&1
     if [ $? -ne 0 ]; then
         log_msg "${RED}[Shop Backend]${NC} 빌드 실패 — $LOG_DIR/shop_build.log 확인"
@@ -605,22 +638,21 @@ shop_restart() {
 
 shop_build() {
     local failed=0
-    log_msg "${BOLD}========== Shop 빌드 시작 ==========${NC}"
+    log_msg "${BOLD}========== Shop 빌드 시작 (공통소스 + 농장별 오버레이) ==========${NC}"
 
-    # 1) Shop React 프론트엔드 빌드
-    log_msg "${BLUE}[Shop React]${NC} 프론트엔드 빌드 시작..."
-    cd "$BASE_DIR/shop/frontend"
-    npm run build >> "$LOG_DIR/shop_react_build.log" 2>&1
+    # 1) 프론트엔드 — 공통 베이스 + 농장별 커스텀 오버레이 (전 농장)
+    log_msg "${BLUE}[Shop React]${NC} 농장별 프론트엔드 빌드 시작..."
+    "$BASE_DIR/setup/build_shop.sh" all >> "$LOG_DIR/shop_react_build.log" 2>&1
     if [ $? -eq 0 ]; then
-        log_msg "${GREEN}[Shop React]${NC} 프론트엔드 빌드 완료"
+        log_msg "${GREEN}[Shop React]${NC} 프론트엔드 빌드 완료 (web/*/dist)"
     else
         log_msg "${RED}[Shop React]${NC} 프론트엔드 빌드 실패 (로그: $LOG_DIR/shop_react_build.log)"
         failed=1
     fi
 
-    # 2) Shop Spring Boot 백엔드 빌드
-    log_msg "${BLUE}[Shop Backend]${NC} 백엔드 빌드 시작..."
-    cd "$BASE_DIR/shop/backend"
+    # 2) 백엔드 — 공통 단일 jar
+    log_msg "${BLUE}[Shop Backend]${NC} 공통 백엔드 빌드 시작..."
+    cd "$BASE_DIR/web/common/shop/backend"
     mvn package -DskipTests -q >> "$LOG_DIR/shop_build.log" 2>&1
     if [ $? -eq 0 ]; then
         log_msg "${GREEN}[Shop Backend]${NC} 백엔드 빌드 완료"
@@ -1140,14 +1172,22 @@ show_status() {
     fi
     echo -e "  ${CYAN}[AI Agent — Phase 2/3]${NC}"
     printf "  %-4s %-16s %-8s " "16" "Agent Monitor" "-"
-    check_status "Agent Monitor" pid_file "$AGENT_PID"
+    if systemd_unit_exists "agent_monitor.service"; then
+        check_status "Agent Monitor" systemd "agent_monitor.service"
+    else
+        check_status "Agent Monitor" pid_file "$AGENT_PID"
+    fi
     printf "  %-4s %-16s %-8s " "17" "Agent Worker" "-"
-    check_status "Agent Worker" pid_file "$AGENT_WORKER_PID"
-    printf "  %-4s %-16s %-8s " "18" "vLLM (선택)" "8001"
-    if systemctl is-active vllm.service >/dev/null 2>&1; then
-        echo -e "${GREEN}● 실행 중${NC}"
-    elif systemctl list-unit-files vllm.service 2>/dev/null | grep -q vllm.service; then
-        echo -e "${YELLOW}○ 중지${NC} (LLM_BACKEND 미사용)"
+    if systemd_unit_exists "agent_pending_worker.service"; then
+        check_status "Agent Worker" systemd "agent_pending_worker.service"
+    else
+        check_status "Agent Worker" pid_file "$AGENT_WORKER_PID"
+    fi
+    printf "  %-4s %-16s %-8s " "19" "Event Listener" "-"
+    if systemctl is-active agent_event_listener.service >/dev/null 2>&1; then
+        echo -e "${GREEN}● 실행 중${NC} (LISTEN/NOTIFY)"
+    elif systemctl list-unit-files agent_event_listener.service 2>/dev/null | grep -q agent_event_listener.service; then
+        echo -e "${RED}○ 중지${NC}"
     else
         echo -e "${YELLOW}○ 미설치${NC}"
     fi
@@ -1178,7 +1218,7 @@ show_menu() {
     echo -e "  ${CYAN}15${NC}. ChromaFlow Studio (운영 ChromaDB GUI Docker, 127.0.0.1:5000)"
     echo -e "  ${CYAN}16${NC}. Agent Monitor    (30분 cron ReAct daemon — Phase 2)"
     echo -e "  ${CYAN}17${NC}. Agent Worker     (30초 취소 큐 → 실제 실행 — Phase 3)"
-    echo -e "  ${CYAN}18${NC}. vLLM (선택)      (Ollama 대체 LLM 서버, port 8001)"
+    echo -e "  ${CYAN}19${NC}. Event Listener   (LISTEN/NOTIFY 이벤트 즉시 agent — Phase 5)"
     echo ""
     echo -n -e "  번호 입력 (q=종료): "
 }
@@ -1316,8 +1356,21 @@ execute_service() {
                 start)   agent_monitor_start ;;
                 stop)    agent_monitor_stop ;;
                 restart) agent_monitor_restart ;;
-                status)  printf "  Agent Monitor: "; check_status "Agent Monitor" pid_file "$AGENT_PID" ;;
-                logs)    tail -n 100 -f "$LOG_DIR/agent_monitor.log" ;;
+                status)
+                    printf "  Agent Monitor: "
+                    if systemd_unit_exists "agent_monitor.service"; then
+                        check_status "Agent Monitor" systemd "agent_monitor.service"
+                    else
+                        check_status "Agent Monitor" pid_file "$AGENT_PID"
+                    fi
+                    ;;
+                logs)
+                    if systemd_unit_exists "agent_monitor.service"; then
+                        journalctl -u agent_monitor.service -n 100 -f
+                    else
+                        tail -n 100 -f "$LOG_DIR/agent_monitor.log"
+                    fi
+                    ;;
             esac
             ;;
         17) # Agent Pending Worker — 30초 큐 실행 데몬 (Phase 3)
@@ -1325,27 +1378,42 @@ execute_service() {
                 start)   agent_worker_start ;;
                 stop)    agent_worker_stop ;;
                 restart) agent_worker_restart ;;
-                status)  printf "  Agent Worker: "; check_status "Agent Worker" pid_file "$AGENT_WORKER_PID" ;;
-                logs)    tail -n 100 -f "$LOG_DIR/agent_pending_worker.log" ;;
+                status)
+                    printf "  Agent Worker: "
+                    if systemd_unit_exists "agent_pending_worker.service"; then
+                        check_status "Agent Worker" systemd "agent_pending_worker.service"
+                    else
+                        check_status "Agent Worker" pid_file "$AGENT_WORKER_PID"
+                    fi
+                    ;;
+                logs)
+                    if systemd_unit_exists "agent_pending_worker.service"; then
+                        journalctl -u agent_pending_worker.service -n 100 -f
+                    else
+                        tail -n 100 -f "$LOG_DIR/agent_pending_worker.log"
+                    fi
+                    ;;
             esac
             ;;
-        18) # vLLM — Ollama 대체 LLM 서버 (선택, 2026-05-25)
+        19) # Agent Event Listener — LISTEN/NOTIFY daemon (Phase 5, 2026-05-27)
             case "$action" in
-                start)   vllm_start ;;
-                stop)    vllm_stop ;;
-                restart) vllm_restart ;;
+                start)   sudo systemctl start agent_event_listener.service ;;
+                stop)    sudo systemctl stop agent_event_listener.service ;;
+                restart) sudo systemctl restart agent_event_listener.service ;;
                 status)
-                    printf "  vLLM: "
-                    if systemctl is-active vllm.service >/dev/null 2>&1; then
-                        echo -e "${GREEN}● 실행 중${NC} (port ${VLLM_PORT:-8001})"
+                    printf "  Event Listener: "
+                    if systemctl is-active agent_event_listener.service >/dev/null 2>&1; then
+                        local pid
+                        pid=$(systemctl show -p MainPID --value agent_event_listener.service 2>/dev/null)
+                        echo -e "${GREEN}● 실행 중${NC} (PID ${pid:-?}, channel=agent_event)"
                     else
-                        if systemctl list-unit-files vllm.service 2>/dev/null | grep -q vllm.service; then
+                        if systemctl list-unit-files agent_event_listener.service 2>/dev/null | grep -q agent_event_listener.service; then
                             echo -e "${RED}○ 중지${NC} (unit 배포됨)"
                         else
-                            echo -e "${YELLOW}○ 미설치${NC} — setup/vllm_install.sh 실행"
+                            echo -e "${YELLOW}○ 미설치${NC} — /etc/systemd/system/agent_event_listener.service 배포 필요"
                         fi
                     fi ;;
-                logs)    journalctl -u vllm.service -n 100 --no-pager -f ;;
+                logs)    journalctl -u agent_event_listener.service -n 100 --no-pager -f ;;
             esac
             ;;
         10) # Web Build (농장관리 React + Spring Boot)
@@ -1414,7 +1482,7 @@ usage() {
     echo -e "   15. ChromaFlow      (운영 ChromaDB GUI Docker — 127.0.0.1:5000)"
     echo -e "   16. Agent Monitor   (30분 cron ReAct daemon — Phase 2)"
     echo -e "   17. Agent Worker    (30초 취소 큐 → 실제 실행 — Phase 3)"
-    echo -e "   18. vLLM (선택)     (Ollama 대체 LLM 서버, port 8001)"
+    echo -e "   19. Event Listener (LISTEN/NOTIFY 이벤트 즉시 agent 호출 — Phase 5)"
     echo ""
     echo -e "  ${BOLD}예시:${NC}"
     echo -e "    agriAiCore restart        # 메뉴에서 서비스 선택"

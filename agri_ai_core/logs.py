@@ -31,7 +31,7 @@ from agri_ai_core.config import settings
 # 초기화된 로거 캐시
 _loggers_initialized = {}
 
-# [Wave 6] 로그 파일 공유 그룹 — 서비스는 root, 운영자는 jayeondeule 로
+# 로그 파일 공유 그룹 — 서비스는 root, 운영자는 jayeondeule 로
 # 접근 가능하도록 로그 파일을 그룹 쓰기 가능(664)으로 설정한다. 환경변수로 덮어쓰기 가능.
 _LOG_FILE_GROUP = os.getenv("LOG_FILE_GROUP", "jayeondeule")
 _LOG_FILE_MODE  = 0o664
@@ -137,6 +137,10 @@ def _setup_logger_impl(cache_key, logger_name, file_pattern, error_label, use_pl
         return logger
 
     log_dir = settings.logging.path or "logs"
+    # 테스트 실행 시 운영 로그 오염 방지 — pytest(conftest)가 AGRI_TEST_LOG=1 을
+    # 설정하면 모든 로그를 logs/test/ 하위로 무조건 분리한다.
+    if os.getenv("AGRI_TEST_LOG") == "1":
+        log_dir = os.path.join(log_dir, "test")
     try:
         os.makedirs(log_dir, exist_ok=True)
     except OSError as e:
@@ -227,16 +231,20 @@ def delete_old_daily_logs(log_dir, days=LOG_RETENTION_DAYS):
 
     for pattern in ("ai_*.log", "web_*.log", "shop_*.log"):
         for log_file in glob.glob(os.path.join(log_dir, pattern)):
+            basename = os.path.basename(log_file)
+            # 파일명 어디에 있든 YYYY-MM-DD 를 추출 — shop_goheung_2026-07-20.log 처럼
+            # 농장명이 섞인 파일명도 대응. 날짜가 없는 파일(shop_backend.log 등)은
+            # 일자별 로그가 아니므로 조용히 건너뛴다(오류 로깅 금지).
+            m = re.search(r"(\d{4}-\d{2}-\d{2})", basename)
+            if not m:
+                continue
             try:
-                basename = os.path.basename(log_file)
-                # ai_2026-02-14.log → 2026-02-14 또는 web_2026-02-14.log → 2026-02-14
-                date_part = basename.split("_", 1)[1].replace(".log", "")
-                log_date = datetime.strptime(date_part, "%Y-%m-%d")
+                log_date = datetime.strptime(m.group(1), "%Y-%m-%d")
                 if log_date < cutoff:
                     os.remove(log_file)
                     deleted_count += 1
                     print(f"[로그정리] 삭제: {basename} ({days}일 초과)")
-            except (ValueError, IndexError, OSError) as e:
+            except (ValueError, OSError) as e:
                 print(f"[로그정리] 삭제 오류: {log_file} - {e}", file=sys.stderr)
 
     return deleted_count

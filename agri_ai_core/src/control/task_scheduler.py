@@ -10,7 +10,6 @@
 # _daily_log_cleanup: 매일 자정 로그 정리 (내부 작업)
 # _chunk_cleanup_job: RAG 청크 통합/정리 (내부 작업)
 # setup_default_jobs: 기본 스케줄 작업 일괄 등록
-# _opinet_daily_job: 오피넷 일일 유가 수집 (내부 작업)
 # _lotto_weekly_job: 주간 로또 당첨번호 수집 + 분석 (내부 작업)
 # ═══════════════════════════════════════════════════════════════
 import traceback
@@ -215,11 +214,11 @@ def _daily_log_cleanup():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# [Wave 11] PostgreSQL 커넥션 풀 상태 주기 로깅 (기본 5분)
+# PostgreSQL 커넥션 풀 상태 주기 로깅 (기본 5분)
 # 사용률 경고 임계(기본 80%) 초과 시 WARNING 레벨, 정상은 INFO.
 # ═══════════════════════════════════════════════════════════════════════════
 # ────────────────────────────────────────────────────────────────────
-# [Wave 11] PostgreSQL 커넥션 풀 상태 주기 로깅 (기본 5분).
+# PostgreSQL 커넥션 풀 상태 주기 로깅 (기본 5분).
 # 사용률 ≥ 80% 시 WARNING, 정상은 INFO. 풀 미초기화 시 조용히 skip.
 # ────────────────────────────────────────────────────────────────────
 def _pg_pool_heartbeat():
@@ -304,7 +303,7 @@ def _chunk_cleanup_job():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# [Phase 2 · 2026-05-09] SCHEDULE_M_SETTING 기반 동적 스케줄 등록
+# SCHEDULE_M_SETTING 기반 동적 스케줄 등록
 #
 # 설계:
 #   - DB row(task_name) → callable 매핑(_JOB_CALLABLES)으로 등록
@@ -413,13 +412,13 @@ def _schedule_polling_tick():
 
 
 # ────────────────────────────────────────────────────────────────────
-# 기본 스케줄 작업 일괄 등록 — SCHEDULE_M_SETTING 기반(Phase 2).
+# 기본 스케줄 작업 일괄 등록 — SCHEDULE_M_SETTING 기반.
 # 호출자 주입 callable 을 task_name 별 매핑한 후 DB row 로 register.
 # 시그니처는 기존과 동일(호환). DB 조회 실패 시 등록 0건이 될 수 있음.
 # ────────────────────────────────────────────────────────────────────
 def setup_default_jobs(learning_func=None, stats_func=None,
                        manual_control_func=None, growth_rag_func=None,
-                       opinet_collect_func=None, lotto_collect_func=None):
+                       lotto_collect_func=None):
     global _JOB_CALLABLES
     try:
         # ── callable 매핑 — schedule_m_setting.task_name 과 1:1 ──
@@ -453,7 +452,6 @@ def setup_default_jobs(learning_func=None, stats_func=None,
             'daily_log_cleanup':      _daily_log_cleanup,
             'pg_pool_heartbeat':      _pg_pool_heartbeat,
             'chunk_cleanup_job':      _chunk_cleanup_job,
-            'opinet_daily_job':       _wrap_safe('Opinet', opinet_collect_func),
             'camera_archive_hourly':  capture_all_active_houses,
             'camera_archive_cleanup': cleanup_old_images,
             'lotto_weekly_job':       _wrap_safe('로또수집', lotto_collect_func),

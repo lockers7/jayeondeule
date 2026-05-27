@@ -1,6 +1,6 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # AI 환경제어 — 외부 기상예보 모듈 (M10)
-# [2026-04-28 신규] 한국기상청 단기예보 API(혹은 호환 소스) 결과를 1~3시간 후
+# 한국기상청 단기예보 API(혹은 호환 소스) 결과를 1~3시간 후
 # 외부 온도/습도 예측으로 변환해 LLM 에 제공.
 #
 # 운영 노트:
@@ -58,12 +58,26 @@ def _cache_put(key, payload):
 
 
 # ────────────────────────────────────────────────────────────────────
-# 재배사별 KMA 격자 좌표(nx, ny) 환경변수에서 조회.
+# 재배사별 KMA 격자 좌표(nx, ny) 조회.
+# 지역정보는 농장 속성 — farm_m_info(kma_nx/ny) 실시간 read 우선
+# (농장 추가 시 코드 변경 없이 등록 데이터만으로 확장). env 는 재배사별 특수
+# 오버라이드(FARM_NX_{farm}_{house}) 및 DB 미설정 농장 폴백(DEFAULT)으로 유지.
 # ────────────────────────────────────────────────────────────────────
 def _grid_for(farm_id, house_id):
-    nx = os.getenv(f"FARM_NX_{farm_id}_{house_id}") or os.getenv("FARM_NX_DEFAULT")
-    ny = os.getenv(f"FARM_NY_{farm_id}_{house_id}") or os.getenv("FARM_NY_DEFAULT")
-    return nx, ny
+    nx = os.getenv(f"FARM_NX_{farm_id}_{house_id}")
+    ny = os.getenv(f"FARM_NY_{farm_id}_{house_id}")
+    if nx and ny:
+        return nx, ny
+    try:
+        from agri_ai_core.src.postgresql.connection import db_session
+        import agri_ai_core.src.postgresql.queries as dbQry
+        with db_session() as d:
+            row = d.fetch_one(dbQry.GET_FARM_GEO, (int(farm_id),))
+        if row and row.get("kma_nx") and row.get("kma_ny"):
+            return str(row["kma_nx"]), str(row["kma_ny"])
+    except Exception as e:
+        logger.warning(f"[AI기상예보] 농장 지역정보 조회 실패 farm={farm_id}: {e}")
+    return os.getenv("FARM_NX_DEFAULT"), os.getenv("FARM_NY_DEFAULT")
 
 
 # ────────────────────────────────────────────────────────────────────

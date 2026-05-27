@@ -1,5 +1,5 @@
 # ════════════════════════════════════════════════════════════════════
-# [프롬프트 자동화 · Phase 5] 자체 진화 루프 — 의사결정 패턴 분석.
+# 자체 진화 루프 — 의사결정 패턴 분석.
 #
 # 목적: ai_decision_log 의 정상 결정(action='change') 빈번 패턴을 추출해
 #       사용자 학습 룰 후보로 제시. 농장주 승인 시 ChromaDB domain_rule 에 등록.
@@ -43,6 +43,9 @@ def analyze_decision_patterns(farm_id: int, house_id: Optional[int] = None,
                     args.append(house_id)
                 args.append(min_freq)
                 args.append(top_k)
+                # reason NOT LIKE '[algorithm_fallback]%' — 장애기간
+                # 알고리즘 결정이 룰 후보로 승격되어 LLM 지식으로 굳는 것 방지
+                # (AI모드 LLM 100% 원칙). 순수 LLM 결정만 학습 후보로 마이닝한다.
                 cur.execute(f"""
                     SELECT action, circulation, water_heater, fog_occurs,
                            COUNT(*) AS freq,
@@ -51,6 +54,7 @@ def analyze_decision_patterns(farm_id: int, house_id: Optional[int] = None,
                     WHERE farm_id = %s
                       AND decided_at >= NOW() - (%s || ' days')::INTERVAL
                       AND action = 'change'
+                      AND reason NOT LIKE '[algorithm_fallback]%%'
                       {where_house}
                     GROUP BY action, circulation, water_heater, fog_occurs
                     HAVING COUNT(*) >= %s
@@ -147,6 +151,35 @@ def register_approved_rule(title: str, content: str, category: str = '운영노�
         }])
         if isinstance(result, dict) and result.get('success'):
             logger.info(f"[자체진화] 룰 등록 완료: rule_id={rid}, title={title!r}")
+
+            # 승인 룰 → 제어 LLM 반영: domain_rule 컬렉션은 제어가 직접 소비하지
+            # 않으므로, 제어 도메인RAG(query_domain_knowledge: document_collection /
+            # data_type=domain_knowledge)가 즉시 소비하도록 동일 룰을
+            # document_collection 에도 upsert. doc_id=rule_{rid} 로 재승인 시
+            # 멱등(중복 없이 갱신). 실패 시 승인 전체를 실패로 반환해 관리자가
+            # 재시도할 수 있게 한다(제어 반영이 승인의 핵심 목적).
+            try:
+                from agri_ai_core.src.chroma.collections import document_collection
+                doc_coll = document_collection()
+                if not doc_coll:
+                    return {'success': False,
+                            'error': 'document_collection 미설정 — 제어RAG 반영 불가'}
+                doc_meta = dict(metadata)
+                doc_meta['data_type'] = 'domain_knowledge'
+                doc_result = upsert_documents_with_embedding(doc_coll, [{
+                    'doc_id': f"rule_{rid}",
+                    'text': text,
+                    'metadata': doc_meta,
+                }])
+                if not (isinstance(doc_result, dict) and doc_result.get('success')):
+                    logger.warning(f"[자체진화] 제어RAG 반영 실패: {doc_result}")
+                    return {'success': False,
+                            'error': f'제어RAG 반영 실패(재승인 시 재시도): {doc_result}'}
+                logger.info(f"[자체진화] 제어RAG 반영 완료: doc_id=rule_{rid} — 다음 제어 사이클부터 참조")
+            except Exception as e:
+                logger.warning(f"[자체진화] 제어RAG 반영 예외: {e}")
+                return {'success': False, 'error': f'제어RAG 반영 예외: {e}'}
+
             try:
                 from agri_ai_core.src.prompt_registry import clear_cache
                 clear_cache()

@@ -1,7 +1,6 @@
 # ════════════════════════════════════════════════════════════════════════════════
 # 환경 판단 로직 (순수 함수) — 센서값 → 장치 결정 / 순환 모드 / 비상 판단
-# manual_control.py에서 분리된 L6 계층 모듈. 외부 부작용 없음 (DB/GPIO 호출 없음).
-# 단위 테스트 용이.
+# L6 계층 모듈. 외부 부작용 없음 (DB/GPIO 호출 없음). 단위 테스트 용이.
 # --->
 # _classify: 센서값을 low/normal/high로 분류
 # _is_external_normal: 외부 온습도가 정상 범위인지 판별
@@ -9,13 +8,15 @@
 # _build_device_settings: 4대 장치 설정 딕셔너리 생성 헬퍼
 # _determine_devices: 64케이스 장치 결정 (온도/습도 → water_heater/fog/heater/damper)
 # _determine_circulation: 64케이스 순환모드 결정 (내부/외부/배기순환)
-# _check_emergency: 임계값 이탈 시 비상 릴레이 설정 반환
-# _apply_fog_coupling: 포그생성 결합 규칙 후처리 (수온히터 ON 또는 수온≥40℃ → fog ON)
+# _check_emergency: 임계값 이탈 시 비상 릴레이 설정 반환 (온도·CO2)
+# apply_water_safety: 수온계 안전 4케이스 (혹한 락아웃/온난 히터금지/혹서 냉각/배수=포그 세트)
 # ════════════════════════════════════════════════════════════════════════════════
+import os
+
 from agri_ai_core.logs import setup_logger
-# [2026-04-28 rev2] 센서 임계값 하드코딩 금지 — control_common 의 임계 상수
-# 직접 import 제거. 모든 임계값은 ai_thresholds.get_thresholds() 또는 호출자가
-# 전달한 ts 인자로 사용. ts 가 None 이어도 안전하도록 get_global_default() 폴백.
+# 센서 임계값 하드코딩 금지 — control_common 의 임계 상수 직접 import 금지.
+# 모든 임계값은 ai_thresholds.get_thresholds() 또는 호출자가 전달한 ts 인자로
+# 사용. ts 가 None 이어도 안전하도록 get_global_default() 폴백.
 from agri_ai_core.src.control.ai_thresholds import (
     get_global_default as _get_default_ts,
 )
@@ -45,7 +46,7 @@ def _classify(value, low, high):
 
 
 # ────────────────────────────────────────────────────────────────────
-# [2026-05-04 사용자 정의] 계절 자동 판단.
+# 계절 자동 판단 (사용자 정의 룰).
 # 저온계절 = (내부 < 적정 하한) AND (외기 < 내부 온도) — 가열 필요한 환경
 # 고온계절 = 그 외 — 정상 안 또는 외기가 내부 이상 (가열 불필요/냉각 필요)
 # Returns: 'cold' (저온계절) / 'warm' (고온계절). None 입력 시 'warm' 폴백 (보수적).
@@ -63,7 +64,7 @@ def _determine_season(indoor_temp, outdoor_temp, ts=None):
 
 # ────────────────────────────────────────────────────────────────────
 # 외부 온도+습도가 모두 정상 범위인지 판별.
-# [2026-04-28 rev2] ts None 이면 ai_thresholds.get_global_default() 폴백.
+# ts None 이면 ai_thresholds.get_global_default() 폴백.
 # ────────────────────────────────────────────────────────────────────
 def _is_external_normal(outdoor_temp, outdoor_humidity, ts=None):
     t = _ts(ts)
@@ -85,12 +86,8 @@ def _is_internal_abnormal(indoor_temp, indoor_humidity, co2, ts=None):
 
 # ────────────────────────────────────────────────────────────────────
 # 장치 설정 딕셔너리 생성 (rule-based 비상제어 전용).
-# [2026-04-27] 실내히터·히터밸브 미사용으로 인자 제거.
-# [2026-05-01 rev1] 수온히터·배수밸브 상호배타 결합 룰 추가.
-# [2026-05-01 rev2] drainage 자동결정 제거 — LLM 자율 판단 영역.
-#   비상제어가 자동으로 drainage 까지 결정하면 LLM 이 mappers.py 의 의존성 룰을
-#   직접 적용할 기회를 잃음. 본 함수는 비상시 (운용모드 fallback) 안전 폴백 결정만 담당.
-#   비상시에도 mappers.py 룰을 지키되, LLM 정상 분기에서는 LLM 이 직접 결정.
+# drainage 는 LLM 자율 판단 영역 — 본 함수는 비상시(운용모드 fallback) 안전 폴백
+# 결정만 담당. 비상시에도 mappers.py 룰을 지키되, LLM 정상 분기에서는 LLM 이 직접 결정.
 # ────────────────────────────────────────────────────────────────────
 def _build_device_settings(water_heater=False, fog=False):
     # 비상 폴백: 수온히터 ON 시 배수밸브 OFF (mappers.py 안전 룰 — 비상에서만 자동).
@@ -103,55 +100,153 @@ def _build_device_settings(water_heater=False, fog=False):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# [2026-04-28 rev2] 포그생성 결합 규칙 — 단일화
+# 수온계 안전 — 농장주 지정 3케이스 (⛔ 이 3가지 외 수온히터/배수/포그 코드 개입 금지)
 #
-# 핵심 원칙 (사용자 명시): "재배사 온도가 적정 범위 이하이면 수온히터를 ON 해서
-# 수온이 정상범위 하한(ts.water_temp_low) 이상에 도달해야 포그를 ON 한다."
+#   A) 외부 ≤ 1℃ 이고 수온 ≥ 50℃: 수온히터 강제 OFF — 수온 ≤ 30℃ 될 때까지 유지(락아웃)
+#   B) 외부 ≥ 10℃: 수온히터 무조건 OFF
+#   C) 외부 ≥ 29℃ (여름 냉각 상황): 배수밸브 무조건 ON,
+#      수온이 지하수 온도(기본 15℃, 허용오차 +1℃)에 도달하면 포그 ON
+#      — 차가운 지하수 미스트로 실내 냉각. 배수 강제는 이 케이스에서만.
+#   D) 배수=포그 세트 (농장주 룰): 여름냉각(C)·수온과열이 아닌데 포그 OFF 인 채
+#      배수만 ON 이면 배수 OFF — "포그 없는 배수는 지하수 낭비". LLM 자기오답
+#      학습으로 프롬프트 룰이 무시되는 것을 물리 룰로 확정 (2026-07-16).
 #
-# 결정 규칙 (모든 임계값은 ts/DB 동적 — 하드코딩 없음):
-#   1) 수온 > ts.water_temp_critical_high  → 포그 OFF (안전 — 뜨거운 물 분사 방지)
-#   2) 실내온도 > ts.temp_critical_high     → 결합 보류 (실내 추가 가열 방지)
-#   3) 수온 ≥ ts.water_temp_low             → 포그 ON (가열된 수온의 열기 유입)
-#   4) 그 외 (수온 < ts.water_temp_low)     → 포그 OFF (차가운 안개 무의미)
-#
-# devices 를 in-place 수정하고 동일 객체를 반환한다.
+# 임계값은 env 로 조정 가능. 그 외 수온계 판단은 전량 LLM 자율 영역.
+# devices 를 in-place 수정하고 (devices, corrections) 를 반환한다.
 # ═══════════════════════════════════════════════════════════════════════════════
-def _apply_fog_coupling(devices, sensor_data, *, scope="", ts=None):
+WS_OUTDOOR_FREEZE_C  = float(os.getenv('WS_OUTDOOR_FREEZE_C', '1.0'))
+WS_WATER_TRIP_C      = float(os.getenv('WS_WATER_TRIP_C', '50.0'))
+WS_WATER_RELEASE_C   = float(os.getenv('WS_WATER_RELEASE_C', '30.0'))
+WS_OUTDOOR_WARM_C    = float(os.getenv('WS_OUTDOOR_WARM_C', '10.0'))
+WS_OUTDOOR_HOT_C     = float(os.getenv('WS_OUTDOOR_HOT_C', '29.0'))
+WS_GROUNDWATER_C     = float(os.getenv('WS_GROUNDWATER_TEMP_C', '15.0'))
+WS_GROUNDWATER_TOL_C = float(os.getenv('WS_GROUNDWATER_TOL_C', '1.0'))
+_WS_HEATER_LOCKOUT = {}   # "farm:house" → True (케이스 A 락아웃 상태)
+
+# 저온(비상) 포그 hysteresis — 수온이 (실내 + 이 값) 이상일 때만 포그 ON.
+# 정상 경로 프롬프트 §3 와 동일 기준으로 통일(경로별 임계 불일치 방지).
+LOWTEMP_FOG_HYST_C = float(os.getenv('LOWTEMP_FOG_HYST_C', '5.0'))
+
+
+def apply_water_safety(devices, sensor_data, farm_id=None, house_id=None, *, scope=""):
     if not isinstance(devices, dict):
-        return devices
+        return devices, []
+    s = sensor_data or {}
 
-    t = _ts(ts)
-    indoor_temp = sensor_data.get('indoor_temperature') if sensor_data else None
-    water_temp = sensor_data.get('water_temperature') if sensor_data else None
-    prev = devices.get('fog_occurs_flag')
+    def _f(key):
+        try:
+            v = s.get(key)
+            return float(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
 
-    # (1) 안전 — 수온과열: 뜨거운 물 분사 방지 (절대 안전 가드, 유지)
-    if water_temp is not None and water_temp > t.water_temp_critical_high:
-        if prev:
-            logger.warning(
-                f"{scope}[안전가드] 수온과열({water_temp}℃ > {t.water_temp_critical_high}) → "
-                f"포그생성 강제 OFF"
-            )
-        devices['fog_occurs_flag'] = False
-        return devices
+    outdoor = _f('outdoor_temperature')
+    water = _f('water_temperature')
+    corrections = []
+    lock_key = f"{farm_id}:{house_id}"
 
-    # (2) 안전 — 실내 고온비상: 호출자 결정 보존 (절대 안전 가드, 유지)
-    if indoor_temp is not None and indoor_temp > t.temp_critical_high:
-        return devices
+    # A) 혹한 수온과열 락아웃 — 트립 후 수온 ≤ 30℃ 까지 히터 금지
+    if (outdoor is not None and water is not None
+            and outdoor <= WS_OUTDOOR_FREEZE_C and water >= WS_WATER_TRIP_C):
+        _WS_HEATER_LOCKOUT[lock_key] = True
+    if _WS_HEATER_LOCKOUT.get(lock_key):
+        if water is not None and water <= WS_WATER_RELEASE_C:
+            _WS_HEATER_LOCKOUT.pop(lock_key, None)
+        elif devices.get('water_heater_flag'):
+            devices['water_heater_flag'] = False
+            corrections.append(
+                f"[A] 혹한 수온과열 락아웃(수온 {water}℃ > {WS_WATER_RELEASE_C}℃) → 수온히터 OFF")
 
-    # [2026-05-01] 효율 룰 (3)·(4) 제거 — LLM 자율 판단 영역.
-    # 사유:
-    #   기존: 수온 ≥ low → 포그 ON 강제 / 수온 < low → 포그 OFF 강제.
-    #   문제: 임계값 0.5℃ 미달이라도 무조건 OFF — LLM 이 "곧 도달, 가열 보조 위해
-    #         미리 ON" 같은 컨텍스트 판단을 못함. 사용자 자율성 요구에 반함.
-    #   변경: 수온과열·실내고온 안전 가드만 남기고 효율은 LLM(_call_llm) 결정에 위임.
-    #   비상제어(운용모드 fallback) 분기는 _build_device_settings 가 직접 fog 결정하므로 영향 없음.
-        devices['fog_occurs_flag'] = False
-    return devices
+    # B) 외부 온난 — 수온히터 무조건 OFF
+    if (outdoor is not None and outdoor >= WS_OUTDOOR_WARM_C
+            and devices.get('water_heater_flag')):
+        devices['water_heater_flag'] = False
+        corrections.append(
+            f"[B] 외부 {outdoor}℃ ≥ {WS_OUTDOOR_WARM_C}℃ → 수온히터 OFF")
+
+    # C) 혹서 냉각 — 배수 강제 ON + 수온이 지하수 온도 도달 시 포그 ON
+    if outdoor is not None and outdoor >= WS_OUTDOOR_HOT_C:
+        if not devices.get('drainage_motor_flag'):
+            devices['drainage_motor_flag'] = True
+            corrections.append(
+                f"[C] 외부 {outdoor}℃ ≥ {WS_OUTDOOR_HOT_C}℃ → 배수밸브 ON (지하수 냉각)")
+        if (water is not None
+                and water <= WS_GROUNDWATER_C + WS_GROUNDWATER_TOL_C
+                and not devices.get('fog_occurs_flag')):
+            devices['fog_occurs_flag'] = True
+            corrections.append(
+                f"[C] 수온 {water}℃ ≈ 지하수({WS_GROUNDWATER_C}℃) → 포그 ON (냉각 미스트)")
+
+    # D) 배수=포그 세트 — 여름냉각(C)·수온과열이 아닌데 포그 OFF + 배수 ON 이면 배수 OFF.
+    #    ("포그 없는 배수는 무의미" 농장주 룰. C 케이스는 위에서 이미 배수를 켰으므로
+    #     여기 조건(외부<29℃)에서 배수 ON 은 근거 없는 잔존 → 해제.)
+    if (outdoor is not None and outdoor < WS_OUTDOOR_HOT_C
+            and not devices.get('fog_occurs_flag')
+            and devices.get('drainage_motor_flag')
+            and not devices.get('water_heater_flag')):
+        _overheat = False
+        if water is not None:
+            try:
+                from agri_ai_core.src.control.ai_thresholds import get_thresholds
+                _wth = get_thresholds(farm_id, house_id).water_temp_critical_high
+                _overheat = _wth is not None and water >= float(_wth)
+            except Exception:
+                _overheat = False
+        if not _overheat:
+            devices['drainage_motor_flag'] = False
+            corrections.append(
+                f"[D] 포그 OFF·외부 {outdoor}℃<{WS_OUTDOOR_HOT_C}℃·수온정상인데 배수 ON "
+                f"→ 배수 OFF (배수는 포그와 세트)")
+
+    for c in corrections:
+        logger.warning(f"{scope}[수온계안전] {c}")
+    return devices, corrections
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 고습 → 포그 강제 OFF (농장주 절대룰). ⛔ 포그는 습도를 높이므로 냉각 상황이 아닌
+# 고습(습도 ≥ 적정상한)에는 어떤 제어자(Agent/AI/수동)도 포그를 켠 채로 둘 수 없다.
+# relay_manager 최종 관문(모든 모드 공통)에서 강제 → 비정합 상태 자체가 기록 불가.
+#   냉각 예외(포그가 냉각 목적일 수 있어 건드리지 않음):
+#     · 고온: 실내온도 > 온도 상한   · 여름: 외부온도 ≥ WS_OUTDOOR_HOT_C(29℃)
+# relay_values 는 pin(relay_*st_flag) 키. (relay_values, corrections) 반환.
+# ═══════════════════════════════════════════════════════════════════════════════
+def apply_humidity_fog_guard(relay_values, sensor_data, ts, pin_map):
+    corrections = []
+    try:
+        fog_pin = (pin_map or {}).get('fog_occurs_flag')
+        if not fog_pin or fog_pin not in relay_values or not relay_values.get(fog_pin):
+            return relay_values, corrections   # 포그 이미 OFF → 무관
+
+        def _f(v):
+            try:
+                return float(v) if v is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        s = sensor_data or {}
+        hum = _f(s.get('indoor_humidity'))
+        it = _f(s.get('indoor_temperature'))
+        ot = _f(s.get('outdoor_temperature'))
+        hum_high = _f(getattr(ts, 'humidity_high', None))
+        temp_high = _f(getattr(ts, 'temp_high', None))
+
+        if hum is None or hum_high is None or hum < hum_high:
+            return relay_values, corrections   # 고습 아님
+        if it is not None and temp_high is not None and it > temp_high:
+            return relay_values, corrections   # 고온 냉각 — 포그 유지
+        if ot is not None and ot >= WS_OUTDOOR_HOT_C:
+            return relay_values, corrections   # 여름 냉각 — 포그 유지
+
+        relay_values[fog_pin] = False
+        corrections.append(f"고습 {hum}%(>={hum_high}%) + 냉각상황 아님 -> 포그({fog_pin}) 강제 OFF")
+    except Exception as e:
+        corrections.append(f"습도-포그 가드 오류: {e}")
+    return relay_values, corrections
+
 
 
 # ════════════════════════════════════════════════════════════════════
-# [2026-05-04 사용자 정의] 계절 분기 override.
+# 계절 분기 override (사용자 정의 룰).
 # 64-케이스 결정 + fog_coupling 후 호출 → 계절별 룰 적용.
 #
 # 저온계절 (외기 < 내부 AND 내부 < 적정하한):
@@ -189,8 +284,8 @@ def _apply_season_override(devices, circulation, season, indoor_temp, ts=None):
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 64케이스 장치 결정: 온도/습도 → (water_heater, fog_pump)
-# [2026-04-27] 실내히터·히터밸브 미사용 — 저온 케이스에서도 수온히터만 ON.
-# [2026-04-28] 수온히터 ON 시 포그생성도 항상 동반 ON — 가열된 탱크 수온의 열기를
+# 실내히터·히터밸브 미사용 — 저온 케이스에서도 수온히터만 ON.
+# 수온히터 ON 시 포그생성도 항상 동반 ON — 가열된 탱크 수온의 열기를
 #   재배사로 유입시키는 매개체가 포그. 온도가 실내습도보다 우선이므로, 저온+고습
 #   조합이라도 포그를 ON 으로 유지(포그 자체는 가습이지만 가열 효과가 우선).
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -265,32 +360,24 @@ def _determine_circulation(temp_state, ext_temp_state, humidity_state, ext_humid
 # Returns: (is_emergency, device_settings, circulation_mode, water_temp_only)
 # ═══════════════════════════════════════════════════
 # ────────────────────────────────────────────────────────────────────
-# [2026-04-28 rev2] ts 의 동적 임계값으로 비상 판단. ts None 이면 폴백.
+# ts 의 동적 임계값으로 비상 판단. ts None 이면 폴백.
 # Returns: (is_emergency, device_settings, circulation_mode, water_temp_only)
 # ────────────────────────────────────────────────────────────────────
 def _check_emergency(sensor_data, ts=None):
-    # [2026-05-17] 사용자 정책 — 운용모드 무관 모든 비상제어 skip.
-    # 본 함수는 항상 "비상 아님" 반환. 복귀 시 본 early return 만 제거.
-    return False, None, None, False
     t = _ts(ts)
     indoor_temp = sensor_data.get('indoor_temperature')
     indoor_humidity = sensor_data.get('indoor_humidity')
     co2 = sensor_data.get('co2')
     water_temp = sensor_data.get('water_temperature')
 
-    # ────────────────────────────────────────────────────────────────────
-    # [2026-05-04] 사용자 정책 #1 저온비상 — 실내+5℃ fog hysteresis.
-    # 수온히터는 항상 ON. fog 는 (수온 ≥ 실내+5℃) 일 때만 ON.
-    # 매 cycle 마다 수온 vs 실내+5℃ 비교 → 자동 hysteresis 효과 (5초 cycle 자체가
-    # 채터링 흡수). drainage 는 가온 위해 OFF (heater ↔ drainage 상호배타).
-    # ────────────────────────────────────────────────────────────────────
+    # 저온비상 — 수온히터 ON. fog 는 수온 ≥ (실내 + LOWTEMP_FOG_HYST_C) 일 때만 ON
+    # (정상 경로 프롬프트 §3 hysteresis 와 동일 기준). drainage 는 가온 위해 OFF.
     if indoor_temp is not None and indoor_temp < t.temp_critical_low:
-        # [2026-05-04 사용자 정의] hysteresis 5℃ → 3℃.
-        fog_on = (water_temp is not None and water_temp >= indoor_temp + 3.0)
+        fog_on = (water_temp is not None and water_temp >= indoor_temp + LOWTEMP_FOG_HYST_C)
         return True, _build_device_settings(water_heater=True, fog=fog_on), '내부순환', False
 
     # ────────────────────────────────────────────────────────────────────
-    # [2026-05-04] 사용자 정책 #2 고온비상 — 외기 조건 분기.
+    # 사용자 정책 #2 고온비상 — 외기 조건 분기.
     # ① 외부온도가 정상 범위 안 → 외부순환 (외기로 자연 냉각, 장치 OFF).
     # ② 외부온도가 정상 범위 밖 → drainage ON + fog ON (탱크의 차가운
     #    지하수를 미스트로 분사하여 능동 냉각).
@@ -311,7 +398,7 @@ def _check_emergency(sensor_data, ts=None):
             'drainage_motor_flag': True,
         }, '배기순환', False
 
-    # 습도 — [2026-05-03] 사용자 정책 #5/#6: 강제 처리 안 함, LLM 자율 판단 위임.
+    # 습도 — 사용자 정책 #5/#6: 강제 처리 안 함, LLM 자율 판단 위임.
     # 습도 단독 비상은 emergency 분기로 진입하지 않고 LLM 호출로 흘러
     # system_prompt 의 우선순위 룰(온도 > 습도 > CO2) 에 따라 결정.
 
@@ -319,31 +406,13 @@ def _check_emergency(sensor_data, ts=None):
     if co2 is not None and co2 > t.co2_critical_high:
         return True, _build_device_settings(), '배기순환', False
 
-    # 수온 비상 (수온히터만 제어, 다른 장치 유지)
-    # [2026-05-01] drainage_motor_flag 결합 룰 — 수온히터 ON 시 가온 위해 OFF, OFF 시 ON.
-    if water_temp is not None and water_temp < t.water_temp_critical_low:
-        return True, {'water_heater_flag': True, 'fog_occurs_flag': True,
-                      'drainage_motor_flag': False}, None, True
-
-    # [2026-05-04] 수온 과열비상 — 실내 온도 상황에 따라 분기.
-    # ① 실내 가열 필요 또는 정상 (indoor_temp ≤ temp_high):
-    #    수온히터만 OFF, 포그/배수는 현상유지 (LLM 자율 판단 보존).
-    # ② 실내 냉각 필요 (indoor_temp > temp_high):
-    #    수온히터 OFF + 배수밸브 ON (탱크에 차가운 새 지하수 주입 → 능동 냉각).
-    if water_temp is not None and water_temp > t.water_temp_critical_high:
-        if indoor_temp is not None and indoor_temp > t.temp_high:
-            # 실내 고온 + 수온 과열 → 능동 냉각
-            return True, {'water_heater_flag': False, 'fog_occurs_flag': False,
-                          'drainage_motor_flag': True}, None, True
-        # 실내 가열 필요/정상 + 수온 과열 → 수온히터만 OFF, 다른 장치 현상유지
-        return True, {'water_heater_flag': False, 'fog_occurs_flag': None,
-                      'drainage_motor_flag': None}, None, True
+    # 수온계(수온히터/배수/포그)는 비상 분기 없음 — apply_water_safety 3케이스 전담.
 
     return False, None, None, False
 
 
 # ════════════════════════════════════════════════════════════════════
-# [2026-05-04 Phase A] 사용자 원칙 — "운용모드 결정 후 비상 오버라이드" 구조
+# 사용자 원칙 — "운용모드 결정 후 비상 오버라이드" 구조
 # 각 비상 정책의 핵심 강제 항목만 반환. None=운용 결정 보존.
 # 호출자: 운용모드 결정 산출 후 본 override 를 위에 덮어쓰기 적용.
 # ════════════════════════════════════════════════════════════════════
@@ -358,9 +427,6 @@ def _check_emergency(sensor_data, ts=None):
 #   · water_temp_only:       True=수온 단독 비상 (운용 결정 대부분 유지).
 # ────────────────────────────────────────────────────────────────────
 def _emergency_override(sensor_data, ts=None):
-    # [2026-05-17] 사용자 정책 — 운용모드 무관 모든 비상제어 skip.
-    # 본 함수는 항상 "비상 아님" 반환. 복귀 시 본 early return 만 제거.
-    return False, None, None, False
     t = _ts(ts)
     indoor_temp = sensor_data.get('indoor_temperature')
     co2 = sensor_data.get('co2')
@@ -407,28 +473,7 @@ def _emergency_override(sensor_data, ts=None):
             return True, {}, '외부순환', False
         return True, {}, '배기순환', False
 
-    # ────────────────────────────────────────────────────────────────
-    # 정책 #6 수온저하비상 — 수온히터 ON + drainage OFF 강제 (가온 위해 물 가둠).
-    # ────────────────────────────────────────────────────────────────
-    if water_temp is not None and water_temp < t.water_temp_critical_low:
-        return True, {
-            'water_heater_flag': True,
-            'drainage_motor_flag': False,
-        }, None, True
-
-    # ────────────────────────────────────────────────────────────────
-    # 정책 #4 수온과열비상 — 실내 온도 상황에 따라 분기.
-    # ① 실내 ≤ temp_high (가열 필요/정상): water_heater OFF 만 강제.
-    # ② 실내 > temp_high (냉각 필요): water_heater OFF + drainage ON 강제
-    #    (탱크 식힘). fog 는 운용 결정 보존 (수온 식기 전 분사하면 위험할 수 있음).
-    # ────────────────────────────────────────────────────────────────
-    if water_temp is not None and water_temp > t.water_temp_critical_high:
-        if indoor_temp is not None and indoor_temp > t.temp_high:
-            return True, {
-                'water_heater_flag': False,
-                'drainage_motor_flag': True,
-            }, None, True
-        return True, {'water_heater_flag': False}, None, True
+    # 수온계(수온히터/배수/포그)는 비상 오버라이드 없음 — apply_water_safety 3케이스 전담.
 
     return False, {}, None, False
 

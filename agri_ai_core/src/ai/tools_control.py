@@ -1,6 +1,6 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # 릴레이 제어 도구 — LLM이 호출하는 릴레이 ON/OFF/반전 및 일괄 제어.
-# tools_executor.py에서 분리된 L5 계층 모듈.
+# L5 계층 모듈 (tools_executor.py 와 동급).
 # --->
 # _resolve_relay_ids            : 릴레이 제어용 house_id/farm_id 정규화 및 검증
 # _get_ai_judgment_safe         : AI 환경 판단 안전 호출
@@ -101,7 +101,7 @@ def _get_ai_judgment_safe(farm_id, house_id):
 
 
 # ────────────────────────────────────────────────────────────────────
-# [deprecated 2026-04-27] 히터 쿨다운 인프라 제거 — 항상 None 반환.
+# [deprecated] 히터 쿨다운 미지원 — 항상 None 반환.
 # 호환을 위해 시그니처만 유지. 호출자는 결과를 무시해도 됨.
 # ────────────────────────────────────────────────────────────────────
 def _get_heater_cooldown_warning(farm_id, house_id, device_name: str, action: str):
@@ -232,6 +232,13 @@ def control_relay(house_id: str, device_name: str = None, action: str = None,
             relay_value = (action == "on")
         relay_settings = {device_name: relay_value}
         result = set_relay_value(target_farm_id, target_house_id, relay_settings)
+        if isinstance(result, dict) and result.get("success"):
+            try:
+                from agri_ai_core.src.control.ai_decision_log import record_external_action
+                record_external_action("채팅지시", target_farm_id, target_house_id,
+                                       relay_settings, "사용자 채팅 지시로 릴레이 제어")
+            except Exception:
+                pass
 
         elapsed = time.time() - t_start
         device_label = SEMANTIC_LABELS.get(device_name, device_name)
@@ -243,7 +250,7 @@ def control_relay(house_id: str, device_name: str = None, action: str = None,
             # LLM 제어 잠금 설정 (자동제어 스케줄러 충돌 방지)
             set_llm_relay_lock(target_farm_id, target_house_id)
             logger.info(f"[릴레이제어] 완료 ({elapsed:.1f}s) {device_label} → {action_label} (LLM 잠금 설정)")
-            # [B2] 히터 계열 ON 시 쿨다운 경고 (실행은 이미 성공, 안내만 추가)
+            # 히터 계열 ON 시 쿨다운 경고 (실행은 이미 성공, 안내만 추가)
             heater_warn = _get_heater_cooldown_warning(
                 target_farm_id, target_house_id, device_name, action,
             )
@@ -251,7 +258,8 @@ def control_relay(house_id: str, device_name: str = None, action: str = None,
             post_state = _build_post_control_snapshot(target_farm_id, target_house_id)
             resp = {
                 "success": True,
-                "message": f"{target_house_id}호 재배사의 {device_label}을(를) {action_label} 처리했습니다.",
+                "message": (f"{target_house_id}호 재배사의 {device_label}을(를) {action_label} 처리했습니다. "
+                            f"⚠ 이 제어는 1회성 — 사용자가 유지를 요청했다면 set_admin_directive 를 즉시 추가 호출하고, 호출 전에는 유지된다고 답하지 마세요."),
                 "farm_id": target_farm_id,
                 "house_id": target_house_id,
                 "device_name": device_name,
@@ -390,6 +398,13 @@ def control_relays_batch(house_id: str, devices: List[Dict[str, str]] = None,
 
         ai_judgment = _get_ai_judgment_safe(target_farm_id, target_house_id)
         result = set_relay_value(target_farm_id, target_house_id, relay_settings)
+        if isinstance(result, dict) and result.get("success"):
+            try:
+                from agri_ai_core.src.control.ai_decision_log import record_external_action
+                record_external_action("채팅지시", target_farm_id, target_house_id,
+                                       relay_settings, "사용자 채팅 지시로 릴레이 제어")
+            except Exception:
+                pass
         ai_conflict = _build_ai_conflict(ai_judgment, relay_settings)
 
         elapsed = time.time() - t_start
@@ -401,7 +416,8 @@ def control_relays_batch(house_id: str, devices: List[Dict[str, str]] = None,
             logger.info(f"[릴레이일괄제어] 완료 ({elapsed:.1f}s) {len(controlled_labels)}건 (LLM 잠금 설정)")
             return {
                 "success": True,
-                "message": f"{target_house_id}호 재배사의 {len(controlled_labels)}개 장치를 일괄 제어했습니다.",
+                "message": (f"{target_house_id}호 재배사의 {len(controlled_labels)}개 장치를 일괄 제어했습니다. "
+                            f"⚠ 이 제어는 1회성 — 사용자가 유지를 요청했다면 set_admin_directive 를 즉시 추가 호출하고, 호출 전에는 유지된다고 답하지 마세요."),
                 "farm_id": target_farm_id,
                 "house_id": target_house_id,
                 "controlled_count": len(controlled_labels),

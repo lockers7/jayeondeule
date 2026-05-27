@@ -27,8 +27,7 @@ _initialized = False
 # 2) ChromaDB heartbeat + 필수 컬렉션 존재 확인
 # 3) PostgreSQL 연결 + AI 학습 테이블 자동 생성
 # 4) 스케줄러 setup/start + AI 순환 제어 루프 시작 (start_ai_loop=True 일 때만)
-# [2026-05-04] start_ai_loop 인자 추가 — API/Scheduler 양쪽에서 중복 가동되던
-#   AI 순환 루프를 Scheduler 단독으로 전환. Ollama 큐 동시 호출 방지.
+# AI 순환 루프는 Scheduler 프로세스 단독 가동 — Ollama 큐 동시 호출 방지.
 # ────────────────────────────────────────────────────────────────────
 def initialize_app(start_ai_loop: bool = True, register_jobs: bool = True):
     global _initialized
@@ -38,15 +37,10 @@ def initialize_app(start_ai_loop: bool = True, register_jobs: bool = True):
     total_start = time.time()
 
     # ───────────────────────────────────────────────────────────────
-    # 의존성 주입: 하위 계층(postgresql, chroma)이 AI 계층을 역참조하지
-    # 않도록, AI 측 실행기를 상위 계층(startup)에서 주입한다.
+    # 의존성 주입: 하위 계층(chroma)이 AI 계층을 역참조하지 않도록,
+    # AI 측 실행기를 상위 계층(startup)에서 주입한다.
+    # (postgres MCP 훅은 2026-07-16 제거 — connection.py 헤더 사유 참조)
     # ───────────────────────────────────────────────────────────────
-    try:
-        from agri_ai_core.src.postgresql.connection import set_mcp_query_fn
-        from agri_ai_core.src.ai.mcp_client import postgres_query
-        set_mcp_query_fn(postgres_query)
-    except Exception as e:
-        logger.warning(f"[초기화] MCP postgres 훅 주입 실패: {e}")
     try:
         from agri_ai_core.src.chroma.operations import set_embed_fn
         from agri_ai_core.src.ai.embedder import embed_text
@@ -165,29 +159,26 @@ def initialize_app(start_ai_loop: bool = True, register_jobs: bool = True):
 
         # -----------------------------------------------------------
         # [4/4] 스케줄러 설정 및 시작
-        # [2026-05-04 G4] register_jobs=False 인 프로세스에서는 cron 잡 등록 자체를
-        #   생략 — API/Scheduler 양쪽 등록되던 camera_archive_hourly·Opinet·로또·
-        #   생육RAG 잡들의 이중 발화로 인한 Ollama 큐 압박 차단.
+        # register_jobs=False 인 프로세스에서는 cron 잡 등록 자체를 생략 —
+        #   여러 프로세스의 동일 잡 이중 발화로 인한 Ollama 큐 압박 차단.
         # -----------------------------------------------------------
         if register_jobs:
             logger.info("[4/4] 스케줄러 설정 중...")
             t0 = time.time()
             try:
                 from agri_ai_core.src.ai.learning.growth_rag_processor import run_growth_rag
-                from agri_ai_core.src.opinet.opinet_collector import collect_all as opinet_collect_all
                 from agri_ai_core.src.lotto.lotto_collector import update_lotto_db
 
                 setup_scheduler()
                 setup_default_jobs(
                     manual_control_func=control_all_manual,
                     growth_rag_func=run_growth_rag,
-                    opinet_collect_func=opinet_collect_all,
                     lotto_collect_func=update_lotto_db,
                 )
                 start_scheduler()
-                logger.info("[4/4] 스케줄러 시작됨 (%.1fs) - 수동/알고리즘 (10초) + 생육RAG + Opinet/로또", time.time() - t0)
+                logger.info("[4/4] 스케줄러 시작됨 (%.1fs) - 수동/알고리즘 (10초) + 생육RAG/로또", time.time() - t0)
 
-                # [Phase 5 · 2026-05-09] PostgreSQL LISTEN/NOTIFY listener 시작.
+                # PostgreSQL LISTEN/NOTIFY listener 시작.
                 #   setting 테이블 변경 즉시 캐시 invalidate / scheduler reload.
                 #   register_jobs=True 인 프로세스(scheduler 전용)에서만 가동 — 중복 실행 방지.
                 try:
@@ -197,7 +188,7 @@ def initialize_app(start_ai_loop: bool = True, register_jobs: bool = True):
                 except Exception as le:
                     logger.warning(f"[4/4] setting_listener 시작 실패: {le}")
 
-                # [2026-05-04] start_ai_loop=True 인 프로세스에서만 AI 순환 루프 가동
+                # start_ai_loop=True 인 프로세스에서만 AI 순환 루프 가동
                 #   (Scheduler 전용 — API 프로세스에서는 비활성으로 Ollama 큐 경합 방지)
                 if start_ai_loop:
                     start_ai_control_loop()

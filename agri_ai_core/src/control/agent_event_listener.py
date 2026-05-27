@@ -1,5 +1,5 @@
 # ════════════════════════════════════════════════════════════════════
-# [Phase 5 · 2026-05-27] agent_event_listener — 이벤트 트리거 LISTEN daemon
+# agent_event_listener — 이벤트 트리거 LISTEN daemon
 #
 # 설계:
 #   PostgreSQL 채널 'agent_event' 를 LISTEN.
@@ -7,9 +7,10 @@
 #     · sensor_threshold  : 센서값이 임계 ±10% 버퍼 진입
 #     · llm_keep_streak   : 동일 호기에서 LLM keep 5회 연속
 #
-#   수신 즉시 해당 farm_id 의 active agent_subscriptions 에
+#   수신 즉시 해당 farm_id 의 default agent_subscriptions 에
 #     next_run_at = NOW()
-#   을 일괄 UPDATE → agent_scheduler 의 다음 polling(~60초)에서 run_agent 실행.
+#   을 UPDATE → agent_scheduler 의 다음 polling(~60초)에서 run_agent 실행.
+#   사용자 주기 구독은 요청 주기를 보존해야 하므로 기본값으로 즉시화하지 않는다.
 #
 #   추가로 Python 측에서 주기적(HEARTBEAT_CHECK_SEC, 기본 5분) 으로
 #   sensor_l_recording 의 최신 INSERT 시각을 폴링 → 5분 이상 공백이면
@@ -55,6 +56,7 @@ AGENT_EVENT_FARM_IDS = [
 AGENT_EVENT_COOLDOWN_SEC   = int(os.getenv("AGENT_EVENT_COOLDOWN_SEC",  "300"))
 AGENT_EVENT_HEARTBEAT_SEC  = int(os.getenv("AGENT_EVENT_HEARTBEAT_SEC", "300"))
 AGENT_EVENT_RECONNECT_SEC  = int(os.getenv("AGENT_EVENT_RECONNECT_SEC",  "5"))
+AGENT_EVENT_TRIGGER_USER_SUBS = os.getenv("AGENT_EVENT_TRIGGER_USER_SUBS", "0") == "1"
 
 _LISTEN_CHANNEL = "agent_event"
 
@@ -86,8 +88,8 @@ def _open_listen_conn():
 
 
 # ────────────────────────────────────────────────────────────────────
-# farm_id 의 active agent_subscriptions next_run_at = NOW() 업데이트.
-# 복수 subscription(다호기, 다사용자 등록) 모두 즉시화.
+# farm_id 의 default agent_subscriptions next_run_at = NOW() 업데이트.
+# 사용자 주기 구독은 기본적으로 요청 주기를 유지한다.
 # ────────────────────────────────────────────────────────────────────
 def _trigger_subscriptions(farm_id: int, house_id: Optional[int], event_type: str) -> int:
     try:
@@ -98,27 +100,31 @@ def _trigger_subscriptions(farm_id: int, house_id: Optional[int], event_type: st
 
     conn = db._getconn()
     if conn is None:
-        logger.warning(f"[EventListener] DB 커넥션 획득 실패 (farm={farm_id})")
+        logger.debug(f"[EventListener] DB 커넥션 획득 실패 (farm={farm_id}) — 다음 이벤트 시 재시도")
         return 0
     try:
         with conn.cursor() as cur:
             # house_id 가 있으면 해당 호기 + 전체(NULL) subscription 모두 즉시화
             if house_id is not None:
+                user_filter = "" if AGENT_EVENT_TRIGGER_USER_SUBS else "  AND intent = '__default_cron__' "
                 cur.execute(
                     "UPDATE agent_subscriptions "
                     "SET next_run_at = NOW() "
                     "WHERE active = TRUE "
                     "  AND farm_id = %s "
                     "  AND (house_id = %s OR house_id IS NULL) "
+                    f"{user_filter}"
                     "  AND next_run_at > NOW()",
                     (farm_id, house_id),
                 )
             else:
+                user_filter = "" if AGENT_EVENT_TRIGGER_USER_SUBS else "  AND intent = '__default_cron__' "
                 cur.execute(
                     "UPDATE agent_subscriptions "
                     "SET next_run_at = NOW() "
                     "WHERE active = TRUE "
                     "  AND farm_id = %s "
+                    f"{user_filter}"
                     "  AND next_run_at > NOW()",
                     (farm_id,),
                 )
@@ -157,7 +163,7 @@ def _handle_event(payload_str: str) -> None:
     try:
         payload = json.loads(payload_str)
     except Exception as e:
-        logger.warning(f"[EventListener] payload 파싱 실패 ({payload_str[:80]}): {e}")
+        logger.debug(f"[EventListener] payload 파싱 skip ({payload_str[:80]}): {e}")
         return
 
     event_type = payload.get("event")
@@ -256,11 +262,12 @@ def _run_heartbeat_check() -> None:
     try:
         with conn.cursor() as cur:
             for farm_id in AGENT_EVENT_FARM_IDS:
-                # 각 farm 내 호기별 최신 INSERT 시각 조회
+                # 각 farm 내 호기별 최신 INSERT 시각 조회.
+                # hous_id=0(공통/가상 호기 — 코드베이스 관례상 제외 대상)은 감시 제외.
                 cur.execute(
                     "SELECT hous_id, MAX(recd_dttm) AS last_ts "
                     "FROM sensor_l_recording "
-                    "WHERE farm_id = %s "
+                    "WHERE farm_id = %s AND hous_id != 0 "
                     "GROUP BY hous_id",
                     (farm_id,),
                 )
@@ -359,7 +366,8 @@ def main() -> None:
     logger.info(
         f"[EventListener] 시작 farms={AGENT_EVENT_FARM_IDS} "
         f"cooldown={AGENT_EVENT_COOLDOWN_SEC}초 "
-        f"heartbeat={AGENT_EVENT_HEARTBEAT_SEC}초"
+        f"heartbeat={AGENT_EVENT_HEARTBEAT_SEC}초 "
+        f"trigger_user_subs={AGENT_EVENT_TRIGGER_USER_SUBS}"
     )
 
     # heartbeat 감시 daemon thread 기동

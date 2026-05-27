@@ -8,8 +8,9 @@ import { Container, Table, Button, Modal, Form, Alert, Badge } from "react-boots
 //   탭 3. 도구 정의 (tool_definition_m, PostgreSQL)    — 활성 토글
 // 변경 즉시 prompt_registry 캐시 무효화 → 다음 LLM 호출부터 적용.
 //
-// [2026-05-17] PROMPT_BLOCK_M.CONTROL_*/CIRCULATION_* 는 5/4 이후 dead code
-// (ai_control.py inline 단일 source). UI 에 명시적 경고.
+// [2026-05-17] PROMPT_BLOCK_M.CONTROL_*/CIRCULATION_* 는 5/4 이후 dead code.
+// [2026-07-04] 제어 system 프롬프트 현행 단일 source 는 control_prompt_m 테이블
+// (LLM 제어관리 메뉴, 저장 즉시 반영) — 경고문을 현행 안내로 갱신.
 // ────────────────────────────────────────────────────────────────────
 
 const API = "/ai-api/api/v1/admin";
@@ -196,7 +197,16 @@ export default function PromptBlockManagementPage() {
             if (!data.success) return flash("danger", `토글 실패: ${data.detail || data.error}`);
             flash("info", `'${t.tool_id}' → active=${next}`);
             loadTools();
+            return next;
         } catch (e) { flash("danger", `토글 실패: ${e.message}`); }
+    };
+
+    // 도구 상세 보기 (백엔드는 R + active 토글만 지원 — create/delete 없음)
+    const openToolDetail = (t) => setModal({ kind: "tool-detail", data: { ...t } });
+    const toggleToolInModal = async (t) => {
+        const next = await toggleTool(t);
+        if (next) setModal(m => (m && m.kind === "tool-detail")
+            ? { ...m, data: { ...m.data, active_yn: next } } : m);
     };
 
     const hasDeadCodeBlocks = useMemo(
@@ -249,9 +259,10 @@ export default function PromptBlockManagementPage() {
             {activeTab === "blocks" && hasDeadCodeBlocks && (
                 <Alert variant="warning" className="small">
                     <strong>⚠ dead code 경고</strong> — <code>CONTROL_*</code> / <code>CIRCULATION_*</code> 블록은
-                    2026-05-04 이후 LLM 에 반영되지 않습니다. 제어 system 프롬프트의 단일 source 는
-                    <code> ai_control.py </code>의 inline 텍스트(<code>_build_system_prompt_impl_v2_9sec</code>)
-                    이며 DB UPDATE/INSERT/DELETE 는 무효합니다. 본 UI 에서는 미래 복귀를 대비한 백업 차원으로만 편집하세요.
+                    2026-05-04 이후 LLM 에 반영되지 않습니다. 제어 system 프롬프트의 현행 단일 source 는
+                    <code> control_prompt_m </code> 테이블이며, 상단 <strong>LLM 제어관리</strong> 메뉴에서
+                    수정하세요(저장 즉시 다음 제어 사이클부터 반영 · 재기동 불필요). 이 탭의
+                    CONTROL_* 블록 UPDATE/INSERT/DELETE 는 여전히 무효합니다.
                 </Alert>
             )}
 
@@ -341,7 +352,7 @@ export default function PromptBlockManagementPage() {
                     </thead>
                     <tbody>
                         {tools.map((t) => (
-                            <tr key={t.tool_id}>
+                            <tr key={t.tool_id} style={{ cursor: "pointer" }} onClick={() => openToolDetail(t)}>
                                 <td><code>{t.tool_id}</code></td>
                                 <td>{t.category}</td>
                                 <td>{t.priority}</td>
@@ -349,7 +360,7 @@ export default function PromptBlockManagementPage() {
                                 <td>
                                     <Button size="sm"
                                             variant={t.active_yn === "Y" ? "success" : "outline-secondary"}
-                                            onClick={() => toggleTool(t)}>
+                                            onClick={(e) => { e.stopPropagation(); toggleTool(t); }}>
                                         {t.active_yn === "Y" ? "ON" : "OFF"}
                                     </Button>
                                 </td>
@@ -467,6 +478,62 @@ export default function PromptBlockManagementPage() {
                     <Button variant="primary" onClick={saveChunk}>
                         {modal?.kind === "chunk-create" ? "등록" : "저장"}
                     </Button>
+                </Modal.Footer>
+            </Modal>
+
+            {/* ─── 도구 정의 상세 모달 (Read + active 토글) ───────────── */}
+            <Modal show={modal?.kind === "tool-detail"} onHide={() => setModal(null)} size="lg">
+                <Modal.Header closeButton>
+                    <Modal.Title>도구 정의 — <code>{modal?.data?.tool_id}</code></Modal.Title>
+                </Modal.Header>
+                <Modal.Body>
+                    {modal?.kind === "tool-detail" && (
+                        <>
+                            <Table size="sm" borderless className="mb-3">
+                                <tbody>
+                                    <tr><td style={{ width: "110px" }}><strong>카테고리</strong></td><td>{modal.data.category || "-"}</td></tr>
+                                    <tr><td><strong>우선순위</strong></td><td>{modal.data.priority ?? "-"}</td></tr>
+                                    <tr>
+                                        <td><strong>활성</strong></td>
+                                        <td>
+                                            <Badge bg={modal.data.active_yn === "Y" ? "success" : "secondary"} className="me-2">
+                                                {modal.data.active_yn}
+                                            </Badge>
+                                            <Button size="sm"
+                                                    variant={modal.data.active_yn === "Y" ? "outline-secondary" : "success"}
+                                                    onClick={() => toggleToolInModal(modal.data)}>
+                                                {modal.data.active_yn === "Y" ? "비활성화 (OFF)" : "활성화 (ON)"}
+                                            </Button>
+                                        </td>
+                                    </tr>
+                                    <tr><td><strong>수정시각</strong></td><td className="small text-muted">{modal.data.updt_dttm || "-"}</td></tr>
+                                </tbody>
+                            </Table>
+                            <Form.Group className="mb-3">
+                                <Form.Label><strong>설명 (description)</strong></Form.Label>
+                                <div style={{ whiteSpace: "pre-wrap", background: "#f8f9fa", padding: "10px", borderRadius: "5px", fontSize: "0.9em" }}>
+                                    {modal.data.description || "(없음)"}
+                                </div>
+                            </Form.Group>
+                            <Form.Group>
+                                <Form.Label><strong>schema_json (함수·파라미터 정의)</strong></Form.Label>
+                                <pre style={{ whiteSpace: "pre-wrap", maxHeight: "360px", overflow: "auto", background: "#f0f0f0", padding: "10px", borderRadius: "5px", fontSize: "12px" }}>
+                                    {(() => {
+                                        const s = modal.data.schema_json;
+                                        try { return JSON.stringify(typeof s === "string" ? JSON.parse(s) : s, null, 2); }
+                                        catch { return String(s ?? "-"); }
+                                    })()}
+                                </pre>
+                            </Form.Group>
+                            <p className="text-muted small mb-0">
+                                ※ 도구 정의는 조회 + 활성 토글만 지원합니다 (신규/삭제 백엔드 미제공).
+                                스키마·설명 편집이 필요하면 별도 엔드포인트 추가가 필요합니다.
+                            </p>
+                        </>
+                    )}
+                </Modal.Body>
+                <Modal.Footer>
+                    <Button variant="secondary" onClick={() => setModal(null)}>닫기</Button>
                 </Modal.Footer>
             </Modal>
         </Container>

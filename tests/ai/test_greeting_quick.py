@@ -1,14 +1,15 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# test_greeting_quick — greeting 정형 응답 회귀 [2026-05-26 hotfix]
+# test_greeting_quick — greeting 정형 응답 회귀
 #
-# Ollama 가 환경제어/agent 점유 중일 때 인사 답변 LLM 호출이 큐 대기로 hang.
-# fix: response_type='greeting' 분기는 LLM 우회 + 즉시 정형 응답.
+# fast_classify 가 greeting 판정한 명확한 인사만 LLM 우회 + 즉시 정형 응답
+# (환경제어/agent 의 LLM 점유로 인한 큐 대기 hang 방지).
+# ANALYZER 가 greeting 분류한 케이스는 LLM 합성 유지.
 # ══════════════════════════════════════════════════════════════════════════════
 from unittest.mock import patch
 
 
 def test_generate_simple_response_greeting_now_calls_llm():
-    """[hotfix5+] ANALYZER 가 greeting 분류한 케이스도 LLM 합성 — 사용자 룰.
+    """ANALYZER 가 greeting 분류한 케이스도 LLM 합성 — 사용자 룰.
     키워드 우회는 query_handler_simple 의 fast_classify 분기에서만 적용."""
     from agri_ai_core.src.ai.pipeline import answer_generator
     # _ollama_chat 호출 여부만 검증 — 실제 응답 mock
@@ -16,12 +17,12 @@ def test_generate_simple_response_greeting_now_calls_llm():
     with patch("agri_ai_core.src.ai.llm_client._ollama_chat", return_value=fake_resp) as oc:
         r = answer_generator._generate_simple_response(
             "안녕.. 오늘 날씨는 어떨것 같아?", [], "자연들에", "male", "greeting")
-    # 이제는 _ollama_chat 호출됨 (LLM 합성)
+    # _ollama_chat 호출 (LLM 합성)
     oc.assert_called_once()
 
 
 def test_conversation_ref_still_calls_llm():
-    """conversation_ref 는 기존대로 LLM 호출 (회귀 보전)."""
+    """conversation_ref 는 LLM 호출 (회귀 보전)."""
     from agri_ai_core.src.ai.pipeline import answer_generator
     fake_resp = {"message": {"content": "재포맷된 답변"}}
     with patch.object(answer_generator, "_generate_simple_response") as gen:

@@ -8,7 +8,7 @@
 from datetime import datetime
 from typing import List, Dict, Any
 
-# [변경5 · 2026-04-30] 장치명 매핑을 mappers.device_mapping_text() 자동 생성으로 전환.
+# 장치명 매핑은 mappers.device_mapping_text() 자동 생성을 사용.
 from agri_ai_core.config.mappers import (
     device_mapping_text as _device_mapping_text,
     device_detail_text as _device_detail_text,
@@ -155,6 +155,198 @@ def get_available_tools() -> List[Dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "get_weather_forecast",
+                "description": "농장 소재지의 기상청 단기예보(온도/습도/강수확률/강수형태/풍속/하늘상태)를 조회합니다. 농장/재배사/지역 날씨 질문에는 search_web 보다 이 도구를 우선 사용하세요. 농장 등록 주소의 기상청 격자 기반이라 즉시(1초 내) 정확한 예보를 반환합니다.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "farm_id": {
+                            "type": "string",
+                            "description": "농장 ID (선택사항 — 세션 농장 자동 적용)"
+                        },
+                        "house_id": {
+                            "type": "string",
+                            "description": "재배사 ID (선택사항)"
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "call_external_api",
+                "description": "관리자가 등록해 둔 외부 API를 호출합니다(GET 전용). api_name 없이 호출하면 사용 가능한 API 목록을 반환합니다. 전용 도구(get_weather_forecast 등)로 안 되는 외부 데이터가 필요할 때 목록을 먼저 확인 후 사용하세요.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "api_name": {
+                            "type": "string",
+                            "description": "등록된 API 이름 (생략 시 목록 조회)"
+                        },
+                        "params": {
+                            "type": "object",
+                            "description": "URL 템플릿의 {파라미터} 값들 (예: {\"area_no\":\"5218000000\"})"
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "manage_external_api",
+                "description": "외부 API 등록부 관리. list/get 은 누구나, register/update/disable 은 시스템관리자 전용. 사용자가 '○○ API를 등록해달라'고 하면 url_template(값 자리에 {파라미터}, 서버 키는 {ENV:환경변수명})과 설명으로 register 하세요. 등록 즉시 call_external_api 로 사용 가능 — 코드 변경 불필요.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["list", "get", "register", "update", "disable"],
+                            "description": "수행 작업"
+                        },
+                        "api_name": {
+                            "type": "string",
+                            "description": "API 이름 (소문자/숫자/밑줄)"
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "API 설명 (무엇을 반환하는지)"
+                        },
+                        "url_template": {
+                            "type": "string",
+                            "description": "전체 URL 템플릿. 예: https://apis.data.go.kr/...?serviceKey={ENV:KMA_API_KEY}&areaNo={area_no}"
+                        },
+                        "response_hint": {
+                            "type": "string",
+                            "description": "응답 해석 힌트 (선택)"
+                        }
+                    },
+                    "required": ["action"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "manage_system_knowledge",
+                "description": "시스템 자기지식(서버 구조·DB테이블/컬럼·로그·소스·도구 사용법) 관리. 서버를 분석하다 새로 알아낸 사실을 learn 으로 저장하면 이후 유사 질문 분석에 자동 회상·반영(코드 변경 불필요). 아는 지식 목록은 list, 삭제는 delete(시스템관리자 전용). 농장 재배/제어 노하우는 save_domain_knowledge, 질문 응대 방식은 manage_analysis_lesson 으로 구분.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": ["learn", "list", "delete", "audit"], "description": "수행 작업(audit=실제 스키마와 대조·자동갱신)"},
+                        "text": {"type": "string", "description": "learn 시 지식 본문 — 사실과 적용조건(어떤 질문일 때 어떤 테이블/도구/컬럼)이 드러나게"},
+                        "category": {"type": "string", "enum": ["db_schema", "logs", "source", "services", "tool_routing", "general"], "description": "지식 분류(기본 general)"},
+                        "knowledge_id": {"type": "string", "description": "delete 시 대상 id(sysk_...) — list 로 확인"}
+                    },
+                    "required": ["action"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "set_trading_strategy",
+                "description": "국내주식 자동매매 전략(철학) 설정. 농장주가 '앞으로 ~한 방식/철학으로 매매해줘, 이런 원칙으로 종목을 골라줘'처럼 주식 매매 전략·원칙·철학을 자연어로 말하면 strategy 에 그 원문을 담아 저장 — 즉시 활성 전략이 되어 다음 자동매매 스캔부터 반영(코드 변경 불필요). ⛔ 농장 재배/제어와 무관한 '주식 매매' 전략 전용.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "strategy": {"type": "string", "description": "매매 전략·철학 원문(자연어). 농장주 발화를 그대로 담되 판단 기준이 드러나게."},
+                        "name": {"type": "string", "description": "전략 이름(선택). 미지정 시 날짜로 자동 명명."}
+                    },
+                    "required": ["strategy"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "manage_analysis_lesson",
+                "description": "질문 분석 교훈 관리. 사용자가 '앞으로/다음부터 ~한 질문(요청)에는 ~하라'처럼 향후 질문 처리 방식을 가르치면 register 로 저장 — 등록 즉시 이후 모든 질문 분석에 자동 반영(코드 변경 불필요). '가르친 규칙/교훈 목록'은 list, 삭제는 delete(시스템관리자 전용).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["register", "list", "delete"],
+                            "description": "수행 작업"
+                        },
+                        "lesson_text": {
+                            "type": "string",
+                            "description": "register 시 교훈 본문 — 사용자 지시 원문을 그대로 담되 적용 조건(어떤 질문일 때)과 행동(무엇을 하라)이 드러나게"
+                        },
+                        "lesson_id": {
+                            "type": "string",
+                            "description": "delete 시 대상 교훈 ID (lesson_...)"
+                        }
+                    },
+                    "required": ["action"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "db_write_query",
+                "description": "DB 데이터/스키마 변경(관리자 전용). UPDATE·INSERT·DELETE·DDL(CREATE/ALTER/DROP/TRUNCATE) 전부 가능합니다. 반드시 db_describe_table 로 구조 확인 후 작성하세요. UPDATE/DELETE 는 변경 전 자동 백업(최대 5000행)되고 전건 감사기록이 남습니다. ⛔ 보호 테이블 4개만 차단: relay_l_recording/sensor_l_recording(제어·실측 원본), kakao_token_m(시크릿), db_write_audit(감사). 그 외 모든 테이블은 자유롭게 변경 가능.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "sql": {"type": "string", "description": "단일 UPDATE 또는 INSERT 문"},
+                        "reason": {"type": "string", "description": "변경 사유 (감사 기록용)"}
+                    },
+                    "required": ["sql"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "source_search",
+                "description": "농장 시스템 소스코드 전역 검색(읽기 전용). 특정 기능/문구가 어느 파일·줄에 있는지 찾을 때 사용. 결과는 파일:줄:내용 형식.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "검색어(고정 문자열, 2자 이상)"},
+                        "path": {"type": "string", "description": "검색 범위 디렉토리 (기본: 프로젝트 전체)"}
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "source_read",
+                "description": "소스 파일 내용 읽기(읽기 전용, 줄번호 포함, 1회 최대 400줄). source_search 로 찾은 위치의 코드를 분석·설명할 때 사용.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {"type": "string", "description": "프로젝트 상대 경로 (예: agri_ai_core/src/control/interlock.py)"},
+                        "start_line": {"type": "integer", "description": "시작 줄 (기본 1)"},
+                        "end_line": {"type": "integer", "description": "끝 줄 (기본 start+399)"}
+                    },
+                    "required": ["file_path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "source_list",
+                "description": "소스 파일 목록 조회(읽기 전용). 시스템 구조 파악이나 파일 위치 탐색에 사용.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "디렉토리 (기본: 프로젝트 루트)"},
+                        "pattern": {"type": "string", "description": "파일명 필터 (부분 일치)"}
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "control_relay",
                 "description": "재배사의 릴레이(장치)를 제어합니다. 단건 제어: device_name+action 사용. 일괄 제어: mode 사용 (reverse_all=전체반전, all_on=전체켜기, all_off=전체끄기). house_id='all'로 모든 재배사에 동시 일괄 제어 가능 (전 재배사 요청 시 사용). 사전 상태 조회 없이 즉시 제어 가능합니다.",
                 "parameters": {
@@ -228,43 +420,13 @@ def get_available_tools() -> List[Dict[str, Any]]:
                     "required": ["url"]
                 }
             }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "search_gas_price",
-                "description": "주유소·유가 정보 전용 API(Opinet)입니다. 주유소 찾기, 기름값, 유가, 휘발유·경유·LPG 가격, 주변 주유소, 최저가 주유소, 시도/시군구별 평균 유가 등 주유소 관련 질문에 이 도구를 사용하세요. search_web보다 정확한 실시간 유가 데이터를 제공합니다.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query_type": {
-                            "type": "string",
-                            "enum": ["avg_national", "avg_sido", "avg_sigun", "low_price"],
-                            "description": "조회 유형: avg_national=전국 평균, avg_sido=시도별 평균, avg_sigun=시군구별 평균, low_price=최저가 주유소 Top10"
-                        },
-                        "sido": {
-                            "type": "string",
-                            "description": "시도명 (예: '전북', '서울', '경기'). avg_sido/avg_sigun/low_price에서 사용"
-                        },
-                        "sigun": {
-                            "type": "string",
-                            "description": "시군구 코드 (예: '0605'=정읍시). avg_sigun에서 사용"
-                        },
-                        "fuel_name": {
-                            "type": "string",
-                            "description": "유종명 (예: '휘발유', '경유', 'LPG', '등유'). 미지정 시 휘발유"
-                        }
-                    },
-                    "required": ["query_type"]
-                }
-            }
         }
     ]
 
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# [Phase 1] 신규 관리 도구 스키마 — get_available_tools() 에 병합
+# 관리 도구 스키마 — get_available_tools() 에 병합
 # ════════════════════════════════════════════════════════════════════════════
 _ADMIN_TOOLS: List[Dict[str, Any]] = [
     {"type": "function", "function": {
@@ -275,6 +437,57 @@ _ADMIN_TOOLS: List[Dict[str, Any]] = [
             "mode": {"type": "string", "enum": _control_modes_enum()},
             "farm_id": {"type": "string", "description": "농장 ID (생략 시 기본 농장)"}
         }, "required": ["house_id", "mode"]}}},
+    {"type": "function", "function": {
+        "name": "set_admin_directive",
+        "description": ("관리자 강제 지시 등록 — 특정 장치를 지정 상태(ON/OFF)로 '해제 전까지' 강제 유지합니다. "
+                        "사용자가 '유지해라/계속 꺼둬라/재부팅 후에도/별도 지시 전까지' 등 지속 요청을 하면 "
+                        "control_relay(1회성)만으로는 자율 제어가 되돌리므로 반드시 이 도구를 호출하세요. "
+                        "등록 즉시 LLM/agent/비상가드 판단보다 우선 적용됩니다(물리 인터록만 예외)."),
+        "parameters": {"type": "object", "properties": {
+            "house_id": {"type": "string", "description": "'1','2','3' 또는 'all'"},
+            "device_name": {"type": "string", "description": "수온히터/포그생성/배수밸브/흡입팬/배출팬/조명/관수/순환밸브/흡입밸브/배출밸브 또는 시멘틱 flag"},
+            "state": {"type": "string", "enum": ["ON", "OFF"]},
+            "note": {"type": "string", "description": "지시 사유 (사용자 요청 요약)"},
+            "farm_id": {"type": "string"}
+        }, "required": ["house_id", "device_name", "state"]}}},
+    {"type": "function", "function": {
+        "name": "release_admin_directive",
+        "description": ("관리자 강제 지시 해제 — 강제 유지 중인 장치를 자율 제어(LLM 판단)로 복귀시킵니다. "
+                        "사용자가 '이제 풀어라/자동으로 돌려라/유지 해제' 요청 시 호출하세요."),
+        "parameters": {"type": "object", "properties": {
+            "house_id": {"type": "string", "description": "'1','2','3' 또는 'all'"},
+            "device_name": {"type": "string"},
+            "farm_id": {"type": "string"}
+        }, "required": ["house_id", "device_name"]}}},
+    {"type": "function", "function": {
+        "name": "db_list_tables",
+        "description": "시스템 DB(public 스키마)의 전체 테이블 목록과 추정 행수를 조회합니다. 사용자가 '어떤 테이블/데이터가 있나' 물으면 먼저 호출하세요.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "db_describe_table",
+        "description": "특정 테이블의 컬럼 구조(이름/타입/널허용)를 조회합니다. db_read_query 작성 전 구조 파악에 사용하세요.",
+        "parameters": {"type": "object", "properties": {
+            "table_name": {"type": "string"}
+        }, "required": ["table_name"]}}},
+    {"type": "function", "function": {
+        "name": "db_read_query",
+        "description": ("읽기전용 SELECT 쿼리를 실행해 시스템 데이터를 직접 조회합니다(최대 200행, 5초 제한). "
+                        "기존 전용 도구(get_farm_realtime_data 등)로 안 되는 임의 데이터 질문에 사용. "
+                        "쓰기/DDL 은 자동 거부됩니다."),
+        "parameters": {"type": "object", "properties": {
+            "sql": {"type": "string", "description": "단일 SELECT/WITH 문"},
+            "limit": {"type": "integer", "description": "최대 행수 (기본 50, 상한 200)"}
+        }, "required": ["sql"]}}},
+    {"type": "function", "function": {
+        "name": "manage_control_prompt",
+        "description": ("농장제어/agent LLM 의 시스템 프롬프트(control_prompt_m)를 조회·갱신합니다. "
+                        "action=list(블록 목록)|get(본문 조회)|update(본문 교체, 관리자 전용, 즉시 반영). "
+                        "사용자가 제어 룰/프롬프트 변경을 요청하면 get 으로 현재 본문 확인 후 update 하세요."),
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["list", "get", "update"]},
+            "block_id": {"type": "string"},
+            "body_text": {"type": "string", "description": "update 시 새 본문 전문"}
+        }, "required": ["action"]}}},
     {"type": "function", "function": {
         "name": "set_growth_stage",
         "description": "재배사의 생육단계를 변경합니다(발아기/생육기/수확기/휴지기). 사용자 요청이 있을 때만 호출하세요.",
@@ -306,22 +519,156 @@ _ADMIN_TOOLS: List[Dict[str, Any]] = [
         }, "required": ["action", "house_id", "unit_type"]}}},
     {"type": "function", "function": {
         "name": "override_ai_thresholds",
-        "description": "AI 환경제어 임계값을 조회하거나 런타임에 일시 조정. action=get/set/reset. 현재는 런타임 메모리에만 저장되며 영속 반영은 추후 연동.",
+        "description": "재배사별 환경 임계값(SENSOR_M_SETTING)을 조회(get)/변경(set)/초기화(reset). set 은 DB 즉시 반영되어 다음 제어 사이클부터 적용. 사용자가 'CO2는 2000 넘지 않게', '온도 상한을 30도로' 처럼 기준값 변경을 지시하면 set 호출 (예: key=CO2_HIGH value=2000). house_id 'all'=전 재배사.",
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["get", "set", "reset"]},
-            "key": {"type": "string", "description": "TEMP_LOW/TEMP_HIGH/HUMIDITY_LOW/CO2_HIGH 등"},
-            "value": {"type": "number"}
+            "key": {"type": "string", "description": "TEMP_LOW/TEMP_HIGH/TEMP_CRITICAL_LOW/TEMP_CRITICAL_HIGH/HUMIDITY_LOW/HUMIDITY_HIGH/HUMIDITY_CRITICAL_LOW/HUMIDITY_CRITICAL_HIGH/CO2_LOW/CO2_HIGH/CO2_CRITICAL_HIGH/WATER_TEMP_LOW/WATER_TEMP_HIGH/WATER_TEMP_CRITICAL_LOW/WATER_TEMP_CRITICAL_HIGH/BUDDING_TEMP_LOW/BUDDING_TEMP_HIGH"},
+            "value": {"type": "number", "description": "set 시 새 값"},
+            "house_id": {"type": "string", "description": "재배사 번호 또는 'all'(기본 — 전 재배사)"}
         }, "required": ["action"]}}},
+    {"type": "function", "function": {
+        "name": "set_alert_interval",
+        "description": "카카오톡 알림 발송 최소 간격(분)을 설정합니다. ⛔ 제어와 채팅 알림은 그대로 유지되고 카카오 발송 빈도만 낮춥니다 — '제어는 계속하되 카카오 알림만 N시간마다' 요구에 사용. farm_id 지정 시 그 농장 전체 구독(자율제어 구독 포함)에 일괄 적용. 예: '알림을 2시간마다로' → interval_min=120. interval_min=0 은 쿨다운 해제(매번).",
+        "parameters": {"type": "object", "properties": {
+            "interval_min": {"type": "integer", "description": "카카오 발송 최소 간격(분). 2시간=120, 해제=0"},
+            "farm_id": {"type": "string", "description": "농장 전체 적용(기본 — 세션 농장 자동)"},
+            "subscription_id": {"type": "integer", "description": "특정 구독만 적용(선택)"}
+        }, "required": ["interval_min"]}}},
+    {"type": "function", "function": {
+        "name": "edit_source",
+        "description": "운영 소스(agri_ai_core)를 변경합니다. 반드시 source_read 로 현재 전문을 확인한 뒤 전문을 넘기세요. 구문 검증 → 쓰기 → pytest 순으로 진행하며 **테스트 실패 시 자동 원복**됩니다. 성공해도 서비스 반영은 restart_service 를 따로 호출해야 합니다. ⛔ 안전장치(인터록·비상가드·수온안전·관리자지시·보호테이블·스크립트/서비스 경계·이 도구 자신)와 시크릿은 변경 불가 — 필요하면 농장주에게 요청하세요.",
+        "parameters": {"type": "object", "required": ["path", "content"], "properties": {"path": {"type": "string", "description": "프로젝트 상대경로 (.py). 예: agri_ai_core/src/ai/tools_logs.py"}, "content": {"type": "string", "description": "파일 전문(부분 패치 아님). source_read 로 현재 내용을 먼저 확인하라"}, "reason": {"type": "string", "description": "변경 사유"}, "test_target": {"type": "string", "description": "검증할 테스트 경로(기본 tests/ 전체)"}}}}},
+    {"type": "function", "function": {
+        "name": "revert_source",
+        "description": "소스 변경을 감사기록의 '변경 전' 내용으로 되돌립니다. 변경 후 문제가 발견됐을 때 사용.",
+        "parameters": {"type": "object", "required": ["audit_id"], "properties": {"audit_id": {"type": "integer", "description": "list_source_edits 의 감사기록 id"}, "reason": {"type": "string"}}}}},
+    {"type": "function", "function": {
+        "name": "list_source_edits",
+        "description": "최근 소스 변경 이력(경로·사유·테스트통과·원복여부). revert_source 대상 확인용.",
+        "parameters": {"type": "object", "properties": {"limit": {"type": "integer", "description": "기본 10, 최대 50"}}}}},
+    {"type": "function", "function": {
+        "name": "get_server_resources",
+        "description": "농장관리 서버의 실제 리소스를 조회합니다 — CPU(코어·사용률·부하평균), 메모리(RAM·스왑), 디스크(경로별 사용량·여유), GPU(모델·메모리·사용률·온도), agri_ai_core 서비스 가동 상태. ⛔ '서버 리소스/상태', 'CPU·메모리·디스크·GPU 어때', '서버 점검' 류 질문은 반드시 이 도구를 쓰세요 — search_web 은 우리 서버 상태를 알 수 없어 일반론 기사만 나옵니다(2026-07-17 실제 오답 사례).",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "restart_service",
+        "description": "서비스를 재기동하고 헬스체크합니다(실패 시 1회 자동 재시도). 서비스가 죽었거나 응답이 없을 때 사용. ⛔ 정지(stop)는 제공하지 않습니다 — 농장 무제어 방지. PostgreSQL/ChromaDB 는 연쇄영향으로 대상에서 제외됩니다.",
+        "parameters": {"type": "object", "required": ["service_no"], "properties": {"service_no": {"type": "integer", "description": "1=Ollama 4=Scheduler 5=FastAPI 16=Agent Monitor 17=Agent Worker 19=Event Listener"}, "reason": {"type": "string", "description": "재기동 사유"}}}}},
+    {"type": "function", "function": {
+        "name": "service_status",
+        "description": "특정 서비스의 현재 상태(헬스체크) 조회.",
+        "parameters": {"type": "object", "required": ["service_no"], "properties": {"service_no": {"type": "integer"}}}}},
+    {"type": "function", "function": {
+        "name": "list_services",
+        "description": "agriAiCore 에 등록된 **전체 서비스**의 가동 상태 — 사용자 서비스(Scheduler·FastAPI·Web/Shop Backend·Agent Monitor/Worker·Event Listener·Camera), 시스템 서비스(Nginx), 패키지 서비스(Ollama·PostgreSQL·ChromaDB·SearXNG·ChromaFlow) 15개. '서비스 상태 확인/보고', '어떤 서비스가 돌고 있나', '시스템 서비스 점검' 류 질문에 사용. restartable=true 인 것만 restart_service 로 재기동 가능합니다. CPU/메모리/디스크/GPU 까지 필요하면 get_server_resources 를 쓰세요.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "write_script",
+        "description": "python 분석 스크립트를 작성/수정합니다(scripts/llm/ 한정). 전용 도구·db_read_query 로 안 되는 계산·집계·가공이 필요할 때 직접 짜서 run_script 로 실행하세요. 작성 전 구문 검증되어 깨진 코드는 저장되지 않습니다. 운영 소스(agri_ai_core)는 이 도구로 못 바꿉니다.",
+        "parameters": {"type": "object", "required": ["script", "content"], "properties": {"script": {"type": "string", "description": "파일명 (.py). scripts/llm/ 안에만 가능"}, "content": {"type": "string", "description": "python 소스 전문. 작성 전 구문 검증됨"}, "reason": {"type": "string", "description": "작성 사유"}}}}},
+    {"type": "function", "function": {
+        "name": "run_script",
+        "description": "작성한 스크립트를 실행하고 stdout/stderr 를 돌려줍니다(sudo 없음, timeout 제한). 실패하면 stderr 를 읽고 write_script 로 고쳐 재시도하세요.",
+        "parameters": {"type": "object", "required": ["script"], "properties": {"script": {"type": "string", "description": "실행할 파일명 (.py)"}, "args": {"type": "array", "items": {"type": "string"}, "description": "명령행 인자(선택)"}, "timeout": {"type": "integer", "description": "초 (기본 60, 최대 300)"}, "reason": {"type": "string", "description": "실행 사유"}}}}},
+    {"type": "function", "function": {
+        "name": "list_scripts",
+        "description": "scripts/llm/ 의 스크립트 목록(이름·크기·수정시각).",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "read_script",
+        "description": "스크립트 본문을 읽습니다. 수정 전 현재 내용 확인용.",
+        "parameters": {"type": "object", "required": ["script"], "properties": {"script": {"type": "string"}}}}},
+    {"type": "function", "function": {
+        "name": "mcp_call",
+        "description": "등록된 MCP 서버의 도구를 직접 호출합니다. 웹/지역/쇼핑/지식iN 검색(naver-search 21종), 학술논문 검색·다운로드(paper-search 57종 — arxiv/pubmed/semantic scholar), 파일·로그 읽기(filesystem), 메타검색(searxng) 등 전용 도구로 못 하는 일에 사용. args 를 모르면 mcp_list_tools(server=...) 로 먼저 스키마를 확인하세요. 예: 상황버섯 재배 논문 → server='paper-search', tool='search_arxiv', args={'query':'Phellinus linteus cultivation'}. 예: 정읍 농자재상 → server='naver-search', tool='search_local', args={'query':'정읍 농자재'}.",
+        "parameters": {"type": "object", "required": ["server", "tool"], "properties": {"server": {"type": "string", "description": "MCP 서버명 (naver-search, paper-search, filesystem, searxng 등)"}, "tool": {"type": "string", "description": "그 서버의 도구명"}, "args": {"type": "object", "description": "도구 인자 (스키마는 mcp_list_tools 로 확인)"}, "timeout": {"type": "integer", "description": "초 (기본 45, 최대 120)"}}}}},
+    {"type": "function", "function": {
+        "name": "mcp_list_tools",
+        "description": "등록된 MCP 서버 목록과 각 서버의 도구·스키마를 조회합니다. server 생략 시 서버 이름만, 지정 시 그 서버의 도구 전체. mcp_call 호출 전에 도구명·인자를 확인하는 용도.",
+        "parameters": {"type": "object", "properties": {"server": {"type": "string", "description": "생략 시 서버 목록, 지정 시 그 서버의 도구 상세"}}}}},
+    {"type": "function", "function": {
+        "name": "manage_mcp_server",
+        "description": "MCP 서버를 스스로 추가/제거/확인합니다(.vscode/mcp.json 직접 등록 — 코드·재기동 불필요). 사용자가 '○○ MCP 를 추가/등록해달라'고 하면 이 도구로 add 하세요. add 후 mcp_call/mcp_list_tools 로 즉시 사용 가능. action: list(등록 목록), get(설정 조회), add/update(추가·수정), remove(제거), test(연결·도구 확인). stdio 서버는 command(런처)+args, HTTP 서버는 url 로 등록. API 키 등 시크릿은 env 에 '${환경변수명}' 플레이스홀더로 넣으세요(평문 금지). 예: add name='time', command='uvx', args=['mcp-server-time']. 등록/제거는 시스템관리자 전용.",
+        "parameters": {"type": "object", "required": ["action"], "properties": {
+            "action": {"type": "string", "enum": ["list", "get", "add", "update", "remove", "test"], "description": "수행 동작"},
+            "name": {"type": "string", "description": "서버 이름(영문/숫자로 시작, 2~60자). list 외 필수"},
+            "command": {"type": "string", "description": "stdio 런처: npx/uvx/uv/python/node/deno/bunx/docker 중 하나"},
+            "args": {"type": "array", "items": {"type": "string"}, "description": "command 인자 배열 (예: ['mcp-server-time'])"},
+            "env": {"type": "object", "description": "환경변수 {키:값}. 시크릿은 '${VAR}' 형태 플레이스홀더 권장"},
+            "url": {"type": "string", "description": "HTTP 형 MCP 서버 URL(command 대신)"},
+            "transport": {"type": "string", "description": "url 형의 전송 타입(기본 http)"}
+        }}}},
+    {"type": "function", "function": {
+        "name": "remote_status",
+        "description": "원격 서버에 SSH(키 인증)로 접속해 종합 상태를 이 서버처럼 조회합니다 — 호스트·가동시간·부하·CPU·메모리·디스크·상위 프로세스·서비스(running/failed)·GPU. 전부 read-only. 사용자가 '○○ 서버 상태 봐줘', '원격 서버 리소스 확인'을 요청하면 사용. host 는 등록이름(manage_remote_host) 또는 'user@host:port'.",
+        "parameters": {"type": "object", "required": ["host"], "properties": {
+            "host": {"type": "string", "description": "등록이름 또는 user@host:port"}}}}},
+    {"type": "function", "function": {
+        "name": "remote_run",
+        "description": "원격 서버에서 명령을 실행합니다. 조회 명령(cat/df/ps/systemctl status/journalctl 등)은 즉시 실행, 변경성 명령(rm/systemctl restart/설치 등)은 실행하지 않고 관리자 카카오 승인요청 후 승인 시에만 집행합니다.",
+        "parameters": {"type": "object", "required": ["host", "command"], "properties": {
+            "host": {"type": "string", "description": "등록이름 또는 user@host:port"},
+            "command": {"type": "string", "description": "실행할 셸 명령"}}}}},
+    {"type": "function", "function": {
+        "name": "compare_remote_sources",
+        "description": "두 재배사 라즈베리파이의 소스(농장관리 프로그램)를 결정적으로 비교. host_a·host_b 만 주면 각 호스트의 소스 경로를 자동탐지(1·3호=~/FarmUnits, 2호=~/SmartFarm)해 한쪽에만 있는 파일과 이름 같고 내용 다른 파일을 정확히 반환(LLM 대조 불필요). 경로는 자동이라 보통 지정 불필요(필요시 path_a/path_b). 소스 비교·틀린 파일·재배사 프로그램 차이 요청에 1순위.",
+        "parameters": {"type": "object", "required": ["host_a", "host_b"], "properties": {
+            "host_a": {"type": "string", "description": "비교 대상 A(예: jaebaesa1)"},
+            "host_b": {"type": "string", "description": "비교 대상 B(예: jaebaesa3)"},
+            "path": {"type": "string", "description": "소스 루트(기본 ~/FarmUnits, 2호는 ~/SmartFarm)"},
+            "pattern": {"type": "string", "description": "파일 패턴(기본 *.py)"},
+            "show_diff": {"type": "boolean", "description": "내용 다른 파일의 라인 diff 첨부(선택)"}}}}},
+    {"type": "function", "function": {
+        "name": "manage_remote_host",
+        "description": "원격 서버 접속정보 등록부. action: list/get/register/remove. register 시 name·host_spec('user@host:port')·identity_path(SSH 키 경로, 선택). 등록/삭제는 시스템관리자. 등록 후 remote_status/remote_run 에서 name 으로 참조. SSH 키 인증만 사용.",
+        "parameters": {"type": "object", "required": ["action"], "properties": {
+            "action": {"type": "string", "enum": ["list", "get", "register", "remove"]},
+            "name": {"type": "string", "description": "호스트 별칭"},
+            "host_spec": {"type": "string", "description": "user@host:port"},
+            "identity_path": {"type": "string", "description": "SSH 개인키 경로(선택)"}}}}},
+    {"type": "function", "function": {
+        "name": "approve_remote_command",
+        "description": "보류된 변경성 원격 명령(remote_run 이 승인요청한 것)을 승인·집행합니다(시스템관리자 전용).",
+        "parameters": {"type": "object", "required": ["request_id"], "properties": {
+            "request_id": {"type": "integer", "description": "승인할 요청 id"}}}}},
+    {"type": "function", "function": {
+        "name": "search_logs",
+        "description": "운영 로그를 검색·분석합니다(읽기 전용). 사용자가 '오늘 에러 있었나', '○○ 로그 보여줘', 'LLM 실패 몇 건', '무슨 일이 있었나'처럼 시스템에서 실제 일어난 일을 물으면 반드시 이 도구를 사용하세요 — 추측 금지. matched 가 전체 매칭 건수이므로 '몇 건' 질문은 그 값으로 답하세요. 로그가 3GB 규모라 전체 읽기는 불가하며 검색/필터로만 접근합니다.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "검색어. 공백으로 나눈 여러 단어는 AND 조건 (예: '순환밸브 relay_10')"},
+            "level": {"type": "string", "enum": ["ERROR", "WARNING", "INFO", "DEBUG", "CRITICAL"], "description": "로그 레벨 필터. '에러/오류' 질문이면 ERROR"},
+            "date": {"type": "string", "description": "'today' 또는 'YYYY-MM-DD'. 생략 시 최신 로그"},
+            "log_type": {"type": "string", "description": "로그 종류. 기본 'ai'(제어/AI). 예: ai, web, scheduler, api. 모르면 list_log_files 로 확인"},
+            "max_results": {"type": "integer", "description": "반환 줄수 (기본 50, 최대 200)"}
+        }}}},
+    {"type": "function", "function": {
+        "name": "list_log_files",
+        "description": "조회 가능한 로그 파일 목록(이름·크기·최종수정)을 반환합니다. search_logs 의 log_type/date 를 정하기 어려울 때 먼저 호출하세요.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "set_alert_level",
+        "description": "카카오톡 알림 발송 최소 심각도를 설정합니다. ⛔ 제어와 채팅 알림은 그대로 유지되고 카카오 발송만 걸러집니다 — '심각한 문제일 때만 알려줘'(critical), '경고 이상만'(warning), '전부 알려줘'(info) 요구에 사용. 비상(critical) 알림은 어떤 설정에서도 항상 즉시 발송됩니다.",
+        "parameters": {"type": "object", "properties": {
+            "level": {"type": "string", "enum": ["info", "warning", "critical"],
+                      "description": "info=전부, warning=경고 이상, critical=심각한 것만"}
+        }, "required": ["level"]}}},
     {"type": "function", "function": {
         "name": "get_system_status",
         "description": "시스템 현재 운영 상태를 종합 조회합니다. 각 재배사의 제어모드·생육단계·AI순환루프 상태·등록된 APScheduler Job 등을 반환. 사용자가 '현재 시스템 상황/제어방식/스케줄이 어떻게 돌아가는지' 물으면 반드시 이 도구를 호출하세요.",
         "parameters": {"type": "object", "properties": {
             "farm_id": {"type": "string"}
         }}}},
-    # ─── [Phase 4] Agent 모니터링 도구 ───
+    {"type": "function", "function": {
+        "name": "get_camera_view",
+        "description": "지정한 재배사의 카메라 현재 프레임을 실제로 촬영하고 gemma3 비전+색상/곰팡이 휴리스틱으로 판독해 반환합니다. 사용자가 '카메라에 뭐가 보여', '재배사 지금 영상 어때', '곰팡이/오염 있는지 봐줘', '균상 상태 확인'처럼 현재 영상 상태를 물을 때 호출하세요. 촬영 실패(원격 보드 미응답) 시 실패 사유를 정직하게 반환합니다.",
+        "parameters": {"type": "object", "properties": {
+            "farm_id": {"type": "string"},
+            "house_id": {"type": "string", "description": "재배사 번호(필수, 0/all 불가 — 카메라는 특정 재배사)"}
+        }, "required": ["house_id"]}}},
+    # ─── Agent 모니터링 도구 ───
     {"type": "function", "function": {
         "name": "schedule_monitor",
-        "description": "사용자가 지정한 시간대에 주기적으로 재배사를 감시하는 Agent 모니터링 Job을 등록합니다. 이상(온도·습도·CO2 임계 이탈) 감지 시 채팅 알림을 자동 발행합니다. 사용자가 '○시부터 ○시까지 ○분마다 감시해줘', '오늘 밤 재배사 모니터링해줘' 등 시간 기반 감시를 요청할 때 반드시 호출하세요. 스케줄 강제 제어가 아닌, 관찰+알림 기반 개입 방식입니다.",
+        "description": "사용자가 지정한 시간대에 재배사 센서 임계치 이탈을 단순 감시하는 Job을 등록합니다. 이상(온도·습도·CO2 임계 이탈) 감지 시 채팅 알림을 자동 발행합니다. LLM ReAct 판단, 판단 근거 보고, 릴레이 제어값 보고는 수행하지 않습니다. 사용자가 '야간 저온 이상만 감시해줘', 'CO2 임계치 넘으면 알려줘'처럼 단순 이상 감지를 요청할 때 호출하세요. '○분마다 분석/보고/판단근거/릴레이 제어값' 요청은 agent_subscribe 를 사용해야 합니다.",
         "parameters": {"type": "object", "properties": {
             "intent": {"type": "string", "description": "사용자 의도 한 줄 (알림 메시지에 포함, 예: '야간 저온 감시')"},
             "start_time": {"type": "string", "description": "시작 시각 ('HH:MM' 또는 'YYYY-MM-DD HH:MM')"},
@@ -341,13 +688,14 @@ _ADMIN_TOOLS: List[Dict[str, Any]] = [
         "parameters": {"type": "object", "properties": {
             "job_id": {"type": "string"}
         }, "required": ["job_id"]}}},
-    # ─── [B 단계 · 2026-05-25] 반복 Agent 구독 ───
+    # ─── 반복 Agent 구독 ───
     {"type": "function", "function": {
         "name": "agent_subscribe",
         "description": (
             "사용자 채팅 요청을 받아 ai_monitor_agent (ReAct) 를 반복 실행하는 구독을 등록합니다. "
-            "사용자가 '○분/○시간마다 분석/모니터링/감시', '매 시간 ○호기 봐줘' 등 "
-            "*반복 + ReAct 다단계 분석* 의도를 보일 때 호출. "
+            "사용자가 '○분/○시간마다 분석/모니터링/감시', '매 시간 ○호기 봐줘', "
+            "'센서값·판단 근거·릴레이 제어값을 반복 보고' 등 "
+            "*반복 + ReAct 다단계 분석/보고* 의도를 보일 때 호출. "
             "결과는 매 사이클 agent_user_alerts 큐에 적재되어 채팅창으로 전달. "
             "schedule_monitor (단순 임계값 체크) 와 다름. 5분~24시간 주기, 사용자당 5건 한도."),
         "parameters": {"type": "object", "properties": {
@@ -387,7 +735,7 @@ _ADMIN_TOOLS: List[Dict[str, Any]] = [
             "limit": {"type": "integer", "description": "최대 알림 수 (기본 10, max 50)"},
             "mark_read": {"type": "boolean", "description": "조회 후 read 처리 (기본 true)"}
         }}}},
-    # ─── [A 단계 · 2026-05-25] Agent 즉시 1회 분석 ───
+    # ─── Agent 즉시 1회 분석 ───
     {"type": "function", "function": {
         "name": "agent_one_shot",
         "description": (
@@ -421,9 +769,9 @@ _original_get_available_tools = get_available_tools
 
 
 # ────────────────────────────────────────────────────────────────────
-# [프롬프트 자동화 · Phase 3-(3)] 도구 목록 — DB 우선 / 코드 폴백.
+# 도구 목록 — DB 우선 / 코드 폴백.
 # 환경변수 USE_DB_TOOLS=1 일 때 prompt_registry.get_tools() 우선 사용.
-# DB 비어있거나 예외 시 기존 hard-coded 흐름으로 자동 폴백 (영향 0).
+# DB 비어있거나 예외 시 코드 정의 도구로 자동 폴백.
 # ────────────────────────────────────────────────────────────────────
 def get_available_tools() -> List[Dict[str, Any]]:  # type: ignore[no-redef]
     import os as _os
@@ -505,7 +853,7 @@ def get_system_prompt_with_tools(farm_name: str = None, farm_info: str = None, s
    - **AI vs 알고리즘 제어값 비교**: `get_farm_realtime_data` 응답의 `ai_environment_judgment`에 알고리즘이 권장하는 릴레이 상태가 포함됩니다. 현재 릴레이(relay_mapping)와 비교하여 차이점을 분석하세요. 릴레이/제어값 비교 질문에는 `search_farm_knowledge` 대신 반드시 `get_farm_realtime_data`를 사용하세요.
 2. **학습데이터 삭제 요청** ("삭제", "지워", "제거" + 파일명): 반드시 `delete_farm_knowledge` 도구를 즉시 호출합니다. 확인 질문 없이 바로 실행하세요. farm_id는 현재 사용자의 농장 ID를 사용합니다. 삭제 결과(success/deleted_count)를 그대로 안내하세요. **삭제 완료 후 `search_farm_knowledge`를 재호출하여 확인하지 마세요** — 재검색 결과에는 웹 지식(web_knowledge) 항목이 포함될 수 있어 삭제 실패로 오인할 수 있습니다.
 2-1. 파일/문서/학습/RAG/데이터/요약/내용/정리 관련 질문: `search_farm_knowledge` 반드시 사용합니다. 파일명이 포함된 질문은 해당 파일명을 query와 file_name 파라미터에 넣어 반드시 검색합니다. "없다/모른다" 답변 전에 반드시 도구로 검색해야 합니다. 파일 목록 응답의 `file_list[].farm_scope` 값을 반드시 표시하세요 — "시스템 농장"은 전체 공용 데이터, "농장ID:xxx"는 해당 농장 전용 데이터입니다. 현재 대화 농장명으로 farm_scope를 추측하거나 변경하지 마세요.
-3. 사실·조사·검색 요청(주소/가격/찾아줘/알아봐줘/설명해줘/알려줘): `search_farm_knowledge` → 부족하면 `search_web` 사용합니다. 도구 없이 추측 답변은 절대 금지합니다. 단, 전용 도구가 있는 경우(예: `search_gas_price`) 전용 도구를 우선 사용합니다.
+3. 사실·조사·검색 요청(주소/가격/찾아줘/알아봐줘/설명해줘/알려줘): `search_farm_knowledge` → 부족하면 `search_web` 사용합니다. 도구 없이 추측 답변은 절대 금지합니다.
 5. 일반 정보(날씨/뉴스/환율/맛집/최신): `search_web` 반드시 사용합니다.
 6. 인사/감정/의견/일상대화: 도구 없이 응답 가능합니다. 단, "파일/학습/자료/문서/리스트/목록"이 포함된 질문은 반드시 `search_farm_knowledge`를 사용하세요. 이전 대화에서 비슷한 답변을 했더라도 반드시 도구로 다시 검색하세요.
    - 사용자가 이전 대화의 단순 감상/소감을 물으면 [직전 대화 맥락]을 참고하여 도구 없이 답변할 수 있습니다.

@@ -1,10 +1,9 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# AI 환경제어 — 최근 raw 시계열 모듈 (M19, [2026-04-28])
+# AI 환경제어 — 최근 raw 시계열 모듈 (M19)
 #
-# 사용자 요구: "최근 데이터부터 3분 주기 20개 레코드를 LLM 에게 전달."
-# 현재 _detect_trend 가 deque 30회의 분당 변화율 한 줄만 LLM 에 제공 → LLM 이
-# raw 시계열을 보지 못함. 본 모듈은 SENSOR_L_RECORDING 에서 N분 bucket 마다
-# 가장 최근 1건씩 K개를 추출해 LLM user prompt 에 직접 노출한다.
+# _detect_trend 의 분당 변화율 한 줄 요약과 별개로 LLM 이 raw 시계열을 직접
+# 보도록, SENSOR_L_RECORDING 에서 N분 bucket 마다 가장 최근 1건씩 K개
+# (기본 3분 주기 20개)를 추출해 LLM user prompt 에 직접 노출한다.
 #
 # 기본값 (환경변수로 외부화 — 하드코딩 금지):
 #   AI_TS_INTERVAL_MIN  = 3   분 단위 bucket

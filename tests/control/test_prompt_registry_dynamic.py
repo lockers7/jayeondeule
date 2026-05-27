@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════════════════
-# Phase 3-b 단위테스트 — prompt_registry 캐시 invalidate 정책 변경.
+# 단위테스트 — prompt_registry 캐시 updt_dttm invalidate 정책 검증.
 #
 # 검증 (block):
 #   1) 첫 호출 — DB 로드 + 캐시 저장

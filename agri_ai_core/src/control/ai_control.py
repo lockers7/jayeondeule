@@ -27,6 +27,11 @@ from datetime import datetime
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.config import get_ollama_url, get_model_name
+from agri_ai_core.src.ai.llm_runtime_guard import (
+    LlmCallLockTimeout,
+    llm_activity,
+    llm_call_lock,
+)
 from agri_ai_core.src.utils.json_utils import safe_json_load
 from agri_ai_core.src.utils.http_client import http_json_request
 from agri_ai_core.src.utils.error_utils import log_and_return
@@ -45,18 +50,17 @@ from agri_ai_core.src.control.control_common import (
     SEMANTIC_LABELS,
     CIRCULATION_MODES,
 )
-# [2026-04-28 rev2] 임계값은 ai_thresholds.get_thresholds() 또는 인자 ts 사용
-from agri_ai_core.src.control.manual_control import (
-    _execute_control, _apply_fog_coupling, _determine_environment_action,
-)
-# [2026-04-28 신규] AI 환경제어 컨텍스트 확장 — 모든 신규 모듈은 단방향 의존이며
+# 임계값은 ai_thresholds.get_thresholds() 또는 인자 ts 사용
+from agri_ai_core.src.control.manual_control import _execute_control
+from agri_ai_core.src.control.environment_logic import apply_water_safety
+from agri_ai_core.src.control.relay_manager import set_relay_value
+# AI 환경제어 컨텍스트 확장 — 모든 모듈은 단방향 의존이며
 # 모든 호출은 try/except 보호되어 실패 시 빈 문자열 반환 → 기존 LLM 흐름 보존.
 from agri_ai_core.src.control.ai_history_context import format_history_block
 from agri_ai_core.src.control.ai_rag_context import (
     query_similar_periods, format_rag_block,
 )
 from agri_ai_core.src.control.ai_step_logger import AiStepLogger
-from agri_ai_core.src.control.ai_algorithm_reference import format_algorithm_reference
 from agri_ai_core.src.control.ai_decision_log import (
     record_decision as _record_ai_decision,
     get_recent as _get_recent_ai_decisions,
@@ -87,9 +91,9 @@ from agri_ai_core.src.control.ai_atm_stagnation import (
     get_atm_stagnation as _get_atm_stagnation,
     format_atm_stagnation_block as _format_atm_stagnation_block,
 )
-# [변경10 · 2026-04-30] ai_control 의 즉석 Vision LLM 호출 제거 — ai_camera_archive
-# 가 매시간 정각에 캡처+Vision+RAG 처리하므로 read_recent_history(DB) 만 사용.
-# 환경제어 사이클에서 60초 vision LLM 큐 점유 회피 → 채팅 응답 지연 해소.
+# 즉석 Vision LLM 호출 없음 — ai_camera_archive 가 매시간 정각에
+# 캡처+Vision+RAG 처리하므로 read_recent_history(DB) 만 사용.
+# 환경제어 사이클에서 60초 vision LLM 큐 점유 회피 (채팅 응답 지연 방지).
 from agri_ai_core.src.control.ai_camera_archive import (
     read_recent_history, format_image_history_block,
 )
@@ -109,28 +113,59 @@ from agri_ai_core.src.control.ai_seasonality import (
 from agri_ai_core.src.control.ai_power_usage import (
     get_power_usage_24h, format_power_block,
 )
-# [2026-04-28] 최근 raw 시계열 (3분 간격 20건) — LLM 에 직접 노출
+# 최근 raw 시계열 (3분 간격 20건) — LLM 에 직접 노출
 from agri_ai_core.src.control.ai_recent_timeseries import (
     get_recent_samples as _get_recent_samples,
     format_recent_block as _format_recent_ts_block,
 )
-# [2026-04-28 rev4] 모듈 레벨 import — _validate_safety 가드 테스트 monkeypatch 지원
+# 모듈 레벨 import — _validate_safety 가드 테스트 monkeypatch 지원
 from agri_ai_core.src.control.ai_thresholds import get_thresholds
 
 logger = setup_logger(__name__)
 
 # ══════════════════
 # 설정 (환경제어 LLM 전용 — 사용자 대화 LLM 과 분리)
-# [2026-04-28 rev3] 사용자 요구: "정확한 판단 우선, 시간 무관" — 토큰·컨텍스트 확장
+# "정확한 판단 우선, 시간 무관" 정책 — 토큰·컨텍스트 확장
 # ══════════════════
-AI_CONTROL_TIMEOUT     = int(os.getenv("AI_CONTROL_TIMEOUT",     "600"))   # [2026-05-04] 180→600s — Ollama 큐 대기 후에도 응답 수신 가능. 제어 결정 지연 허용(사용자 정책).
+AI_CONTROL_TIMEOUT     = int(os.getenv("AI_CONTROL_TIMEOUT",     "600"))   # Ollama 큐 대기 후에도 응답 수신 가능 — 제어 결정 지연 허용 정책.
 AI_PROXIMITY_RATIO     = float(os.getenv("AI_PROXIMITY_RATIO",   "0.8"))
-AI_CONTROL_NUM_PREDICT = int(os.getenv("AI_CONTROL_NUM_PREDICT", "400"))   # [2026-05-04] 1500 → 400 (실응답 <200토큰 · GPU 점유시간 단축)
+AI_CONTROL_NUM_PREDICT = int(os.getenv("AI_CONTROL_NUM_PREDICT", "400"))   # 실응답 <200토큰 · GPU 점유시간 단축
 AI_CONTROL_NUM_CTX     = int(os.getenv("AI_CONTROL_NUM_CTX",     "16384")) # 모델 기본 4096 → 16k (raw 시계열 + 다중 컨텍스트 수용)
+AI_CONTROL_LLM_LOCK_WAIT = int(os.getenv("AI_CONTROL_LLM_LOCK_WAIT", str(AI_CONTROL_TIMEOUT)))
 
 VALID_CIRCULATIONS = set(CIRCULATION_MODES.keys())
 
-# [변경6 · 2026-04-30] PROTECTED_DEVICES 를 RELAY_FIELD_MAPPING.flags 에서 자동 도출.
+
+def _control_llm_retry_backoffs():
+    raw = os.getenv("AI_CONTROL_LLM_RETRY_BACKOFFS", "1.5,5,15")
+    backoffs = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            value = float(part)
+        except ValueError:
+            continue
+        if value > 0:
+            backoffs.append(min(value, 120.0))
+    return backoffs
+
+
+def _is_transient_control_llm_failure(status_code, error_text):
+    text = (error_text or "").lower()
+    return (
+        status_code in {408, 429, 500, 502, 503, 504}
+        or "timeout" in text
+        or "timed out" in text
+        or "connection refused" in text
+        or "server disconnected" in text
+        or "connection reset" in text
+        or "maximum pending requests" in text
+        or "server busy" in text
+    )
+
+# PROTECTED_DEVICES 를 RELAY_FIELD_MAPPING.flags 에서 자동 도출.
 # RelayDef 의 flags 에 'PROTECTED' 가 설정된 sem 만 자동 포함 — 신규 PROTECTED 릴레이
 # 추가 시 mappers.py 의 _PROTECTED_SEMS 만 갱신하면 본 set 자동 반영.
 from agri_ai_core.config.mappers import (
@@ -141,7 +176,7 @@ from agri_ai_core.config.mappers import (
 PROTECTED_DEVICES = _protected_semantic_keys()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# [2026-04-28 rev3] (D) Ollama format=<schema> 강제용 JSON Schema
+# Ollama format=<schema> 강제용 JSON Schema
 # Ollama 0.5+ 는 이 스키마에 맞는 JSON 만 출력하도록 강제. 모델이 다른 키 못 만듦.
 # ══════════════════════════════════════════════════════════════════════════════
 RELAY_RESPONSE_SCHEMA = {
@@ -149,8 +184,8 @@ RELAY_RESPONSE_SCHEMA = {
     "properties": {
         "action": {"type": "string", "enum": ["change", "keep"]},
         "reason": {"type": "string"},
-        # [2026-05-01] LLM 결정 도메인 확장 — mappers.py 룰 자율 적용.
-        # 추가: drainage_motor_flag (수온히터·배수밸브 상호배타 LLM 직접 판단).
+        # LLM 결정 도메인 — mappers.py 룰 자율 적용.
+        # drainage_motor_flag 포함 (수온히터·배수밸브 상호배타 LLM 직접 판단).
         # 향후 더 많은 릴레이를 LLM 에 위임할 수 있으나 우선 가장 영향 큰 1개부터.
         "devices": {
             "type": "object",
@@ -159,7 +194,7 @@ RELAY_RESPONSE_SCHEMA = {
                 "fog_occurs_flag":    {"type": "boolean"},
                 "drainage_motor_flag": {"type": "boolean"},
             },
-            "required": ["water_heater_flag", "fog_occurs_flag"],
+            "required": ["water_heater_flag", "fog_occurs_flag", "drainage_motor_flag"],
         },
         "circulation": {
             "type": "string",
@@ -242,7 +277,7 @@ def _log_ai_decision(scope, action, reason, devices=None, circulation=None):
 # 5분 후 비상 임계 도달 예측 시 trend_detected=True. 추세 정보 텍스트 동반.
 # ────────────────────────────────────────────────────────────────────
 def _detect_trend(farm_id, house_id, sensor_data):
-    # [2026-04-28 rev2] 임계값 동적 — DB 셋팅
+    # 임계값 동적 — DB 셋팅
     from agri_ai_core.src.control.ai_thresholds import get_thresholds
     ts = get_thresholds(farm_id, house_id)
 
@@ -317,7 +352,7 @@ def _detect_trend(farm_id, house_id, sensor_data):
 # 이상 근접 시 True.
 # ────────────────────────────────────────────────────────────────────
 def _check_threshold_proximity(sensor_data, farm_id=None, house_id=None):
-    # [2026-04-28 rev2] 임계값 동적 — DB 셋팅
+    # 임계값 동적 — DB 셋팅
     from agri_ai_core.src.control.ai_thresholds import get_thresholds, get_global_default
     ts = get_thresholds(farm_id, house_id) if farm_id is not None else get_global_default()
     checks = [
@@ -368,7 +403,7 @@ def monitor_ai_emergency(farm_id, house_id, order_label=""):
     proximity_detected = _check_threshold_proximity(sensor_data, farm_id, house_id)
 
     if proximity_detected:
-        # [2026-05-04 G6] 5초 모니터는 결정/제어 적용 안 함. 60초 _ai_control_loop 가
+        # 5초 모니터는 결정/제어 적용 안 함. 60초 _ai_control_loop 가
         #   다음 cycle 에서 LLM 결정 + emergency_override 통합 적용. 본 로그는 가시성용.
         logger.info(f"{scope}: [AI모니터링] 임계치 근접 감지 (다음 LLM cycle 에서 처리)")
         return True
@@ -382,623 +417,62 @@ def monitor_ai_emergency(farm_id, house_id, order_label=""):
 
 # ══════════════════
 # 시스템 프롬프트
-# [2026-04-28] ts(ThresholdSet) 인자 추가 — 재배사별 동적 임계값 주입.
+# ts(ThresholdSet) 인자로 재배사별 동적 임계값 주입.
 # None 이면 control_common 폴백 (기본값).
 # ══════════════════
 # ────────────────────────────────────────────────────────────────────
 # 시스템 프롬프트 빌더 — ts(ThresholdSet) 인자로 재배사별 동적 임계값 주입.
-# [2026-04-28] ts None 이면 control_common 폴백 (기본값).
+# ts None 이면 control_common 폴백 (기본값).
 # ────────────────────────────────────────────────────────────────────
 def _build_system_prompt(growth_stage, ts=None):
-    # [2026-04-28 rev2] ts 가 없으면 ai_thresholds.get_global_default() 폴백 —
-    # control_common 임계 상수 직접 import 금지.
+    # 재배사별 동적 임계값(ts)을 control_prompt_m 뼈대 블록의 ${...} 에 치환해 합성.
+    # ts None 이면 폴백(get_global_default) — control_common 임계 직접 import 금지.
     if ts is None:
         from agri_ai_core.src.control.ai_thresholds import get_global_default
         ts = get_global_default()
-    return _build_system_prompt_impl(
-        growth_stage,
-        ts.temp_low, ts.temp_high, ts.temp_critical_low, ts.temp_critical_high,
-        ts.humidity_low, ts.humidity_high, ts.humidity_critical_low, ts.humidity_critical_high,
-        ts.co2_low, ts.co2_high, ts.co2_critical_high,
-        ts.water_temp_low, ts.water_temp_high,
-        ts.water_temp_critical_low, ts.water_temp_critical_high,
-        ts.budding_temp_low, ts.budding_temp_high,
-        ts.source,
+    from agri_ai_core.src.prompt_registry import get_control_block as _gcb
+    ts_kw = dict(
+        TEMP_LOW=ts.temp_low, TEMP_HIGH=ts.temp_high,
+        TEMP_CRITICAL_LOW=ts.temp_critical_low, TEMP_CRITICAL_HIGH=ts.temp_critical_high,
+        HUMIDITY_LOW=ts.humidity_low, HUMIDITY_HIGH=ts.humidity_high,
+        HUMIDITY_CRITICAL_LOW=ts.humidity_critical_low, HUMIDITY_CRITICAL_HIGH=ts.humidity_critical_high,
+        CO2_LOW=ts.co2_low, CO2_HIGH=ts.co2_high, CO2_CRITICAL_HIGH=ts.co2_critical_high,
+        WATER_TEMP_LOW=ts.water_temp_low, WATER_TEMP_HIGH=ts.water_temp_high,
+        WATER_TEMP_CRITICAL_LOW=ts.water_temp_critical_low, WATER_TEMP_CRITICAL_HIGH=ts.water_temp_critical_high,
+        BUDDING_TEMP_LOW=ts.budding_temp_low, BUDDING_TEMP_HIGH=ts.budding_temp_high,
+        GROWTH_STAGE=growth_stage,
+        DEVICE_MAPPING=_device_mapping_text(),
+        CIRCULATION_MODES=_circulation_modes_text(),
+        PROTECTED_DEVICES=', '.join(sorted(PROTECTED_DEVICES)),
     )
-
-
-# ────────────────────────────────────────────────────────────────────
-# 시스템 프롬프트 본체 구현 — 개별 임계 상수를 인자로 받아 텍스트 합성.
-# 생육단계별 가이드 + 비상 임계값 + 응답 형식 강제 룰 모두 포함.
-# ────────────────────────────────────────────────────────────────────
-def _build_system_prompt_impl_v2_9sec(
-        growth_stage,
-        TEMP_LOW, TEMP_HIGH, TEMP_CRITICAL_LOW, TEMP_CRITICAL_HIGH,
-        HUMIDITY_LOW, HUMIDITY_HIGH, HUMIDITY_CRITICAL_LOW, HUMIDITY_CRITICAL_HIGH,
-        CO2_LOW, CO2_HIGH, CO2_CRITICAL_HIGH,
-        WATER_TEMP_LOW, WATER_TEMP_HIGH, WATER_TEMP_CRITICAL_LOW, WATER_TEMP_CRITICAL_HIGH,
-        BUDDING_TEMP_LOW, BUDDING_TEMP_HIGH, ts_src):
-    # [2026-05-04 New 9-Section Structure] 검토 제안서 Phase 1~6 일괄 적용.
-    #   기존 15섹션(9,300자) → 9섹션(약 4,000자) 통합. 중복·모순·미치환 제거.
-    #   DB 블록 lookup 제거 — 코드 inline 단일 source. prompt_block_m 의 control 관련
-    #   블록은 더 이상 사용되지 않음 (다른 기능 영향 없음).
-    role = "/no_think\n당신은 상황버섯 스마트팜 환경제어 AI입니다.\n\n"
-
-    # ─── §1 시설 구조 + 5종 순환 모드 + 장치 매핑 (기존 §1+§2+§4 통합) ───
-    # [2026-05-04 사용자 수정안] 지하수 평균 수온 15℃ 냉각 매개체 명시.
-    section1 = (
-        "## 1. 시설 구조 · 순환 모드\n"
-        "공기흐름: 바닥 흡입 → 환풍기 → 열냉가습기 → 환풍기 → 상단 배출.\n"
-        "열냉가습기 = 지하수 탱크 + 수온히터 + 포그생성 + 배수밸브.\n"
-        "지하수 평균 수온 15℃ — 고온계절 냉각 매개체로 활용.\n\n"
-        "장치 매핑: " + _device_mapping_text() + "\n\n"
-        "5종 순환 모드 (밸브 ON 후 15초 → 팬 ON):\n"
-        + _circulation_modes_text() + "\n"
-        f"※ {', '.join(sorted(PROTECTED_DEVICES))}: 별도 스케줄 제어 (변경 금지)\n\n"
-    )
-
-    # ─── §1.5 계절 자동 판단 (사용자 정의 신규) ───
-    section_season = (
-        "## 계절 자동 판단 (LLM 자체 판단)\n"
-        f"- 저온계절 = (내부 < {TEMP_LOW}℃) AND (외기 < 내부)\n"
-        "- 고온계절 = 그 외 (내부 적정 안 또는 외기 ≥ 내부)\n"
-        "저온계절: 가열 필요 → heater ON + 포그 hysteresis (§3) + 내부순환\n"
-        "고온계절: 내부 > 적정 상한 시 지하수 활용 냉각, 정상 안이면 keep\n\n"
-    )
-
-    # ─── §2 결정 우선순위 (기존 §5+§10+§13 통합 + 계절 분기) ───
-    if growth_stage == '발이기':
-        section2 = (
-            "## 2. 결정 우선순위 (발이기) — 온도 단독 제어\n"
-            f"- 온도 < {BUDDING_TEMP_LOW}℃: heater ON + 내부순환\n"
-            f"- 온도 > {BUDDING_TEMP_HIGH}℃: 가열 OFF + 배기순환\n"
-            f"- 정상: 제어 없음\n"
-            "(습도/CO2 제어 중지)\n\n"
-        )
-    else:
-        section2 = (
-            "## 2. 결정 우선순위 — 온도 > CO2 > 습도 (상위 결정 우선)\n\n"
-            "[1순위 온도]\n"
-            f"- 저온계절 + 내부 < {TEMP_LOW}℃ (저온):\n"
-            "    heater ON + 포그 (§3 hysteresis) + 내부순환 → 재배사 가열\n"
-            "    외기가 적정 범위 안 → 외부순환 가능 (가능성 희박)\n"
-            f"- 고온계절 + 내부 > {TEMP_HIGH}℃ (고온):\n"
-            "    heater 절대 OFF + fog ON + drainage ON + 내부순환\n"
-            "    (차가운 지하수 새로 유입 + 차가운 수증기 분사 → 내부 냉각)\n"
-            "    외기가 적정 범위 안 → 외부순환 가능 (가능성 희박)\n"
-            f"- 고온계절 + 내부 ∈ [{TEMP_LOW}, {TEMP_HIGH}]℃: keep (장치 변경 없음)\n"
-            "- 그 외 정상: 다음 순위(CO2)\n\n"
-            "[2순위 CO2] (온도 결정 보존)\n"
-            f"- > {CO2_HIGH}ppm (고농도): 배기순환 권장 (저온계절이면 내부순환 유지)\n"
-            "- 정상: 다음 순위(습도)\n\n"
-            "[3순위 습도] (상위 결정 보존)\n"
-            f"- < {HUMIDITY_LOW}% (저습): 포그 ON 권장 (가열중이면 §3 hysteresis 우선)\n"
-            f"- > {HUMIDITY_HIGH}% (고습): 포그 OFF, 배기순환 (상위 결정 우선)\n"
-            "- 정상: 현재 모드 유지\n"
-        )
-        if growth_stage == '수확기':
-            section2 += "\n[수확기 추가] 관수 강제 OFF, 배기순환 우선\n"
-        section2 += "\n"
-
-    # ─── §3 수온히터 + 포그 통합 룰 (사용자 수정안 — 3℃ hysteresis, 계절 분기) ───
-    section3 = (
-        "## 3. 수온히터 + 포그 통합 룰 (절대 준수, hysteresis +3℃)\n\n"
-        f"[저온계절] (외기 < 내부 AND 내부 < {TEMP_LOW}℃)\n"
-        "- 수온 < (실내 + 3℃): heater ON, fog OFF (가열 집중, 분사 손실 방지)\n"
-        "- 수온 ≥ (실내 + 3℃): heater ON, fog ON (가열·가습 매개)\n"
-        f"- 수온 > {WATER_TEMP_CRITICAL_HIGH}℃ OR 실내 ≥ {TEMP_HIGH}℃: heater 강제 OFF (효율)\n"
-        "- 두 임계 사이 직전 상태 유지 (채터링 방지)\n"
-        "- 예: 실내 22℃ → 수온 25℃ 가 토글 임계\n\n"
-        "[고온계절]\n"
-        "- heater 절대 OFF (안전 + 가열 불필요)\n"
-        f"- 내부 > {TEMP_HIGH}℃: fog ON + drainage ON → 지하수(15℃) 분사로 냉각\n"
-        f"- 내부 ∈ [{TEMP_LOW}, {TEMP_HIGH}]℃: keep (장치 변경 없음)\n\n"
-        "[외기 예보 기반 선행 활용 — 2026-05-17 추가]\n"
-        "[외부 기상 단기예보] 컨텍스트(향후 1~3h)가 있을 때만 적용 — 비상 룰에 절대 우선하지 않음.\n"
-        f"- 낮 외기 최고 > {TEMP_HIGH}℃ 예보 + 실내 상승 추세 + 수온 ≤ 실내:\n"
-        "    drainage ON 선행 (지하수 새로 유입 → 탱크 식힘), heater OFF, fog 는 hysteresis 준수.\n"
-        f"- 밤 외기 최저 < {TEMP_LOW}℃ 예보 + 실내 하단 접근(하강 추세) + 수온 < (실내+3℃):\n"
-        "    drainage OFF (지하수 가둠) + heater ON 선행 가온. 수온이 (실내+3℃) 도달 후 fog ON.\n"
-        "- 외기가 외부순환 정상범위(§4) 안이면 외부순환 우선, 본 룰은 외기 범위 밖일 때 의의.\n\n"
-        "[비상 우선] (계절 룰 무시 — 안전 강제)\n"
-        f"- 내부 < {TEMP_CRITICAL_LOW}℃ (저온비상): heater 강제 ON\n"
-        f"- 수온 > {WATER_TEMP_CRITICAL_HIGH}℃ (수온과열): heater 강제 OFF\n\n"
-    )
-
-    # ─── §4 외부순환 제한 (기존 §6+§10 #2/#7 외기 분기 통합) ───
-    section4 = (
-        "## 4. 외부순환 제한\n"
-        f"외부온도 ∈ [{TEMP_LOW}, {TEMP_HIGH}]℃ 그리고 외부습도 ∈ [{HUMIDITY_LOW}, {HUMIDITY_HIGH}]% 일 때만 외부순환 가능.\n"
-        "범위 밖이면 외부순환 금지 → 내부순환 또는 배기순환 사용.\n"
-        "외기 활용 가능 시: 장치 제어보다 외부순환 우선.\n\n"
-    )
-
-    # ─── §5 비상 자동 오버라이드 + 선행 조치 (사용자 추세 분석 명시) ───
-    section5 = (
-        "## 5. 비상 자동 오버라이드 (시스템 강제 — LLM은 정상 결정만)\n"
-        "LLM 결정 후 시스템이 비상 위반 항목만 자동 강제. LLM은 회피 로직 불필요:\n"
-        f"- 실내 < {TEMP_CRITICAL_LOW}℃ (저온비상) → heater 강제 ON, 내부순환 강제 (계절 룰보다 우선)\n"
-        f"- 실내 > {TEMP_CRITICAL_HIGH}℃ (고온비상) → heater 강제 OFF, 외부/배기순환 강제\n"
-        f"- 수온 < {WATER_TEMP_CRITICAL_LOW}℃ (수온저온) → heater 강제 ON, drainage 강제 OFF\n"
-        f"- 수온 > {WATER_TEMP_CRITICAL_HIGH}℃ (수온과열) → heater 강제 OFF (실내고온 시 drainage ON 추가)\n"
-        f"- CO2 > {CO2_CRITICAL_HIGH}ppm (고CO2) → 외부/배기순환 강제\n"
-        f"- 습도 비상 (< {HUMIDITY_CRITICAL_LOW}% 또는 > {HUMIDITY_CRITICAL_HIGH}%): 시스템 강제 없음, LLM 자율\n\n"
-        "선행 조치 (LLM 자율 판단 — 60분 raw 시계열 분당 변화율 분석):\n"
-        "- 수온/실내 추세의 비례·반비례 관계로 5분/1시간 후 예측.\n"
-        "- 예: 수온 1℃ 상승 추세 + 실내 1℃ 하락 추세 → 실내가 적정 하한 아래로 하락 예상 시 선행 heater ON.\n"
-        "- 추운 계절일수록 수온이 빨리 떨어지고 가온 시간 오래 걸림 → 선행 가열 적극 적용.\n"
-        "- [외부 기상 단기예보] 컨텍스트가 있으면 시간대별 외기 추세도 동등 비중으로 활용 (§3 외기 예보 기반 선행 활용 참고).\n\n"
-    )
-
-    # ─── §6 현재 호기 임계값 (기존 §7) ───
-    section6 = (
-        f"## 6. 현재 호기 임계값 ({growth_stage})\n"
-        f"- 적정 온도: {TEMP_LOW}~{TEMP_HIGH}℃ (임계 {TEMP_CRITICAL_LOW}~{TEMP_CRITICAL_HIGH}℃)\n"
-        f"- 적정 습도: {HUMIDITY_LOW}~{HUMIDITY_HIGH}% (임계 {HUMIDITY_CRITICAL_LOW}~{HUMIDITY_CRITICAL_HIGH}%)\n"
-        f"- 적정 CO2: {CO2_LOW}~{CO2_HIGH}ppm (임계 상한 {CO2_CRITICAL_HIGH}ppm)\n"
-        f"- 적정 수온: {WATER_TEMP_LOW}~{WATER_TEMP_HIGH}℃ (임계 {WATER_TEMP_CRITICAL_LOW}~{WATER_TEMP_CRITICAL_HIGH}℃)\n\n"
-    )
-
-    # ─── §7 추가 컨텍스트 (기존 §14 정리 — 미발송 4종 제거) ───
-    section7 = (
-        "## 7. 추가 컨텍스트 (user_prompt 블록 — 가용 시 자동 포함)\n"
-        "- [알고리즘 참조 결정] 같은 센서값에서 알고리즘이 내릴 결정 (다를 시 reason에 근거 명시)\n"
-        "- [직전 5건 결정 이력] 5분 단위 ON↔OFF 진동 회피\n"
-        "- [동일 농장 다른 재배사] 합의/이상치 검출\n"
-        "- [수확 컨텍스트] D-3 이내면 보수적 결정\n"
-        "- [이상사건 직전 패턴] 병해 발생 24h 전 평균 회피\n"
-        "- [재배사 카메라 24h 이력] 자실체/곰팡이/결로 이상 감지\n"
-        "- [유사시기 RAG / 도메인지식 RAG] 과거 사례·매뉴얼 (캐시 5분)\n"
-        "- [수확 성공 패턴] 1등급률 ≥0.6 시기 환경 가능 시 유지\n"
-        "- [60분 raw 시계열] 분당 변화율 직접 계산 → 임계 근접 시 사전 조치\n"
-        "- [외부 기상 단기예보] 향후 1~3h 외기 온/습/강수 → §3 외기 예보 기반 선행 활용 / §4 외부순환 가부\n"
-        "- [외부 대기질] 측정소 PM2.5/PM10/O3/NO2/SO2/CO + 통합대기지수 → PM '나쁨' 이상이면 외부순환 회피(분진 침착·자실체 품질 저하)\n"
-        "- [기상특보] 호우/강풍/한파/폭염/건조주의보·경보 발효 시 외부순환·배수·수온히터 선제 대응\n"
-        "- [대기정체지수] 시간대별 0~100 — '높음/매우높음' 시각엔 환풍기 효율 저하 → CO2 임계 근접 시 가동시간 가중\n"
-        "- [전력] 동일 효과면 가동시간 짧은 옵션 우선\n\n"
-        "정상 범위 안에서는 keep 적극 사용 (불필요 변경 회피).\n\n"
-    )
-
-    # ─── §8 결합 후처리 (기존 §11 + 인터록 자동 룰) ───
-    section8 = (
-        "## 8. 결합 후처리 (시스템 자동)\n"
-        "- water_heater_flag ON ↔ drainage_motor_flag OFF (가온을 위해 물 가둠)\n"
-        "- 팬 ON 시 해당 밸브 최소 10초 선행 ON (인터록)\n\n"
-    )
-
-    # ─── §9 응답 JSON 스키마 (기존 §15 압축) ───
-    section9 = (
-        "## 9. 응답 JSON 스키마 (절대 준수)\n"
-        "JSON 한 객체만 출력. 마크다운/설명/코드블럭/이모지 금지.\n"
-        "Ollama format=schema 강제 검증 → 위반 시 거부.\n\n"
-        "표준:\n"
-        '  {"action":"change","reason":"<사유>","devices":{"water_heater_flag":bool,"fog_occurs_flag":bool,"drainage_motor_flag":bool},"circulation":"<5종 중 1>"}\n'
-        '  {"action":"keep","reason":"<사유>"}\n\n'
-        "허용 값:\n"
-        '- action: "change" 또는 "keep"\n'
-        '- circulation: "내부순환", "외부순환", "흡입순환", "배기순환", "순환정지"\n'
-        "- devices: 3개 키만 (boolean true/false)\n\n"
-        "올바른 예시:\n"
-        '  {"action":"change","reason":"저온+고습 → heater+fog ON, 내부순환","devices":{"water_heater_flag":true,"fog_occurs_flag":true,"drainage_motor_flag":false},"circulation":"내부순환"}\n'
-        '  {"action":"keep","reason":"센서값 안정"}\n\n'
-        "금지:\n"
-        "- 한국어 키 (수온히터 등) → 영어만\n"
-        '- "ON"/"OFF" 문자열 → boolean true/false 만\n'
-        "- intake_fan_flag, exhaust_fan_flag, lighting_flag 등 출력 → 순환모드/스케줄로 자동\n"
-        "- JSON 외 텍스트 (설명/이모지/공백)\n"
-    )
-
-    return (
-        role + section1 + section_season + section2 + section3 + section4
-        + section5 + section6 + section7 + section8 + section9
-    )
-
-
-def _build_system_prompt_impl(
-        growth_stage,
-        TEMP_LOW, TEMP_HIGH, TEMP_CRITICAL_LOW, TEMP_CRITICAL_HIGH,
-        HUMIDITY_LOW, HUMIDITY_HIGH, HUMIDITY_CRITICAL_LOW, HUMIDITY_CRITICAL_HIGH,
-        CO2_LOW, CO2_HIGH, CO2_CRITICAL_HIGH,
-        WATER_TEMP_LOW, WATER_TEMP_HIGH, WATER_TEMP_CRITICAL_LOW, WATER_TEMP_CRITICAL_HIGH,
-        BUDDING_TEMP_LOW, BUDDING_TEMP_HIGH, ts_src):
-    # [2026-05-04] 9-섹션 구조로 위임 (Phase 1~6 일괄 적용).
-    return _build_system_prompt_impl_v2_9sec(
-        growth_stage,
-        TEMP_LOW, TEMP_HIGH, TEMP_CRITICAL_LOW, TEMP_CRITICAL_HIGH,
-        HUMIDITY_LOW, HUMIDITY_HIGH, HUMIDITY_CRITICAL_LOW, HUMIDITY_CRITICAL_HIGH,
-        CO2_LOW, CO2_HIGH, CO2_CRITICAL_HIGH,
-        WATER_TEMP_LOW, WATER_TEMP_HIGH, WATER_TEMP_CRITICAL_LOW, WATER_TEMP_CRITICAL_HIGH,
-        BUDDING_TEMP_LOW, BUDDING_TEMP_HIGH, ts_src,
-    )
-
-
-def _build_system_prompt_impl_v1_legacy(
-        growth_stage,
-        TEMP_LOW, TEMP_HIGH, TEMP_CRITICAL_LOW, TEMP_CRITICAL_HIGH,
-        HUMIDITY_LOW, HUMIDITY_HIGH, HUMIDITY_CRITICAL_LOW, HUMIDITY_CRITICAL_HIGH,
-        CO2_LOW, CO2_HIGH, CO2_CRITICAL_HIGH,
-        WATER_TEMP_LOW, WATER_TEMP_HIGH, WATER_TEMP_CRITICAL_LOW, WATER_TEMP_CRITICAL_HIGH,
-        BUDDING_TEMP_LOW, BUDDING_TEMP_HIGH, ts_src):
-    # [2026-05-04] 기존 15-섹션 구조 (백업용 — 더 이상 호출되지 않음).
-    # 롤백 필요 시 _build_system_prompt_impl 의 위임을 본 함수로 변경.
-    # [프롬프트 자동화 · Phase 3-(5)] placeholder 없는 정형 블록은 DB 우선.
-    # USE_DB_BLOCKS=1 + DB 존재 시 prompt_block_m 사용, 그 외 inline 폴백.
-    _role_header_inline = "/no_think\n당신은 상황버섯 스마트팜 릴레이 제어 전문 AI입니다.\n\n"
-    _arch_info_inline = (
-        "## 재배사 구조\n"
-        "- 공기흐름: 바닥 2열 덕트 흡입 → 환풍기 → 열냉가습기 → 환풍기 → 상단 1열 덕트 배출\n"
-        "- 열냉가습기: 지하수 탱크 + 수온히터 + 포그생성 → 물안개를 통과하는 공기에 물안개 온도의 습기를 더하는 장치\n\n"
-    )
-    _coupling_rules_inline = (
-        "## 결합 규칙 [2026-04-28 rev2 — 단일 조건]\n"
-        "포그생성은 \"수온이 적정 범위에 도달한 경우에만\" 가동.\n"
-        f"  · 수온 ≥ {WATER_TEMP_LOW}℃ → fog_occurs_flag=true (가열된 수온의 열기를 재배사로 유입)\n"
-        f"  · 수온 < {WATER_TEMP_LOW}℃ → fog_occurs_flag=false (차가운 안개는 실내 온도를 떨어뜨려 무의미)\n"
-        f"  · 수온 > {WATER_TEMP_CRITICAL_HIGH}℃ → fog_occurs_flag=false (뜨거운 물 분사 방지, 안전)\n"
-        "  · 수온히터 상태와 fog 결정은 분리: 실내 저온 시 수온히터를 먼저 ON 해 가열을 시작하되, "
-        f"포그는 수온이 {WATER_TEMP_LOW}℃ 에 도달한 다음 ON 한다.\n"
-        f"- {', '.join(sorted(PROTECTED_DEVICES))}: 별도 스케줄 제어 → 변경 금지\n\n"
-    )
-    _combo_examples_inline = (
-        "### 복합 상황 판단 예시\n"
-        "- 저온+고습: 수온히터ON + 포그생성ON + 내부순환 (온도 우선; 결합 규칙으로 포그 ON)\n"
-        "- 저온+저습: 수온히터ON + 포그생성ON + 내부순환 (둘 다 가열/가습 방향 일치)\n"
-        "- 고온+저습: 포그생성ON + 배기순환 (온도 우선 냉각, 습도는 포그생성으로 보완)\n"
-        "- 고온+고습: 전체OFF + 배기순환 (온도·습도 모두 하강 방향 일치)\n"
-        "- 정상온도+고습+고CO2: 배기순환 (습도·CO2 동시 해소)\n"
-        "- 정상온도+저습+고CO2: 내부순환 + 포그생성ON (습도 우선, CO2는 차선)\n\n"
-    )
-    _priority_rules_inline = (
-        "## 제어 우선순위 (반드시 준수) — 2026-05-03 가열 시퀀스 단일 source 위임\n"
-        "온도 > 습도 > CO2 순서로 판단하고, 상위 항목의 결정을 하위 항목이 뒤집지 마세요.\n\n"
-        "### 1순위: 온도\n"
-        f"- 온도 < {TEMP_LOW}℃ (저온): 수온히터 ON, 내부순환 (가열 우선). "
-        f"포그는 [가열 시퀀스 룰] 의 +5℃ hysteresis 따라 결정. "
-        f"습도/CO2 조치가 온도를 더 낮추면 안 됨\n"
-        f"- 온도 > {TEMP_HIGH}℃ (고온): 가열장치 전체 OFF, 배기순환 (냉각 우선). 습도 조치가 온도를 더 높이면 안 됨\n"
-        "- 온도 정상: 다음 순위(습도)로 이동\n\n"
-        "### 2순위: 습도 (온도 결정과 충돌 시 온도 우선)\n"
-        f"- 습도 < {HUMIDITY_LOW}% (저습): 포그생성 ON + 내부순환 권장. "
-        f"가열 페이즈 중이면 [가열 시퀀스 룰] 의 +5℃ hysteresis 가 우선. 온도가 고온이면 배기순환 유지\n"
-        f"- 습도 > {HUMIDITY_HIGH}% (고습): 포그생성 OFF + 배기순환 권장. "
-        f"단, 온도가 저온이면 내부순환 유지하고 수온히터 ON + 포그는 [가열 시퀀스 룰] 따름 (온도 우선)\n"
-        "- 습도 정상: 다음 순위(CO2)로 이동\n\n"
-        "### 3순위: CO2 (온도·습도 결정과 충돌 시 상위 우선)\n"
-        f"- CO2 > {CO2_HIGH}ppm (고농도): 배기순환 권장. 단, 저온이면 내부순환 유지 (온도 우선)\n"
-        "- CO2 정상: 현재 순환모드 유지\n\n"
-    )
-    _ext_circ_rules_inline = (
-        "## 외부순환 제한 규칙\n"
-        f"- 외부온도가 {TEMP_LOW}~{TEMP_HIGH}℃ 범위 밖이면 외부순환 금지\n"
-        f"- 외부습도가 {HUMIDITY_LOW}~{HUMIDITY_HIGH}% 범위 밖이면 외부순환 금지\n"
-        "- 위 조건 충족 시에는 장치 제어보다 외부순환을 우선 활용\n\n"
-    )
-    if os.getenv("USE_DB_BLOCKS", "0") == "1":
-        try:
-            from agri_ai_core.src.prompt_registry import get_block as _get_block
-            _role_header = _get_block('CONTROL_ROLE_HEADER') or _role_header_inline
-            _arch_info = _get_block('CONTROL_ARCHITECTURE_INFO') or _arch_info_inline
-            _coupling_rules = _get_block(
-                'CONTROL_COUPLING_RULES',
-                WATER_TEMP_LOW=WATER_TEMP_LOW,
-                WATER_TEMP_CRITICAL_HIGH=WATER_TEMP_CRITICAL_HIGH,
-                PROTECTED_DEVICES=', '.join(sorted(PROTECTED_DEVICES)),
-            ) or _coupling_rules_inline
-            _combo_examples = _get_block('CONTROL_PRIORITY_COMBO_EXAMPLES') or _combo_examples_inline
-            _priority_rules = _get_block(
-                'CONTROL_PRIORITY_RULES',
-                TEMP_LOW=TEMP_LOW, TEMP_HIGH=TEMP_HIGH,
-                HUMIDITY_LOW=HUMIDITY_LOW, HUMIDITY_HIGH=HUMIDITY_HIGH,
-                CO2_HIGH=CO2_HIGH,
-            ) or _priority_rules_inline
-            _ext_circ_rules = _get_block(
-                'CONTROL_EXTERNAL_CIRCULATION_RULES',
-                TEMP_LOW=TEMP_LOW, TEMP_HIGH=TEMP_HIGH,
-                HUMIDITY_LOW=HUMIDITY_LOW, HUMIDITY_HIGH=HUMIDITY_HIGH,
-            ) or _ext_circ_rules_inline
-        except Exception:
-            _role_header, _arch_info = _role_header_inline, _arch_info_inline
-            _coupling_rules, _combo_examples = _coupling_rules_inline, _combo_examples_inline
-            _priority_rules, _ext_circ_rules = _priority_rules_inline, _ext_circ_rules_inline
-    else:
-        _role_header, _arch_info = _role_header_inline, _arch_info_inline
-        _coupling_rules, _combo_examples = _coupling_rules_inline, _combo_examples_inline
-        _priority_rules, _ext_circ_rules = _priority_rules_inline, _ext_circ_rules_inline
-
-    base = (
-        _role_header +
-        _arch_info +
-        # ─── [변경7 · 2026-04-30] 장치 기능 상세는 mappers.RELAY_FIELD_MAPPING 의 desc
-        # ─── 자동 생성으로 전환. mappers.py 의 _RELAY_DESCRIPTIONS 만 수정하면 본
-        # ─── 시스템 프롬프트가 자동 갱신됨 (단일 진실 원천).
-        # ─── [변경10 · 2026-04-30] ai_control 은 JSON(action/devices/circulation) 만
-        # ─── 출력하므로 풍부한 desc 불필요 → 한 줄 매핑만 사용. 사용자 채팅
-        # ─── (tools_definition.py) 은 device_detail_text 그대로 유지하여 품질 보존.
-        # ─── 효과: 시스템 프롬프트 ~14kB → ~9kB, 추론 시간 60-90s → 25-40s.
-        "## 제어 장치 매핑 (RELAY_FIELD_MAPPING 자동)\n"
-        + f"  {_device_mapping_text()}\n\n"
-        + _coupling_rules
-        # ─── [변경7 · 2026-04-30] 순환 모드는 control_common.CIRCULATION_MODES 자동
-        # ─── 생성. CIRCULATION_MODES 에 mode 추가/effect 변경 시 자동 반영.
-        + "## 순환 모드 (CIRCULATION_MODES 자동 생성)\n"
-        + f"{_circulation_modes_text()}\n\n"
-        + _priority_rules
-        + _combo_examples
-        + _ext_circ_rules
-    )
-
-    # [프롬프트 자동화 · Phase 3-(5)-2c] 생육단계 가이드 3종 — DB 우선 / 코드 폴백.
-    _stage_inline_budding = (
-        "## 현재 생육단계: 발이기 (3~5일)\n"
-        f"- 적정 온도: {BUDDING_TEMP_LOW}~{BUDDING_TEMP_HIGH}℃ (온도 제어에만 집중)\n"
-        "- 습도/CO2 제어 중지\n"
-        f"- 온도 < {BUDDING_TEMP_LOW}℃ → 수온히터ON + 내부순환\n"
-        f"- 온도 > {BUDDING_TEMP_HIGH}℃ → 전체 가열OFF + 배기순환\n"
-        f"- 온도 정상({BUDDING_TEMP_LOW}~{BUDDING_TEMP_HIGH}℃) → 제어 없음\n\n"
-    )
-    _stage_inline_harvest = (
-        "## 현재 생육단계: 수확기 (2~3일)\n"
-        "- 관수 강제 OFF (변경 금지)\n"
-        "- 배기순환 우선\n"
-        "- 이외 생육기 제어와 동일\n\n"
-    )
-    _stage_inline_growing = (
-        "## 현재 생육단계: 생육기 (2~2.5개월)\n"
-        f"- 적정 온도: {TEMP_LOW}~{TEMP_HIGH}℃ (임계: {TEMP_CRITICAL_LOW}~{TEMP_CRITICAL_HIGH}℃)\n"
-        f"- 적정 습도: {HUMIDITY_LOW}~{HUMIDITY_HIGH}% (임계: {HUMIDITY_CRITICAL_LOW}~{HUMIDITY_CRITICAL_HIGH}%)\n"
-        f"- 적정 CO2: {CO2_LOW}~{CO2_HIGH}ppm (최고임계: {CO2_CRITICAL_HIGH}ppm)\n"
-        f"- 적정 수온: {WATER_TEMP_LOW}~{WATER_TEMP_HIGH}℃ (임계: {WATER_TEMP_CRITICAL_LOW}~{WATER_TEMP_CRITICAL_HIGH}℃)\n\n"
-    )
-
-    if growth_stage == '발이기':
-        stage_guide = _stage_inline_budding
-        stage_block_id = 'CONTROL_STAGE_BUDDING'
-        stage_kwargs = {
-            'BUDDING_TEMP_LOW': BUDDING_TEMP_LOW, 'BUDDING_TEMP_HIGH': BUDDING_TEMP_HIGH,
-        }
-    elif growth_stage == '수확기':
-        stage_guide = _stage_inline_harvest
-        stage_block_id = 'CONTROL_STAGE_HARVEST'
-        stage_kwargs = {}
-    else:
-        stage_guide = _stage_inline_growing
-        stage_block_id = 'CONTROL_STAGE_GROWING'
-        stage_kwargs = {
-            'TEMP_LOW': TEMP_LOW, 'TEMP_HIGH': TEMP_HIGH,
-            'TEMP_CRITICAL_LOW': TEMP_CRITICAL_LOW, 'TEMP_CRITICAL_HIGH': TEMP_CRITICAL_HIGH,
-            'HUMIDITY_LOW': HUMIDITY_LOW, 'HUMIDITY_HIGH': HUMIDITY_HIGH,
-            'HUMIDITY_CRITICAL_LOW': HUMIDITY_CRITICAL_LOW, 'HUMIDITY_CRITICAL_HIGH': HUMIDITY_CRITICAL_HIGH,
-            'CO2_LOW': CO2_LOW, 'CO2_HIGH': CO2_HIGH, 'CO2_CRITICAL_HIGH': CO2_CRITICAL_HIGH,
-            'WATER_TEMP_LOW': WATER_TEMP_LOW, 'WATER_TEMP_HIGH': WATER_TEMP_HIGH,
-            'WATER_TEMP_CRITICAL_LOW': WATER_TEMP_CRITICAL_LOW, 'WATER_TEMP_CRITICAL_HIGH': WATER_TEMP_CRITICAL_HIGH,
-        }
-    if os.getenv("USE_DB_BLOCKS", "0") == "1":
-        try:
-            from agri_ai_core.src.prompt_registry import get_block as _get_block
-            _db_stage = _get_block(stage_block_id, **stage_kwargs)
-            if _db_stage:
-                stage_guide = _db_stage
-        except Exception:
-            pass
-
-    # [프롬프트 자동화 · Phase 3-(5)-2d] 비상 임계값 + 선행 조치 — DB 우선 / 코드 폴백.
-    _critical_thresh_inline = (
-        "## 비상 임계값 처리 정책 (사용자 정의 — 절대 준수)\n"
-        "\n"
-        "## 🛡️ 운용모드와 비상제어의 분리 원칙 [2026-05-04]\n"
-        "  · 본 LLM 결정은 항상 산출되며 비상 시에도 우회되지 않음.\n"
-        "  · 시스템이 LLM 결정 후 비상 위반 항목만 자동 오버라이드함:\n"
-        "      - 저온비상  → water_heater 강제 ON, 다른 장치는 LLM 결정 보존\n"
-        "      - 고온비상  → water_heater 강제 OFF + circulation 강제 (외부/배기), 다른 장치 보존\n"
-        "      - 수온저하 → water_heater ON + drainage OFF 강제, 다른 장치 보존\n"
-        "      - 수온과열 → water_heater OFF 강제 (실내고온 시 drainage ON 추가), 다른 장치 보존\n"
-        "      - 고CO2   → circulation 강제 (외부/배기), 장치는 LLM 결정 보존\n"
-        "      - 습도비상 → 시스템 강제 안 함, LLM 자율 판단\n"
-        "  · LLM 은 정상 결정만 출력하면 됨. 시스템이 안전 가드를 별도 적용.\n"
-        "  · 따라서 LLM 응답에 비상 회피 로직을 따로 넣지 말고, 환경 최적 결정에 집중할 것.\n"
-        "\n"
-        "## 7개 비상 정책 (LLM 가이드 — 시스템 오버라이드도 동일 룰)\n"
-        "\n"
-        f"### 1) 내부온도 < {TEMP_CRITICAL_LOW}℃ (저온비상)\n"
-        "  · 수온히터 ON 유지\n"
-        "  · 수온이 (실내온도 + 5℃) 이상 도달 → 포그생성 ON\n"
-        "    (가열된 수온의 열기를 재배사로 분사해 실내 온도를 끌어올림)\n"
-        "  · 수온이 (실내온도 + 5℃) 미만으로 떨어지면 → 포그생성 OFF (수온 재가열 우선)\n"
-        "  · 위 5℃ hysteresis 를 반복하며 실내 온도를 정상 범위로 복귀\n"
-        "    (mappers.py 의 _RELAY_DESCRIPTIONS 가열 효율 룰 -5℃ 와 통일)\n"
-        "  · 순환: 내부순환 (외부 차가운 공기 유입 차단)\n"
-        "\n"
-        f"### 2) 내부온도 > {TEMP_CRITICAL_HIGH}℃ (고온비상)\n"
-        f"  · 외부온도가 정상 범위({TEMP_LOW}~{TEMP_HIGH}℃) 안 → 외부순환 (외기로 자연 냉각)\n"
-        "  · 외부온도가 정상 범위 밖 → 배수밸브 ON + 포그생성 ON\n"
-        "    (탱크의 차가운 지하수가 흘러 새 물 유입 + 차가운 수증기 분사로 능동 냉각)\n"
-        "  · 수온히터는 OFF\n"
-        "\n"
-        f"### 3) 수온 < {WATER_TEMP_CRITICAL_LOW}℃ (수온저온비상 — 선행 가열)\n"
-        "  · 직전 60분 raw 시계열에서 수온 분당 변화율과 실내온도 분당 변화율을 함께 분석\n"
-        "  · 두 변화율의 비례 관계와 5분/1시간 후 예측값을 활용해\n"
-        f"    실내온도가 정상 범위({TEMP_LOW}~{TEMP_HIGH}℃) 를 벗어날 시점을 추정\n"
-        "  · 그 시점 도달 전에 미리 수온히터 ON + 포그생성 ON 으로 선행 가열 시작\n"
-        "  · 수온이 충분히 회복되고 실내온도 안정화 → 비상 해제\n"
-        "  · 단순 반응이 아니라 시계열 기반 예측·선제 대응\n"
-        "\n"
-        f"### 4) 수온 > {WATER_TEMP_CRITICAL_HIGH}℃ (수온과열비상) — 실내 온도 상황에 따라 분기\n"
-        f"  ① 실내 가열 필요 또는 정상 (내부온도 ≤ {TEMP_HIGH}℃):\n"
-        "     · 수온히터 OFF (안전)\n"
-        "     · 포그/배수밸브는 직전 결정 유지 (현상유지) — LLM 자율 판단 보존\n"
-        f"  ② 실내 냉각 필요 (내부온도 > {TEMP_HIGH}℃):\n"
-        "     · 수온히터 OFF + 배수밸브 ON\n"
-        "       (탱크에 차가운 새 지하수 주입 → 탱크 식힘 → 능동 냉각)\n"
-        "     · 포그는 직전 결정 유지 (수온 식은 후 LLM 이 결정)\n"
-        "\n"
-        f"### 5) 습도 < {HUMIDITY_CRITICAL_LOW}% (저습비상) — 강제 처리 없음\n"
-        "  · 시스템이 자동으로 강제 조치하지 않음. LLM 이 자율 판단\n"
-        "  · 다른 우선순위 룰(온도 > 습도 > CO2) 준수해 결정\n"
-        "\n"
-        f"### 6) 습도 > {HUMIDITY_CRITICAL_HIGH}% (고습비상) — 강제 처리 없음\n"
-        "  · 동일 — 시스템 강제 조치 없음. LLM 자율 판단\n"
-        "\n"
-        f"### 7) CO2 > {CO2_CRITICAL_HIGH}ppm (고CO2비상)\n"
-        f"  · 외부온도와 내부온도 모두 정상 범위({TEMP_LOW}~{TEMP_HIGH}℃) → 외부순환 (외기로 CO2 희석)\n"
-        "  · 외기/내기 중 하나라도 정상 범위 밖 → 배기순환\n"
-        "\n"
-        "## 일반 보조 룰 (위 비상 정책에 우선하지 않음)\n"
-        f"- 수온 ≥ {WATER_TEMP_LOW}℃ 일 때 포그생성 ON 검토 (가열된 수온 열기 재배사 유입)\n"
-        "- 수온히터 ON 시 포그생성도 동반 ON 권장 (열 운반 매개체)\n\n"
-    )
-    _proactive_inline = (
-        "## 선행 조치 규칙\n"
-        "- 온도/습도/CO2가 정상범위 경계에 접근 중이면, 비상 임계치 도달 전에 예방 조치를 취하세요.\n"
-        f"- 예: 온도 {TEMP_HIGH - 0.5}℃ 상승 추세 → 외부순환으로 {TEMP_CRITICAL_HIGH}℃ 도달 방지\n"
-        f"- 예: 습도 {HUMIDITY_LOW - 2}% 하강 추세 → 포그생성 가동으로 {HUMIDITY_CRITICAL_LOW}% 미만 방지\n"
-        "- 외부 온도/습도도 고려하여 외부순환 적합 여부를 판단하세요.\n\n"
-    )
-    _context_guide_inline = (
-        "## 추가 컨텍스트 활용 가이드 [2026-04-28]\n"
-        "유저 프롬프트에는 다음 블록이 (가용한 경우) 포함될 수 있다 — 비어 있으면 무시:\n"
-        "- [최근 2개월 운영 통계] 평균/표본·릴레이 가동률 — 현재가 평소 운용에서 벗어났는지 비교.\n"
-        "- [1년 전 동일 시점 운영 기준점] 작년 동시기 셋팅·생육 결과 — 성공 패턴과 큰 차이 시 보수적 판단.\n"
-        "- [알고리즘 참조 결정] 동일 센서값에서 알고리즘이 내릴 결정 — 크게 다른 결정 시 reason 에 근거 명시.\n"
-        "- [직전 LLM 결정 이력] 최근 5회 결정 — oscillation 방지, 5분 단위 ON↔OFF 진동 회피.\n"
-        "- [동일 농장 다른 재배사] 동시점 센서/릴레이 — 합의/이상치 검출.\n"
-        "- [수확 컨텍스트] 작기 D-N — D-3 이내면 환경 변화 최소화·보수적 결정.\n"
-        "- [이상사건 직전 환경 패턴] 병해 발생 직전 24h 평균 — 유사 환경 진입 시 회피.\n"
-        "- [외부 기상 단기예보] 향후 1~3시간 외부 온/습/강수 — 외부순환 결정 시 사전 반영.\n"
-        "- [재배사 영상 분석] 카메라 캡처(휴리스틱 + Vision LLM) — 자실체 형성도·곰팡이·결로 이상 감지.\n"
-        "- [유사 시기 RAG 사례] 동일 재배사 과거 운영 사례 — anomaly/품질 라벨 회피.\n"
-        "- [도메인 지식 RAG] 매뉴얼/논문 발췌 — 규칙의 근거 참고.\n"
-        "- [수확 성공 패턴] 1등급률 ≥0.6 시기 환경 — 가능하면 유지.\n"
-        "- [단기 예측] 5분/1시간 후 — 임계 근접 시 사전 조치.\n"
-        "- [다년치 동월 평균] 같은 월 연도별 평균 — 큰 편차 시 사유 필요.\n"
-        "- [24h 추정 가동시간/전력] 동일 효과면 가동시간 짧은 옵션 우선.\n"
-        "- [최근 N분 간격 raw 시계열] 가장 최근부터 과거 순. 분당 변화율을 직접 계산해 추세 판단. "
-        "deque 기반 단기 트렌드보다 우선 사용 — 센서 미연결 직후 0.0 → 정상 회복 같은 급변 직후 "
-        "노이즈에 휘둘리지 않도록.\n\n"
-    )
-    _heater_policy_inline = (
-        "## ⚠ 수온히터 가동 정책 [2026-04-28 rev4 — 핵심 원칙]\n"
-        "수온히터의 목적은 \"실내 환경 조절(가열·가습)\"이며 포그를 매개체로 한다. "
-        "즉 수온 자체의 정상화가 목적이 아님. 다음 원칙을 엄격히 준수하라:\n\n"
-        "✅ 수온히터 ON 사유 (하나라도 만족 시):\n"
-        f"  1. 실내 온도 < {TEMP_LOW}℃ (저온 — 가열 필요)\n"
-        f"  2. 실내 온도 < {TEMP_CRITICAL_LOW}℃ (저온비상 — 가열 강제)\n"
-        f"  3. 실내 습도 < {HUMIDITY_CRITICAL_LOW}% (저습비상 — 가열·가습 동시)\n"
-        f"  4. 수온 < {WATER_TEMP_CRITICAL_LOW}℃ (수온저하 비상 — 안전상 가열)\n"
-        f"  5. 실내 온도 하강 추세로 5분 후 < {TEMP_CRITICAL_LOW}℃ 도달 예측\n\n"
-        "❌ 수온히터 가동 금지 케이스:\n"
-        f"  · 실내 온도 ∈ [{TEMP_LOW}, {TEMP_HIGH}]℃ 정상범위 + 수온 ≥ {WATER_TEMP_CRITICAL_LOW}℃\n"
-        "    → 위 ON 사유에 해당 안 하면 수온히터=false. \"수온 미달\"만으로는 가열 사유 부족.\n"
-        "    [2026-05-04] 외부 온도는 OFF 조건에서 제외 — §외부순환 제한 규칙이 외기 유입을 이미 차단하므로 외부 비정상이라도 내부순환 유지 시 OFF 안전.\n"
-        f"  · 실내 습도 정상범위 안 + 1시간 후에도 비상 미도달 예측\n"
-        "    → 미래 가습 준비 목적의 사전 가열은 금지. keep 우선.\n\n"
-        "💡 알고리즘 참조 결정과 다를 경우: 명확한 비상 임계 도달 사유 (위 5개 중 하나) 명시 필수.\n"
-        "💡 \"외부순환 금지\" 조건은 가열 사유가 아님. 가습은 수온 25℃ 도달 후 포그로만 진행.\n\n"
-    )
-    _response_format_inline = (
-        "## 응답 형식 — 절대 위반 금지 [2026-04-28 rev3 강화]\n"
-        "출력은 오직 단일 JSON 오브젝트. 마크다운·설명·코드블럭(```)·접두사·접미사 모두 금지.\n"
-        "스키마는 Ollama format=schema 로 강제 검증되며, 위반 시 응답이 거부된다.\n\n"
-        "✅ 표준 스키마 (반드시 정확히 이 키만 사용):\n"
-        '  {"action":"change","reason":"<사유 텍스트>","devices":{"water_heater_flag":<true|false>,"fog_occurs_flag":<true|false>,"drainage_motor_flag":<true|false>},"circulation":"<5종 중 1>"}\n'
-        '  {"action":"keep","reason":"<사유>"}                              ← 변경 없음 시\n\n'
-        "✅ action 은 정확히 \"change\" 또는 \"keep\" 두 값만 허용.\n"
-        "✅ devices 는 다음 키만 허용 (값은 boolean true/false 소문자):\n"
-        "    · water_heater_flag (수온히터)\n"
-        "    · fog_occurs_flag (포그생성)\n"
-        "    · drainage_motor_flag (배수밸브) — [선택] mappers.py 의 수온히터·배수밸브 상호배타 룰 본인이 판단 적용\n"
-        "✅ circulation 은 정확히 다음 5종 중 하나: \"내부순환\", \"외부순환\", \"흡입순환\", \"배기순환\", \"순환정지\"\n\n"
-        "🧠 [자율 판단 가이드 — 2026-05-01]\n"
-        "  · mappers.py 의 _RELAY_DESCRIPTIONS 에 명시된 상호배타·의존성 룰을 본인이 직접 적용.\n"
-        "  · 수온히터 ON ↔ 배수밸브 OFF 는 가온을 위해 물을 가두는 룰. drainage_motor_flag 를 함께 결정.\n"
-        "  · 외기·실내·수온·습도·CO2 종합 판단:\n"
-        "      - 외기 > 실내 + 가열 필요 + 외기 ≤ 정상상한 → 외부순환 고려 (외기 열원 활용)\n"
-        "      - 외기 < 실내 또는 외기 비상 → 내부순환 (보수적)\n"
-        "      - 고습/고CO2 → 배기순환\n"
-        "  · 정상 범위 안에서는 keep 도 적극 활용 (불필요한 변경 회피).\n"
-        "\n"
-        "🔥 [가열 시퀀스 룰 — 사용자 정의·반드시 준수 · 2026-05-03 통일]\n"
-        "  실내 저온으로 수온히터 가열이 필요할 때, 포그가 동시 ON 이면 미스트 분사 손실 때문에\n"
-        "  탱크 수온이 잘 안 오른다. fog_occurs_flag 는 실내온도 기준 +5℃ 히스테리시스로 결정:\n"
-        "  (1) 수온 < (실내온도 + 5℃)  → fog_occurs_flag = false (가열 집중, 분사 손실 방지)\n"
-        "  (2) 수온 ≥ (실내온도 + 5℃)  → fog_occurs_flag = true  (가습·가온 재배사 전달)\n"
-        "  (3) 두 임계 사이는 직전 상태 유지 (채터링 방지).\n"
-        "  예: 실내 22℃ 일 때 — 수온 27℃ 가 토글 임계.\n"
-        "  이 +5℃ 실내 기준 히스테리시스는 비상정책 #1 의 5℃ hysteresis 와 통일.\n\n"
-        "❌ 사용 금지 키 (모두 반려됨):\n"
-        "    change_relay, adjust, update, command, target, state, changes, adjustments, updates, settings, modify\n"
-        "❌ 한국어 키 사용 금지: 수온히터, 포그생성, 사유, 순환모드 등 → 영어 표준 키만\n"
-        "❌ 값에 \"ON\"/\"OFF\" 문자열 사용 금지 → 반드시 boolean true/false\n"
-        "❌ 위에 명시되지 않은 장치(intake_fan_flag, exhaust_fan_flag, lighting_flag 등) 출력 금지 — 순환모드/스케줄로 자동 결정\n"
-        "❌ JSON 외 어떤 텍스트도 출력 금지 (전후 빈 줄·설명·이모지 모두 금지)\n\n"
-        "✅ 올바른 예시:\n"
-        '  {"action":"change","reason":"저온비상 — 수온히터+포그 가열, 배수밸브 OFF로 물 가둠","devices":{"water_heater_flag":true,"fog_occurs_flag":true,"drainage_motor_flag":false},"circulation":"내부순환"}\n'
-        '  {"action":"change","reason":"외기(22℃)>실내(19℃)+가열필요 → 외부순환으로 가열보조","devices":{"water_heater_flag":true,"fog_occurs_flag":false,"drainage_motor_flag":false},"circulation":"외부순환"}\n'
-        '  {"action":"change","reason":"수온정상+실내정상 — 가열중지+자연수 흐름","devices":{"water_heater_flag":false,"fog_occurs_flag":true,"drainage_motor_flag":true},"circulation":"내부순환"}\n'
-        '  {"action":"change","reason":"고습 배기","devices":{"water_heater_flag":false,"fog_occurs_flag":false,"drainage_motor_flag":true},"circulation":"배기순환"}\n'
-        '  {"action":"keep","reason":"센서값 안정"}\n\n'
-        "❌ 잘못된 예시 (모두 반려됨):\n"
-        '  {"action":"change_relay", ...}                  ← change 만 허용\n'
-        '  {"수온히터":"ON","포그생성":"OFF"}                ← 한국어/문자열 금지\n'
-        '  {"action":"change","target":"water_heater","state":"OFF"}  ← target+state 금지\n'
-    )
-    _critical_thresh = _critical_thresh_inline
-    _proactive = _proactive_inline
-    _context_guide = _context_guide_inline
-    _heater_policy = _heater_policy_inline
-    _response_format = _response_format_inline
-    if os.getenv("USE_DB_BLOCKS", "0") == "1":
-        try:
-            from agri_ai_core.src.prompt_registry import get_block as _get_block
-            _critical_thresh = _get_block(
-                'CONTROL_CRITICAL_THRESHOLDS',
-                TEMP_CRITICAL_LOW=TEMP_CRITICAL_LOW, TEMP_CRITICAL_HIGH=TEMP_CRITICAL_HIGH,
-                HUMIDITY_CRITICAL_LOW=HUMIDITY_CRITICAL_LOW, HUMIDITY_CRITICAL_HIGH=HUMIDITY_CRITICAL_HIGH,
-                CO2_CRITICAL_HIGH=CO2_CRITICAL_HIGH,
-                WATER_TEMP_CRITICAL_LOW=WATER_TEMP_CRITICAL_LOW,
-                WATER_TEMP_CRITICAL_HIGH=WATER_TEMP_CRITICAL_HIGH,
-                WATER_TEMP_LOW=WATER_TEMP_LOW,
-            ) or _critical_thresh_inline
-            _proactive = _get_block(
-                'CONTROL_PROACTIVE_ACTIONS',
-                TEMP_HIGH_PRE=TEMP_HIGH - 0.5, TEMP_CRITICAL_HIGH=TEMP_CRITICAL_HIGH,
-                HUMIDITY_LOW_PRE=HUMIDITY_LOW - 2, HUMIDITY_CRITICAL_LOW=HUMIDITY_CRITICAL_LOW,
-            ) or _proactive_inline
-            _context_guide = _get_block('CONTROL_CONTEXT_GUIDE') or _context_guide_inline
-            _heater_policy = _get_block(
-                'CONTROL_HEATER_POLICY',
-                TEMP_LOW=TEMP_LOW, TEMP_HIGH=TEMP_HIGH,
-                TEMP_CRITICAL_LOW=TEMP_CRITICAL_LOW,
-                HUMIDITY_CRITICAL_LOW=HUMIDITY_CRITICAL_LOW,
-                WATER_TEMP_CRITICAL_LOW=WATER_TEMP_CRITICAL_LOW,
-            ) or _heater_policy_inline
-            _response_format = _get_block('CONTROL_RESPONSE_FORMAT') or _response_format_inline
-        except Exception:
-            pass
-
-    rules = (
-        _critical_thresh
-        + _proactive
-        + _heater_policy
-        + _context_guide
-        + _response_format
-    )
-
-    return base + stage_guide + rules
+    # 뼈대(2026-07-19 단순화): 결정트리 §2~§5·§7·§8 → CTRL_GUIDE 1블록으로 대체.
+    # 생육단계 분기는 CTRL_GUIDE 의 ${GROWTH_STAGE} 치환으로 처리.
+    block_ids = ['CTRL_ROLE', 'CTRL_SEC1', 'CTRL_SEC_SEASON', 'CTRL_GUIDE',
+                 'CTRL_SEC6', 'CTRL_SEC9']
+    sections = []
+    for bid in block_ids:
+        block = _gcb(bid, **ts_kw)
+        if block:
+            sections.append(block)
+        else:
+            logger.warning(f"[SystemPrompt] block '{bid}' DB 조회 실패 — 섹션 건너뜀")
+    return "\n".join(sections)
 
 
 # ══════════════════
 # 유저 프롬프트
-# [2026-04-28] history_block / rag_block 인자가 default 값으로 추가됨 — 기존 호출자
+# history_block / rag_block 인자가 default 값으로 추가됨 — 기존 호출자
 # (시그니처 5번째까지만 위치인자) 와 호환 유지. 빈 문자열이면 섹션 자체 생략.
 # ══════════════════
 # ────────────────────────────────────────────────────────────────────
 # 유저 프롬프트 빌더 — 센서·릴레이·생육·최적조건·트렌드+추가 블록 합성.
-# [2026-04-28] history_block / rag_block / extra_blocks 인자 추가 — 빈 문자열
+# history_block / rag_block / extra_blocks 인자 추가 — 빈 문자열
 # 이면 섹션 자체 생략. 기존 호출자(5번째 위치인자) 와 호환 유지.
 # ────────────────────────────────────────────────────────────────────
 def _build_user_prompt(sensor_data, current_relay, growth_stage, optimal, trend_info, house_id,
                        history_block: str = "", rag_block: str = "",
-                       extra_blocks=None):
+                       extra_blocks=None, farm_id=None):
+    from agri_ai_core.src.prompt_registry import get_control_block as _gcb
     # 릴레이 ON 상태를 시멘틱 이름으로 (보호장치 제외)
     pin_map = get_pin_map(house_id)
     reverse = {v: k for k, v in pin_map.items()}
@@ -1011,19 +485,64 @@ def _build_user_prompt(sensor_data, current_relay, growth_stage, optimal, trend_
                 on_list.append(SEMANTIC_LABELS.get(semantic_name, semantic_name))
     relay_str = f"ON=[{', '.join(on_list)}]" if on_list else "ON=[없음]"
 
+    def _relay_semantic_on(semantic_name: str) -> bool:
+        """현재 relay row의 pin 컬럼을 semantic 장치명으로 변환한다."""
+        pin_key = pin_map.get(semantic_name)
+        if pin_key and pin_key in current_relay:
+            return bool(current_relay.get(pin_key))
+        return bool(current_relay.get(semantic_name))
+
+    # 결함필터(reader.py)가 None 처리한 센서를 "None℃" 대신
+    # "측정불가(센서장애)" 로 명시 — LLM 이 'None' 을 임의 해석하지 않도록
+    # 장애 사실과 판단 근거를 함께 제공한다(정보 축소가 아닌 명확화).
+    def _sv(key, unit):
+        _v = sensor_data.get(key)
+        return f"{_v}{unit}" if _v is not None else "측정불가(센서장애)"
+    _wt = sensor_data.get('water_temperature')
     parts = [
         f"현재 센서값: "
-        f"내부온도={sensor_data.get('indoor_temperature')}℃, "
-        f"내부습도={sensor_data.get('indoor_humidity')}%, "
-        f"CO2={sensor_data.get('co2')}ppm, "
-        f"외부온도={sensor_data.get('outdoor_temperature')}℃, "
-        f"외부습도={sensor_data.get('outdoor_humidity')}%, "
-        f"수온={sensor_data.get('water_temperature')}℃",
+        f"내부온도={_sv('indoor_temperature', '℃')}, "
+        f"내부습도={_sv('indoor_humidity', '%')}, "
+        f"CO2={_sv('co2', 'ppm')}, "
+        f"외부온도={_sv('outdoor_temperature', '℃')}, "
+        f"외부습도={_sv('outdoor_humidity', '%')}, "
+        f"수온={_sv('water_temperature', '℃')}",
         f"생육단계: {growth_stage}",
     ]
+    if _wt is None:
+        parts.append(
+            "※ 수온 센서 장애로 현재 수온을 알 수 없음 — 수온히터/포그 등 수온 관련 "
+            "룰은 실내온도(적정범위 대비)와 외기온도를 근거로 판단하라."
+        )
+    _faulty = [lbl for k, lbl in (('indoor_temperature', '실내온도'),
+                                  ('outdoor_temperature', '외부온도'),
+                                  ('indoor_humidity', '실내습도'),
+                                  ('outdoor_humidity', '외부습도'),
+                                  ('co2', 'CO2'))
+               if sensor_data.get(k) is None]
+    if _faulty:
+        parts.append(
+            f"※ {', '.join(_faulty)} 센서 장애(순간 결함) — 해당 값에 근거한 판단은 "
+            "보류하고 나머지 정상 센서와 직전 결정 이력을 근거로 보수적으로 판단하라."
+        )
+
+    # 관리자 강제 지시 — 활성 지시가 있으면 LLM 판단보다 최우선.
+    # (relay_manager 최종 관문에서도 하드 강제되지만, LLM 이 지시를 인지하고
+    #  일관된 결정·사유를 내도록 프롬프트에도 주입 — LLM 100% 원칙과의 조화)
+    # ⛔ farm_id 는 0(시스템농장)이 유효값 — `if farm_id:` 로 검사하면 0 이 탈락한다.
+    if farm_id is not None:
+        try:
+            from agri_ai_core.src.control.admin_directive import format_prompt_block
+            _adm_block = format_prompt_block(farm_id, house_id)
+            if _adm_block:
+                parts.append(_adm_block)
+        except Exception as e:
+            # ⛔ 조용한 pass 금지. 2026-07-17 까지 farm_id 미전달로 NameError 가
+            #    매 사이클 삼켜져, 관리자지시가 프롬프트에 한 번도 주입되지 않았다.
+            logger.warning(f"[관리자지시] 프롬프트 블록 주입 실패 — {e}")
 
     if optimal:
-        # [2026-05-04] None~None 노출 방지 — 6개 키 모두 값이 있을 때만 출력
+        # None~None 노출 방지 — 6개 키 모두 값이 있을 때만 출력
         _opt_keys = ('온도최저', '온도최고', '습도최저', '습도최고', '수온최저', '수온최고')
         if all(optimal.get(k) is not None for k in _opt_keys):
             parts.append(
@@ -1033,47 +552,45 @@ def _build_user_prompt(sensor_data, current_relay, growth_stage, optimal, trend_
                 f"수온={optimal.get('수온최저')}~{optimal.get('수온최고')}℃"
             )
 
-    # [2026-05-05 옵션 B] 센서 평가 사전 처리 — LLM 의 임계 비교 한계 보완.
-    #   gemma3:27b 가 "27.0 vs 28.0" 같은 미세 비교를 헐겁게 해석하는 패턴 보완.
-    #   각 항목별 임계 비교 결과를 명시적으로 제공하여 LLM 이 추론 없이 정확 판단.
-    #   §2 우선순위 (온도>CO2>습도) 의 "1순위 통과/2순위 트립/3순위 트립" 단계를
-    #   비교 결과로 직접 표시.
-    if optimal:
-        eval_lines = []
-        in_t = sensor_data.get('indoor_temperature')
-        in_h = sensor_data.get('indoor_humidity')
-        co2v = sensor_data.get('co2')
-        t_lo = optimal.get('온도최저')
-        t_hi = optimal.get('온도최고')
-        h_lo = optimal.get('습도최저')
-        h_hi = optimal.get('습도최고')
-        co2_hi = optimal.get('co2최고') or optimal.get('CO2최고')
-        if in_t is not None and t_lo is not None and t_hi is not None:
-            if in_t < t_lo:
-                eval_lines.append(f"- 온도 {in_t}℃ < 적정하한 {t_lo}℃ → 저온 (1순위 트립)")
-            elif in_t > t_hi:
-                eval_lines.append(f"- 온도 {in_t}℃ > 적정상한 {t_hi}℃ → 고온 (1순위 트립)")
-            else:
-                eval_lines.append(
-                    f"- 온도 {in_t}℃ ∈ [{t_lo}, {t_hi}]℃ → 정상 (1순위 통과 — 다음 순위 평가)"
-                )
-        if co2v is not None and co2_hi is not None:
-            if co2v > co2_hi:
-                eval_lines.append(f"- CO2 {co2v}ppm > 적정상한 {co2_hi}ppm → 고농도 (2순위 트립)")
-            else:
-                eval_lines.append(
-                    f"- CO2 {co2v}ppm ≤ 적정상한 {co2_hi}ppm → 정상 (2순위 통과 — 다음 순위 평가)"
-                )
-        if in_h is not None and h_lo is not None and h_hi is not None:
-            if in_h < h_lo:
-                eval_lines.append(f"- 습도 {in_h}% < 적정하한 {h_lo}% → 저습 (3순위 트립)")
-            elif in_h > h_hi:
-                eval_lines.append(f"- 습도 {in_h}% > 적정상한 {h_hi}% → 고습 (3순위 트립)")
-            else:
-                eval_lines.append(f"- 습도 {in_h}% ∈ [{h_lo}, {h_hi}]% → 정상 (3순위 통과)")
-        if eval_lines:
-            parts.append("[센서 평가 — 임계 비교 결과 (1순위 트립 시에만 1순위 룰 적용, 통과 시 다음 순위)]")
-            parts.extend(eval_lines)
+    # ⛔ 센서 평가(임계 비교) 블록 제거 — 2026-07-17 농장주 지시 (LLM 100% 자율).
+    #   python 이 임계 비교 판정을 대신 내려 LLM 에 먹이던 57줄을 걷어냈다.
+    #   LLM 은 위의 "현재 센서값" 과 "최적조건" 만으로 직접 비교·판단한다.
+    #   ⛔ 되돌리지 말 것 — 복구 필요 시 농장주 지시로만.
+
+    # 상호배타 룰 현재 상태 평가 — 실손 비용 명시.
+    #   LLM 이 "현재 무엇이 ON/OFF" 만 보고 룰 관계는 추론으로만 함 → 명시적 표시 필요.
+    #   위반 검출 시 "왜 위반인지" 비용·고장 인과를 함께 제공해 LLM 이 가벼운 룰로 오인 방지.
+    if current_relay:
+        heater_on = _relay_semantic_on('water_heater_flag')
+        drain_on = _relay_semantic_on('drainage_motor_flag')
+        fog_on = _relay_semantic_on('fog_occurs_flag')
+        rule_lines = []
+        rule_lines.append(
+            _gcb('CTRL_USER_MSG_RELAY_STATUS',
+                 HEATER_STATUS='ON' if heater_on else 'OFF',
+                 HEATER_PIN=pin_map.get('water_heater_flag') or 'n/a',
+                 FOG_STATUS='ON' if fog_on else 'OFF',
+                 FOG_PIN=pin_map.get('fog_occurs_flag') or 'n/a',
+                 DRAIN_STATUS='ON' if drain_on else 'OFF',
+                 DRAIN_PIN=pin_map.get('drainage_motor_flag') or 'n/a')
+            or f"- 릴레이: heater={'ON' if heater_on else 'OFF'} fog={'ON' if fog_on else 'OFF'} drain={'ON' if drain_on else 'OFF'}"
+        )
+        if heater_on and drain_on:
+            rule_lines.append(_gcb('CTRL_USER_MSG_RULE1_BOTH_ON') or "- 🔴 절대 룰 1 위반: 둘 다 ON")
+        elif heater_on and not drain_on:
+            rule_lines.append(_gcb('CTRL_USER_MSG_RULE1_HEATER') or "- ✅ 룰 1 준수 (heater ON)")
+        elif (not heater_on) and drain_on:
+            rule_lines.append(_gcb('CTRL_USER_MSG_RULE1_DRAIN') or "- ✅ 룰 1 준수 (drain ON)")
+        else:
+            rule_lines.append(_gcb('CTRL_USER_MSG_RULE1_BOTH_OFF') or "- ⚠️ 룰 1 위반: 둘 다 OFF")
+        wt2 = sensor_data.get('water_temperature')
+        if wt2 is not None and wt2 >= 30.0 and heater_on:
+            rule_lines.append(
+                _gcb('CTRL_USER_MSG_RULE2_VIOLATION', WATER_TEMP=wt2)
+                or f"- 🔴 절대 룰 2 위반: 수온 {wt2}℃ 과열"
+            )
+        parts.append(_gcb('CTRL_USER_LABEL_RULE_STATE') or "[절대 룰 현재 상태]")
+        parts.extend(rule_lines)
 
     parts.append(f"현재 릴레이: {relay_str}")
 
@@ -1085,7 +602,7 @@ def _build_user_prompt(sensor_data, current_relay, growth_stage, optimal, trend_
     if rag_block:
         parts.append(rag_block)
 
-    # [2026-04-28] 추가 신규 블록 — 비어있는 블록은 자동 제외
+    # 추가 신규 블록 — 비어있는 블록은 자동 제외
     for block in (extra_blocks or []):
         if block:
             parts.append(block)
@@ -1099,7 +616,7 @@ def _build_user_prompt(sensor_data, current_relay, growth_stage, optimal, trend_
 # ════════════════════════════════════════════
 # ────────────────────────────────────────────────────────────────────
 # Ollama /api/generate LLM 호출 → 응답 텍스트 반환.
-# [2026-04-28 rev3] (D) JSON Schema 강제 + 확장된 토큰/컨텍스트.
+# (D) JSON Schema 강제 + 확장된 토큰/컨텍스트.
 # 환경제어 LLM 전용 — 사용자 대화 LLM (query_handler_simple) 과 분리.
 # 1차: format=<schema> 강제 (Ollama 0.5+).
 # 2차: format="json" 폴백 (구버전 호환).
@@ -1111,28 +628,6 @@ def _call_llm(system_prompt, user_prompt):
     model_name = get_model_name()
     prompt = system_prompt + "\n\n" + user_prompt
 
-    # [2026-05-25] LLM_BACKEND=vllm 일 때 vLLM 으로 위임 — default ollama 유지.
-    try:
-        from agri_ai_core.src.ai import llm_backend_vllm as _vllm
-        if _vllm.is_enabled():
-            t0 = time.time()
-            try:
-                resp = _vllm.vllm_generate(
-                    model=model_name, prompt=prompt,
-                    options={"temperature": 0,
-                             "num_predict": AI_CONTROL_NUM_PREDICT,
-                             "num_ctx": AI_CONTROL_NUM_CTX},
-                    format=RELAY_RESPONSE_SCHEMA,
-                )
-                response_text = resp.get("response", "") or ""
-                elapsed = time.time() - t0
-                logger.info(f"[AI제어] LLM 응답 backend=vllm ({elapsed:.1f}s, format=schema): {response_text[:200]}")
-                return response_text
-            except Exception as e:
-                logger.error(f"[AI제어] vLLM 호출 실패 — ollama 폴백: {e}")
-    except Exception:
-        pass
-
     base_payload = {
         "model": model_name,
         "prompt": prompt,
@@ -1140,12 +635,12 @@ def _call_llm(system_prompt, user_prompt):
         "keep_alive": -1,  # GPU 영구 상주 보장 (정수 -1 = infinite)
         "options": {
             "temperature": 0,
-            "num_predict": AI_CONTROL_NUM_PREDICT,   # [2026-05-04] 400 (실응답 <200토큰)
+            "num_predict": AI_CONTROL_NUM_PREDICT,   # 400 (실응답 <200토큰)
             "num_ctx":     AI_CONTROL_NUM_CTX,       # 16384
         },
     }
 
-    # [2026-05-04] 폴백 3단계 → schema 단일 — Ollama 0.5+ 가 schema 완벽 지원하며
+    # 폴백 3단계 → schema 단일 — Ollama 0.5+ 가 schema 완벽 지원하며
     #   실 운영 로그상 폴백 시도들도 동일 사유(Ollama 큐 행/timeout)로 모두 실패함이
     #   확인됨. 단일 시도로 실패 시 즉시 algorithm_fallback 으로 넘겨 Ollama 큐 압박 ↓.
     attempts = [
@@ -1157,40 +652,73 @@ def _call_llm(system_prompt, user_prompt):
         f"num_ctx={AI_CONTROL_NUM_CTX} timeout={AI_CONTROL_TIMEOUT}s prompt_len={len(prompt)}"
     )
 
+    # transient 실패(503/busy, timeout, Ollama 재시작 중 connection refused 등)는
+    # 즉시 fallback 으로 소모하지 않고 짧은 backoff 후 재시도한다.
+    # 프롬프트/컨텍스트 크기는 변경하지 않는다.
     for stage, payload in attempts:
-        t_start = time.time()
-        try:
-            status_code, data, error_text = http_json_request(
-                method="POST",
-                url=f"{ollama_url}/api/generate",
-                json_body=payload,
-                timeout=AI_CONTROL_TIMEOUT,
+        backoffs = [0.0] + _control_llm_retry_backoffs()
+        for retry_idx, backoff in enumerate(backoffs):
+            if backoff > 0:
+                logger.warning(
+                    f"[AI제어] LLM {stage} transient 재시도 "
+                    f"{retry_idx}/{len(backoffs) - 1} → {backoff:.1f}s 대기"
+                )
+                time.sleep(backoff)
+
+            t_start = time.time()
+            try:
+                with llm_call_lock("ai_control", wait_sec=AI_CONTROL_LLM_LOCK_WAIT):
+                    with llm_activity("ai_control", AI_CONTROL_TIMEOUT):
+                        status_code, data, error_text = http_json_request(
+                            method="POST",
+                            url=f"{ollama_url}/api/generate",
+                            json_body=payload,
+                            timeout=AI_CONTROL_TIMEOUT,
+                        )
+            except LlmCallLockTimeout as e:
+                logger.warning(f"[AI제어] LLM {stage} 호출 슬롯 대기 초과: {e}")
+                break
+            except Exception as e:
+                # 전송 예외([Errno 22] 등 소켓/슬롯 핸드오프 일시오류)는
+                #   즉시 fallback 하지 않고 backoff 재시도한다. 격리 호출은 정상 성공하므로
+                #   대부분 다음 시도에서 성공하며, 재시도 동안 marker 점유가 길어져 agent
+                #   양보(is_llm_busy)도 함께 유도된다. 마지막 시도까지 실패해야 fallback.
+                logger.warning(f"[AI제어] LLM {stage} 호출 예외: {e}")
+                if retry_idx < len(backoffs) - 1:
+                    continue
+                break
+
+            elapsed = time.time() - t_start
+
+            if status_code == 200 and data:
+                response_text = data.get("response", "") if isinstance(data, dict) else ""
+                tag = "재시도성공" if retry_idx > 0 else f"format={stage}"
+                logger.info(
+                    f"[AI제어] LLM 응답 ({elapsed:.1f}s, {tag}): {response_text[:200]}"
+                )
+                return response_text
+
+            err_preview = (error_text or "")[:160]
+            transient = _is_transient_control_llm_failure(status_code, error_text)
+            if transient and retry_idx < len(backoffs) - 1:
+                logger.warning(
+                    f"[AI제어] LLM {stage} transient 실패 status={status_code} "
+                    f"({elapsed:.1f}s) err={err_preview}"
+                )
+                continue
+
+            logger.warning(
+                f"[AI제어] LLM {stage} 실패 status={status_code} ({elapsed:.1f}s) "
+                f"transient={transient} err={err_preview}"
             )
-        except Exception as e:
-            logger.warning(f"[AI제어] LLM {stage} 호출 예외: {e}")
-            continue
-
-        elapsed = time.time() - t_start
-
-        if status_code == 200 and data:
-            response_text = data.get("response", "") if isinstance(data, dict) else ""
-            logger.info(
-                f"[AI제어] LLM 응답 ({elapsed:.1f}s, format={stage}): {response_text[:200]}"
-            )
-            return response_text
-
-        # [2026-05-04] 단일 시도(schema) 실패 → algorithm_fallback 위임
-        logger.warning(
-            f"[AI제어] LLM {stage} 실패 status={status_code} ({elapsed:.1f}s) "
-            f"err={(error_text or '')[:120]}"
-        )
+            break
 
     logger.error("[AI제어] LLM 호출 실패 → algorithm fallback 위임")
     return None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# [2026-04-28 rev3] (A) LLM 응답 정규화 — 다형 응답을 표준 스키마로 변환
+# (A) LLM 응답 정규화 — 다형 응답을 표준 스키마로 변환
 # 실측에서 관찰된 다양한 응답 형식을 모두 표준 {action, devices, circulation, reason}
 # 로 매핑. format=schema 강제(D) 가 우회되거나 일부 호환성 문제 시 폴백.
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1333,10 +861,10 @@ def _normalize_llm_response(parsed):
 
 # ══════════════════
 # JSON 응답 파싱
-# LLM JSON 응답 파싱 — [2026-04-28 rev3] _normalize_llm_response 우선 적용
+# LLM JSON 응답 파싱 — _normalize_llm_response 우선 적용
 # ══════════════════
 # ────────────────────────────────────────────────────────────────────
-# LLM JSON 응답 파싱 — [2026-04-28 rev3] _normalize_llm_response 우선 적용.
+# LLM JSON 응답 파싱 — _normalize_llm_response 우선 적용.
 # 정규화 후 action/devices/circulation 검증해 dict 반환. 실패 시 None.
 # ────────────────────────────────────────────────────────────────────
 def _parse_relay_response(response_text):
@@ -1396,6 +924,10 @@ def _parse_relay_response(response_text):
         'water_heater_flag': bool(devices.get('water_heater_flag', False)),
         'fog_occurs_flag': bool(devices.get('fog_occurs_flag', False)),
     }
+    # drainage 는 LLM 이 devices 에 명시한 경우에만 normalized 에 포함 —
+    # 미명시 시 _build_relay_values 가 current_relay 값을 보존한다.
+    if 'drainage_motor_flag' in devices:
+        normalized_devices['drainage_motor_flag'] = bool(devices.get('drainage_motor_flag'))
 
     return {
         "action": "change",
@@ -1405,90 +937,83 @@ def _parse_relay_response(response_text):
     }
 
 
+def _relay_semantic_on(current_relay, house_id, semantic_name, default=False):
+    if not current_relay:
+        return bool(default)
+    pin_key = get_pin_map(house_id).get(semantic_name)
+    if pin_key and pin_key in current_relay:
+        return bool(current_relay.get(pin_key))
+    return bool(current_relay.get(semantic_name, default))
+
+
+def _current_llm_devices(current_relay, house_id):
+    return {
+        'water_heater_flag': _relay_semantic_on(current_relay, house_id, 'water_heater_flag'),
+        'fog_occurs_flag': _relay_semantic_on(current_relay, house_id, 'fog_occurs_flag'),
+        'drainage_motor_flag': _relay_semantic_on(current_relay, house_id, 'drainage_motor_flag'),
+    }
+
+
+# ────────────────────────────────────────────────────────────────────
+# keep(현상유지) 결정에도 수온계 안전 3케이스를 적용 — 보정 발생 시 change 전환.
+# ────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────
+# 마지막 '유효 change' 결정(순환모드 명시)을 조회 — keep 시 전체 재구성 기준.
+# ────────────────────────────────────────────────────────────────────
+def _get_last_change_target(farm_id, house_id):
+    try:
+        from agri_ai_core.src.postgresql.connection import db_session
+        with db_session() as d:
+            r = d.fetch_one(
+                "SELECT circulation, water_heater, fog_occurs, drainage_motor "
+                "FROM ai_decision_log WHERE farm_id=%s AND house_id=%s "
+                "AND action='change' AND circulation IS NOT NULL "
+                "ORDER BY decided_at DESC LIMIT 1", (int(farm_id), int(house_id)))
+        return dict(r) if r else None
+    except Exception as e:
+        logger.debug(f"[AI제어] 마지막 change 조회 실패: {e}")
+        return None
+
+
+def _build_keep_safety_repair(current_relay, sensor_data, farm_id, house_id):
+    if not current_relay:
+        return None
+    current_devices = _current_llm_devices(current_relay, house_id)
+    fixed, corrections = apply_water_safety(
+        dict(current_devices), sensor_data, farm_id, house_id, scope="[AI-keep]"
+    )
+    if not corrections:
+        return None
+    return {
+        "action": "change",
+        "reason": "[keep 안전보정] " + " / ".join(corrections),
+        "devices": fixed,
+        "corrections": corrections,
+    }
+
+
 # ═════════════════════════════════════════════════════════════════
 # 안전 검증
 # LLM 응답 안전 검증 — 비상조건 위반·쿨다운 위반·외부순환 제한 거부
 # ═════════════════════════════════════════════════════════════════
 # ────────────────────────────────────────────────────────────────────
-# LLM 응답 안전 검증 — 비상 임계 위반·외부순환 제한·수온히터 정책 등 보정.
-# 위반 시 강제 OFF/ON 또는 순환모드 강제 전환. 잘못된 모드는 None 반환.
+# LLM 응답 안전 검증 — 환경 판단은 전량 LLM 자율.
+# ⛔ [필수 주의] 코드 개입은 2가지뿐: 수온계 안전 3케이스(apply_water_safety —
+#   농장주 지정) · 순환모드 유효성(무효 시 keep).
+#   비상 임계 판단·외부순환 가부·습도 대응 등은 LLM 이 직접 결정한다.
 # ────────────────────────────────────────────────────────────────────
 def _validate_safety(parsed, sensor_data, farm_id, house_id, growth_stage='생육기'):
     devices = parsed.get("devices", {})
     circulation = parsed.get("circulation", "")
 
-    indoor_temp = sensor_data.get('indoor_temperature')
-    indoor_humidity = sensor_data.get('indoor_humidity')
-    co2 = sensor_data.get('co2')
-    water_temp = sensor_data.get('water_temperature')
-    outdoor_temp = sensor_data.get('outdoor_temperature')
-    outdoor_humidity = sensor_data.get('outdoor_humidity')
+    # 수온계 안전 3케이스 (혹한 락아웃 / 온난 히터금지 / 혹서 냉각)
+    devices, water_corrections = apply_water_safety(
+        devices, sensor_data, farm_id, house_id, scope="[AI안전보정]"
+    )
+    for correction in water_corrections:
+        logger.warning(f"[AI제어] 수온계 안전 보정: {correction}")
 
-    # [2026-04-28] 재배사별 동적 임계값 — DB SENSOR_M_SETTING 우선 (모듈 레벨 import 사용)
-    ts = get_thresholds(farm_id, house_id)
-    TEMP_CRITICAL_LOW = ts.temp_critical_low
-    TEMP_CRITICAL_HIGH = ts.temp_critical_high
-    HUMIDITY_CRITICAL_LOW = ts.humidity_critical_low
-    HUMIDITY_CRITICAL_HIGH = ts.humidity_critical_high
-    WATER_TEMP_CRITICAL_LOW = ts.water_temp_critical_low
-    WATER_TEMP_CRITICAL_HIGH = ts.water_temp_critical_high
-    TEMP_LOW = ts.temp_low
-    TEMP_HIGH = ts.temp_high
-    HUMIDITY_LOW = ts.humidity_low
-    HUMIDITY_HIGH = ts.humidity_high
-
-    # (1) 비상 온도 위반 방지
-    if indoor_temp is not None:
-        if indoor_temp > TEMP_CRITICAL_HIGH:
-            # 고온 비상 시 가열 장치 ON 거부
-            if devices.get('water_heater_flag'):
-                logger.warning(f"[AI제어] 안전 보정: 고온비상({indoor_temp}℃) → 가열장치 강제 OFF")
-                devices['water_heater_flag'] = False
-            if circulation not in ('배기순환', '외부순환'):
-                circulation = '배기순환'
-                logger.warning(f"[AI제어] 안전 보정: 고온비상 → 배기순환 강제")
-
-        elif indoor_temp < TEMP_CRITICAL_LOW:
-            # 저온 비상 시 가열 OFF 거부
-            if not devices.get('water_heater_flag'):
-                logger.warning(f"[AI제어] 안전 보정: 저온비상({indoor_temp}℃) → 수온히터 강제 ON")
-                devices['water_heater_flag'] = True
-
-    # (2) [2026-05-04 Phase D] 사용자 정책 #5/#6 — 습도 비상 강제 가드 제거.
-    # 습도 단독 비상은 LLM 자율 판단 영역. _emergency_override 도 처리 안 함.
-
-    # (3) 수온 비상 위반 방지
-    if water_temp is not None:
-        if water_temp > WATER_TEMP_CRITICAL_HIGH and devices.get('water_heater_flag'):
-            logger.warning(f"[AI제어] 안전 보정: 수온과열({water_temp}℃) → 수온히터 강제 OFF")
-            devices['water_heater_flag'] = False
-        elif water_temp < WATER_TEMP_CRITICAL_LOW and not devices.get('water_heater_flag'):
-            logger.warning(f"[AI제어] 안전 보정: 수온저하({water_temp}℃) → 수온히터 강제 ON")
-            devices['water_heater_flag'] = True
-
-    # (4) 외부순환 제한 검증
-    if circulation == '외부순환':
-        ext_temp_bad = outdoor_temp is not None and (outdoor_temp < TEMP_LOW or outdoor_temp > TEMP_HIGH)
-        ext_hum_bad = outdoor_humidity is not None and (outdoor_humidity < HUMIDITY_LOW or outdoor_humidity > HUMIDITY_HIGH)
-        if ext_temp_bad or ext_hum_bad:
-            logger.warning(f"[AI제어] 안전 보정: 외부환경 부적합(외부온도={outdoor_temp}, 외부습도={outdoor_humidity}) → 내부순환 전환")
-            circulation = '내부순환'
-
-    # (5) 포그생성 결합 규칙 — environment_logic.apply_fog_coupling 위임
-    # [2026-04-28] (a) 수온히터 ON ⟹ 포그 ON, (b) 수온 ≥ WATER_TEMP_LOW(40℃) ⟹
-    # 포그 ON. 단 indoor_temp > TEMP_CRITICAL_HIGH 고온비상은 안전 우선으로 보류.
-    # 온도 제어가 실내습도보다 우선이므로 (2) 고습비상에서 fog OFF 로 강제됐더라도
-    # heater ON 또는 수온이 충분하면 여기서 다시 ON 으로 덮어쓴다.
-    _apply_fog_coupling(devices, sensor_data, scope="[AI안전보정]")
-
-    # (6) [2026-05-01] 수온히터 정책 보정 코드 제거.
-    # 사유: LLM 이 mappers.py 의 _RELAY_DESCRIPTIONS (수온히터 의존성, 외기/실내 비교
-    #   가이드) 를 종합 판단해 결정한 결과를 정책으로 강제 OFF 하던 코드가 LLM 자율성을
-    #   가장 크게 제한하던 부분. 이제 critical 임계 안전 가드(_validate_safety)만 유지하고
-    #   정상 범위 결정은 LLM 에 위임. 외기·실내 컨텍스트(예: 외기>실내+가열필요→외부순환)
-    #   는 LLM 이 직접 판단해 reason 으로 설명한다.
-
-    # (7) 순환모드 유효성
+    # 순환모드 유효성
     if circulation not in VALID_CIRCULATIONS:
         logger.warning(f"[AI제어] 안전 거부: 잘못된 순환모드 {circulation}")
         return None
@@ -1511,14 +1036,18 @@ def _validate_safety(parsed, sensor_data, farm_id, house_id, growth_stage='생�
 # 결정 이력은 ai_decision_log 에 기록되어 다음 호출 prompt 에 노출됨.
 # ────────────────────────────────────────────────────────────────────
 def control_ai_environment(farm_id, house_id, growth_stage='생육기', order_label=""):
+    # [제어중재] agent 우선 · 스케줄 failover 상태 플래그 (finally 에서 참조)
+    _arb_started = False
+    _arb_emergency = False
+    _agent_end_at_gate = None
     try:
         scope = house_prefix(order_label, farm_id, house_id)
-        # [2026-04-28] step 헤더는 단순 "0-99" scope 만 사용 — order_label 의 재배사
+        # step 헤더는 단순 "0-99" scope 만 사용 — order_label 의 재배사
         # 순회 prefix(예: "[AI재배사 1/1]")는 사이클 헤더 라인에만 표시. 매 단계마다
         # 중복 출력되어 가독성 저하되는 것 방지.
         step_scope = house_prefix("", farm_id, house_id)
 
-        # [2026-04-28] 14단계 순차 로그 — 알고리즘 모드 "[1/N]" 패턴과 동일 형식.
+        # 14단계 순차 로그 — 알고리즘 모드 "[1/N]" 패턴과 동일 형식.
         # 모든 컨텍스트 수집 단계(4~12)는 try/except 보호 → 실패 시 빈 컨텍스트
         # 폴백, 기존 LLM 흐름·결과 변경 없음.
         steps = AiStepLogger(scope=step_scope, total=14)
@@ -1528,6 +1057,35 @@ def control_ai_environment(farm_id, house_id, growth_stage='생육기', order_la
         if not sensor_data:
             steps.skip("센서/릴레이 조회", reason="센서 데이터 없음")
             return {"success": False, "message": "센서 데이터 없음"}
+
+        # ─── [제어 중재] agent 우선 · 스케줄 30분 failover ───
+        # agent 릴레이 제어를 기본으로 하고, agent 가 최근(유예분 내) 제어했다면 스케줄
+        # 제어는 skip. 단 비상(임계 초과) 시에는 안전 우선으로 항상 진행(예외).
+        try:
+            from agri_ai_core.src.control import control_arbitration as _arb
+            from agri_ai_core.src.control.environment_logic import _check_emergency as _chk_emg
+            from agri_ai_core.src.control.ai_thresholds import get_thresholds as _get_ts_arb
+            try:
+                _emg = bool(_chk_emg(sensor_data, _get_ts_arb(farm_id, house_id))[0])
+            except Exception:
+                _emg = False
+            if not _emg:
+                _allow, _why = _arb.should_run_schedule(farm_id, house_id)
+                if not _allow:
+                    logger.debug(f"{scope}: [제어중재] 스케줄 제어 skip — {_why}")
+                    steps.skip("제어 중재", reason=_why)
+                    return {"success": True, "action": "arbitration_skip",
+                            "message": f"스케줄 제어 중재 skip: {_why}"}
+                logger.info(f"{scope}: [제어중재] failover 스케줄 제어 실행 — {_why}")
+            else:
+                logger.info(f"{scope}: [제어중재] 비상 감지 — 스케줄 제어 예외 진행")
+                _arb_emergency = True
+            _arb.stamp_schedule_start(farm_id, house_id)
+            _arb_started = True
+            _st_gate = _arb.get_state(farm_id, house_id)
+            _agent_end_at_gate = _st_gate.get('last_agent_ctrl_end_dttm') if _st_gate else None
+        except Exception as _e:
+            logger.warning(f"{scope}: [제어중재] 게이트 예외 — 제어 진행: {_e}")
 
         current_relay = read_latest_relay_info(farm_id, house_id)
         steps.step("센서/릴레이 조회",
@@ -1586,27 +1144,11 @@ def control_ai_environment(farm_id, house_id, growth_stage='생육기', order_la
             steps.warn("최근 2개월·1년 전 기준점", reason=f"실패 — 빈 컨텍스트: {e}")
             history_block = ""
 
-        # ─── [AI 5/14] 알고리즘 참조 결정 (M5) ───
-        algo_block = ""
-        try:
-            algo_action = _determine_environment_action(sensor_data, growth_stage, farm_id, house_id)
-            algo_block = format_algorithm_reference(algo_action) if algo_action else ""
-            if algo_block and algo_action:
-                steps.step("알고리즘 참조 결정",
-                           extra=f"{algo_action.get('reason','')[:30]} → "
-                                 f"{algo_action.get('circulation','-')}")
-                steps.detail(
-                    f"reason={algo_action.get('reason','')}",
-                    f"circulation={algo_action.get('circulation')}",
-                    f"devices={algo_action.get('devices')}",
-                    f"is_emergency={algo_action.get('is_emergency')} "
-                    f"water_temp_only={algo_action.get('water_temp_only')}",
-                )
-            else:
-                steps.skip("알고리즘 참조 결정", reason="알고리즘 판단 불가")
-        except Exception as e:
-            steps.warn("알고리즘 참조 결정", reason=f"실패 — 빈 컨텍스트: {e}")
-            algo_block = ""
+        # ⛔ [AI 5/14] 알고리즘 참조 결정(M5) 제거 — 2026-07-17 농장주 지시.
+        #   python 64케이스 분기가 결정 전체를 계산해 LLM 프롬프트에 앵커로 꽂던 단계.
+        #   LLM 이 알고리즘 결론에 끌려가 자율 판단이 훼손되므로 걷어냈다.
+        #   ⛔ 알고리즘 본체(_determine_environment_action)는 manual_control 의
+        #      알고리즘 모드·LLM 3회연속실패 폴백·비상 경로에서 그대로 살아있다 — 제거 금지.
 
         # ─── [AI 6/14] LLM 자기결정 이력 (M6) ───
         recent_decisions_block = ""
@@ -1671,7 +1213,7 @@ def control_ai_environment(farm_id, house_id, growth_stage='생육기', order_la
             steps.warn("외부 기상예보", reason=f"실패 — 빈 컨텍스트: {e}")
             weather_block = ""
 
-        # ─── [AI 9b/14] 외부 대기질 (M11) [2026-05-17 신규] ───
+        # ─── [AI 9b/14] 외부 대기질 (M11) ───
         air_quality_block = ""
         try:
             aq = _get_air_quality(farm_id)
@@ -1688,7 +1230,7 @@ def control_ai_environment(farm_id, house_id, growth_stage='생육기', order_la
             steps.warn("외부 대기질", reason=f"실패 — 빈 컨텍스트: {e}")
             air_quality_block = ""
 
-        # ─── [AI 9c/14] 기상특보 (M12) [2026-05-19 신규] ───
+        # ─── [AI 9c/14] 기상특보 (M12) ───
         weather_alert_block = ""
         try:
             wa = _get_weather_alerts(farm_id)
@@ -1703,7 +1245,7 @@ def control_ai_environment(farm_id, house_id, growth_stage='생육기', order_la
             steps.warn("기상특보", reason=f"실패 — 빈 컨텍스트: {e}")
             weather_alert_block = ""
 
-        # ─── [AI 9d/14] 대기정체지수 (M13) [2026-05-19 신규] ───
+        # ─── [AI 9d/14] 대기정체지수 (M13) ───
         atm_stagnation_block = ""
         try:
             ag = _get_atm_stagnation(farm_id)
@@ -1720,7 +1262,7 @@ def control_ai_environment(farm_id, house_id, growth_stage='생육기', order_la
             atm_stagnation_block = ""
 
         # ─── [AI 10/14] 카메라 / 버섯 영상 분석 (M11) ───
-        # [변경10 · 2026-04-30] 즉석 캡처(get_camera_context) 제거 — 매 5초 사이클에서
+        # 즉석 캡처(get_camera_context) 제거 — 매 5초 사이클에서
         #   60초+ 걸리는 Vision LLM 호출이 ollama 큐를 점유해 사용자 채팅 응답을
         #   지연시키던 원인. ai_camera_archive 가 매시간 정각에 캡처+Vision+RAG 처리
         #   하므로 ai_control 은 read_recent_history(DB 조회) 만 사용 — 24시간 이력의
@@ -1749,11 +1291,18 @@ def control_ai_environment(farm_id, house_id, growth_stage='생육기', order_la
         try:
             similar = query_similar_periods(farm_id, house_id, sensor_data, growth_stage)
             rag_block = format_rag_block(similar) if similar else ""
+            # doc_query 에 수온/현재 릴레이/상호배타 키워드 포함 —
+            # 수온 관련 도메인 룰이 RAG 매칭되어 LLM 에 도달하도록 한다.
+            _h_now = bool((current_relay or {}).get('water_heater_flag'))
+            _d_now = bool((current_relay or {}).get('drainage_motor_flag'))
             doc_query = (
                 f"생육단계 {growth_stage} 내부온도 {sensor_data.get('indoor_temperature')}℃ "
-                f"습도 {sensor_data.get('indoor_humidity')}% CO2 {sensor_data.get('co2')}ppm"
+                f"수온 {sensor_data.get('water_temperature')}℃ "
+                f"습도 {sensor_data.get('indoor_humidity')}% CO2 {sensor_data.get('co2')}ppm "
+                f"수온히터 {'ON' if _h_now else 'OFF'} 배수밸브 {'ON' if _d_now else 'OFF'} "
+                f"상호배타 가온 포그 환기 룰"
             )
-            doc_items = query_domain_knowledge(doc_query)
+            doc_items = query_domain_knowledge(doc_query, farm_id=farm_id)
             doc_block = format_doc_block(doc_items)
             steps.step("RAG (유사시기+도메인지식)",
                        extra=f"유사시기={len(similar)}건 / 도메인지식={len(doc_items)}건")
@@ -1781,7 +1330,7 @@ def control_ai_environment(farm_id, house_id, growth_stage='생육기', order_la
             power_payload = get_power_usage_24h(farm_id, house_id)
             power_b = format_power_block(power_payload)
 
-            # [2026-04-28] 최근 raw 시계열 (3분×20=60분 분량) — LLM 직접 분석용
+            # 최근 raw 시계열 (3분×20=60분 분량) — LLM 직접 분석용
             recent_ts = _get_recent_samples(farm_id, house_id)
             ts_raw_b = _format_recent_ts_block(recent_ts)
 
@@ -1801,30 +1350,29 @@ def control_ai_environment(farm_id, house_id, growth_stage='생육기', order_la
             analytics_block = ""
 
         # ─── [AI 13/14] LLM 호출 (Ollama generate) ───
-        # [2026-04-28] 재배사별 동적 임계값을 시스템 프롬프트에 주입
+        # 재배사별 동적 임계값을 시스템 프롬프트에 주입
         from agri_ai_core.src.control.ai_thresholds import get_thresholds as _get_ts
         ts_for_prompt = _get_ts(farm_id, house_id)
         system_prompt = _build_system_prompt(growth_stage, ts_for_prompt)
         extra_blocks = [
-            algo_block,
             recent_decisions_block,
             peer_block,
             harvest_anomaly_block,
             weather_block,
-            air_quality_block,      # [2026-05-17] 외부 대기질 (PM2.5/PM10/O3/NO2/SO2/CO)
-            weather_alert_block,    # [2026-05-19] 기상특보 (호우/강풍/한파/폭염/건조)
-            atm_stagnation_block,   # [2026-05-19] 대기정체지수 (환풍기 효율 보정)
+            air_quality_block,      # 외부 대기질 (PM2.5/PM10/O3/NO2/SO2/CO)
+            weather_alert_block,    # 기상특보 (호우/강풍/한파/폭염/건조)
+            atm_stagnation_block,   # 대기정체지수 (환풍기 효율 보정)
             camera_block,
-            history_camera_block,   # [변경8 · 2026-04-30] 24시간 카메라 이력/추세
+            history_camera_block,   # 24시간 카메라 이력/추세
             doc_block,
             analytics_block,
         ]
         user_prompt = _build_user_prompt(
             sensor_data, current_relay, growth_stage, optimal, trend_info, house_id,
             history_block=history_block, rag_block=rag_block,
-            extra_blocks=extra_blocks,
+            extra_blocks=extra_blocks, farm_id=farm_id,
         )
-        # [2026-04-28] 프롬프트 길이 + 본문 미리보기를 INFO 로 노출 (로그만으로 추적)
+        # 프롬프트 길이 + 본문 미리보기를 INFO 로 노출 (로그만으로 추적)
         steps.step("LLM 호출 (Ollama generate)",
                    extra=f"system={len(system_prompt)}자 user={len(user_prompt)}자")
         steps.detail(
@@ -1846,7 +1394,11 @@ def control_ai_environment(farm_id, house_id, growth_stage='생육기', order_la
                 action="keep", circulation=None, water_heater=None, fog_occurs=None,
                 reason="LLM 호출 실패", sensor_snapshot=sensor_data,
             )
-            return {"success": True, "message": "AI 제어: LLM 실패 → 현상 유지", "action": "keep"}
+            # ⛔ degraded=True: LLM 이 정상 판단을 못한 keep. manual_control 의
+            #    _LLM_FAIL_COUNTER 가 이 플래그로 연속실패를 세어 3회째 algorithm 폴백.
+            #    (과거 'LLM' 문자열 매칭이라 파싱·검증 실패가 안 세어졌다 — 2026-07-18)
+            return {"success": True, "message": "AI 제어: LLM 실패 → 현상 유지",
+                    "action": "keep", "degraded": True}
 
         # LLM 응답 본문 INFO 출력 (사용자 요청: "LLM 판단 내용")
         steps.detail("LLM 응답 (raw, 최대 800자):", llm_result)
@@ -1859,11 +1411,65 @@ def control_ai_environment(farm_id, house_id, growth_stage='생육기', order_la
                 action="keep", circulation=None, water_heater=None, fog_occurs=None,
                 reason="응답 파싱 실패", sensor_snapshot=sensor_data,
             )
-            return {"success": True, "message": "AI 제어: 파싱 실패 → 현상 유지", "action": "keep"}
+            return {"success": True, "message": "AI 제어: 파싱 실패 → 현상 유지",
+                    "action": "keep", "degraded": True}
 
         if parsed.get("action") == "keep":
             reason = parsed.get('reason', '')
             steps.detail(f"파싱 결과: action=keep · 사유: {reason}")
+
+            repair = _build_keep_safety_repair(current_relay, sensor_data, farm_id, house_id)
+            if repair:
+                fixed_devices = repair["devices"]
+                repair_reason = f"{reason} -> {repair['reason']}" if reason else repair["reason"]
+                steps.detail("⚠ keep 안전 보정 적용:", *repair.get("corrections", []))
+                result = set_relay_value(farm_id, house_id, fixed_devices, raw_mode=False)
+                ok = bool(result.get("success", True)) if isinstance(result, dict) else bool(result)
+                _log_ai_decision(scope, "change", repair_reason, devices=fixed_devices, circulation=None)
+                _record_ai_decision(
+                    farm_id, house_id, growth_stage=growth_stage,
+                    action="change", circulation=None,
+                    water_heater=bool(fixed_devices.get('water_heater_flag')),
+                    fog_occurs=bool(fixed_devices.get('fog_occurs_flag')),
+                    drainage_motor=bool(fixed_devices.get('drainage_motor_flag')),
+                    reason=repair_reason, sensor_snapshot=sensor_data,
+                )
+                return {
+                    "success": ok,
+                    "message": f"AI 제어: keep 안전 보정 ({repair_reason})",
+                    "action": "change",
+                    "devices": fixed_devices,
+                    "reason": repair_reason,
+                }
+
+            # 잔재 방지 — keep 이어도 마지막 change 목표를 전체 재구성으로 재적용.
+            # (조명/관수는 스케줄 재계산, 순환밸브 등은 순환모드 정의대로 정리)
+            _last = _get_last_change_target(farm_id, house_id)
+            if _last and _last.get('circulation'):
+                _dev = {
+                    'water_heater_flag': bool(_last['water_heater']) if _last['water_heater'] is not None else False,
+                    'fog_occurs_flag': bool(_last['fog_occurs']) if _last['fog_occurs'] is not None else False,
+                    'drainage_motor_flag': bool(_last['drainage_motor']) if _last['drainage_motor'] is not None else False,
+                }
+                _dev, _wc = apply_water_safety(_dev, sensor_data, farm_id, house_id, scope="[AI-keep]")
+                try:
+                    _execute_control(
+                        farm_id, house_id, _dev, _last['circulation'],
+                        current_relay, (growth_stage == '수확기'),
+                        reason=f"현상유지 재구성({reason})", order_label=order_label,
+                    )
+                except Exception as _e:
+                    logger.warning(f"{scope}: keep 재구성 실패(현상 유지로 폴백): {_e}")
+                _log_ai_decision(scope, "keep", f"현상유지 재구성: {reason}")
+                _record_ai_decision(
+                    farm_id, house_id, growth_stage=growth_stage,
+                    action="keep", circulation=_last['circulation'],
+                    water_heater=_dev['water_heater_flag'], fog_occurs=_dev['fog_occurs_flag'],
+                    drainage_motor=_dev['drainage_motor_flag'],
+                    reason=f"현상유지 재구성: {reason}", sensor_snapshot=sensor_data,
+                )
+                return {"success": True, "message": f"AI 제어: 현상유지 재구성 ({reason})", "action": "keep"}
+
             _log_ai_decision(scope, "keep", reason)
             _record_ai_decision(
                 farm_id, house_id, growth_stage=growth_stage,
@@ -1888,7 +1494,8 @@ def control_ai_environment(farm_id, house_id, growth_stage='생육기', order_la
                 action="keep", circulation=None, water_heater=None, fog_occurs=None,
                 reason="안전검증 실패", sensor_snapshot=sensor_data,
             )
-            return {"success": True, "message": "AI 제어: 안전 검증 실패", "action": "keep"}
+            return {"success": True, "message": "AI 제어: 안전 검증 실패",
+                    "action": "keep", "degraded": True}
 
         # 안전검증 보정 후 최종 결정 — LLM 원본과 차이가 있는지 비교
         orig_devices = parsed.get('devices', {})
@@ -1903,6 +1510,19 @@ def control_ai_environment(farm_id, house_id, growth_stage='생육기', order_la
         else:
             steps.detail("안전검증 통과 — 보정 없음")
 
+        # [제어중재] 스케줄 LLM 진행 중(60~120초) agent 가 개입(set_relay)했으면
+        # 적용 취소하고 agent 판단을 우선한다. 비상(예외 진행) 시에는 취소하지 않음.
+        if _arb_started and not _arb_emergency:
+            try:
+                from agri_ai_core.src.control import control_arbitration as _arb
+                if _arb.agent_end_changed(farm_id, house_id, _agent_end_at_gate):
+                    logger.info(f"{scope}: [제어중재] 스케줄 LLM 진행 중 agent 개입 → 적용 취소(agent 우선)")
+                    steps.skip("안전검증·2-phase 실행", reason="agent 개입 — 스케줄 적용 취소")
+                    return {"success": True, "action": "arbitration_yield",
+                            "message": "스케줄 제어 중 agent 개입 → 적용 취소"}
+            except Exception:
+                pass
+
         _log_ai_decision(
             scope, "change", validated.get('reason', ''),
             devices=validated['devices'], circulation=validated['circulation']
@@ -1914,6 +1534,7 @@ def control_ai_environment(farm_id, house_id, growth_stage='생육기', order_la
             water_heater=bool(validated['devices'].get('water_heater_flag')),
             fog_occurs=bool(validated['devices'].get('fog_occurs_flag')),
             reason=validated.get('reason', ''), sensor_snapshot=sensor_data,
+            drainage_motor=bool(validated['devices'].get('drainage_motor_flag')),
         )
 
         steps.step(
@@ -1957,7 +1578,7 @@ def control_ai_environment(farm_id, house_id, growth_stage='생육기', order_la
         steps.done(summary=f"{validated['circulation']} 적용 — 결정/실행 완료")
         logger.info(f"{scope}: [AI] 제어 실행 완료")
 
-        # [2026-05-04 G5] 호출자가 result.get("action") 으로 라벨링하므로 명시.
+        # 호출자가 result.get("action") 으로 라벨링하므로 명시.
         # _execute_control 은 action 키를 반환하지 않아 "unknown" 로그 발생하던 버그 수정.
         if isinstance(result, dict):
             result.setdefault("action", "change")
@@ -1968,3 +1589,11 @@ def control_ai_environment(farm_id, house_id, growth_stage='생육기', order_la
         logger.error(f"AI 환경제어 오류 ({scope}): {e}")
         logger.error(traceback.format_exc())
         return {"success": False, "message": f"AI 제어 오류: {str(e)}"}
+    finally:
+        # [제어중재] 스케줄 제어가 실제 진행됐으면 종료 시각 기록(어느 return 경로든)
+        if _arb_started:
+            try:
+                from agri_ai_core.src.control import control_arbitration as _arb_fin
+                _arb_fin.stamp_schedule_end(farm_id, house_id)
+            except Exception:
+                pass

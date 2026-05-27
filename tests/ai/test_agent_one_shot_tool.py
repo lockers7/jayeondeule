@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# test_agent_one_shot_tool — A 단계 (채팅 → agent 1회 분석) [2026-05-25]
+# test_agent_one_shot_tool — 채팅 → agent 1회 분석 도구 검증
 #
 # 대상: tools_executor.execute_tool("agent_one_shot", ...)
 #       + tools_definition.TOOLS_DEFINITION 의 schema

@@ -1,6 +1,6 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # AI 환경제어 컨텍스트 확장 모듈 단위테스트 (M5~M17)
-# [2026-04-28] DB/외부 API 의존 함수는 monkeypatch 로 mock 하고, 포맷터·격리·
+# DB/외부 API 의존 함수는 monkeypatch 로 mock 하고, 포맷터·격리·
 # 시그니처·로깅 등 순수 영역만 검증. ai_control._build_user_prompt 의 기존
 # 시그니처 호환성도 회귀 검사.
 # ══════════════════════════════════════════════════════════════════════════════
@@ -18,7 +18,7 @@ if ROOT not in sys.path:
 # ════════════════════════════════════════════════════════════════════════════
 def test_isolation_no_cross_import_to_control():
     targets = [
-        'ai_algorithm_reference', 'ai_peer_compare', 'ai_harvest_context',
+        'ai_peer_compare', 'ai_harvest_context',
         'ai_anomaly_history', 'ai_weather_forecast', 'ai_camera_vision',
         'ai_doc_rag', 'ai_yield_correlation', 'ai_forecast',
         'ai_seasonality', 'ai_power_usage', 'ai_history_context',
@@ -37,20 +37,9 @@ def test_isolation_no_cross_import_to_control():
             assert forbid not in content, f"{name}.py가 {forbid}를 import함 (격리 위반)"
 
 
-# ════════════════════════════════════════════════════════════════════════════
-# M5 ai_algorithm_reference — 순수 포맷터
-# ════════════════════════════════════════════════════════════════════════════
-def test_algorithm_reference_format():
-    from agri_ai_core.src.control.ai_algorithm_reference import format_algorithm_reference
-    assert format_algorithm_reference(None) == ""
-    assert format_algorithm_reference({}) == ""
-    out = format_algorithm_reference({
-        "devices": {"water_heater_flag": True, "fog_occurs_flag": True},
-        "circulation": "내부순환",
-        "reason": "저온비상",
-        "is_emergency": True,
-    })
-    assert "비상" in out and "내부순환" in out and "ON" in out
+# ⛔ M5 ai_algorithm_reference 는 2026-07-17 농장주 지시로 모듈째 제거됐다.
+#   (python 64케이스 결정을 LLM 프롬프트에 앵커로 꽂아 자율 판단을 훼손)
+#   재발 방지 검증은 tests/control/test_llm_autonomy_no_anchors.py 로 이관.
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -84,58 +73,27 @@ def test_step_logger_prefix_variants():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# [2026-04-28 rev2] _apply_fog_coupling 단일 결합규칙 검증
-# 사용자 명시 규칙: "수온 ≥ 40℃ ⟹ 포그 ON" (수온히터 상태 무관)
+# apply_water_safety — 3케이스 밖에서는 LLM 결정 완전 보존 (상세는 tests/control/)
 # ════════════════════════════════════════════════════════════════════════════
-def test_fog_coupling_water_below_40_heater_on():
-    """[2026-05-01] 효율 룰 (3),(4) 제거 — 수온<40 + heater ON 시 LLM fog 결정 보존 (자율 판단)."""
-    from agri_ai_core.src.control.environment_logic import _apply_fog_coupling
+def test_water_safety_preserves_llm_outside_cases():
+    from agri_ai_core.src.control.environment_logic import apply_water_safety, _WS_HEATER_LOCKOUT
+    _WS_HEATER_LOCKOUT.clear()
     devices = {'water_heater_flag': True, 'fog_occurs_flag': True}
-    _apply_fog_coupling(devices, {'water_temperature': 30, 'indoor_temperature': 24})
-    # 안전가드(과열·실내고온) 미발동 → LLM 의 fog=True 결정 그대로 보존
-    assert devices['fog_occurs_flag'] is True
-    assert devices['water_heater_flag'] is True
-
-
-def test_fog_coupling_water_above_40_any_heater():
-    """[2026-05-01] 효율 룰 제거 — 수온 ≥ 40 시 LLM fog 결정 보존 (강제 ON 안 함)."""
-    from agri_ai_core.src.control.environment_logic import _apply_fog_coupling
-    for heater in (True, False):
-        devices = {'water_heater_flag': heater, 'fog_occurs_flag': True}
-        _apply_fog_coupling(devices, {'water_temperature': 45, 'indoor_temperature': 28})
-        # LLM fog=True → 보존
-        assert devices['fog_occurs_flag'] is True
-
-
-def test_fog_coupling_water_overheated():
-    """수온 > 60 → 포그 OFF 강제 (안전)."""
-    from agri_ai_core.src.control.environment_logic import _apply_fog_coupling
-    devices = {'water_heater_flag': False, 'fog_occurs_flag': True}
-    _apply_fog_coupling(devices, {'water_temperature': 65, 'indoor_temperature': 28})
-    assert devices['fog_occurs_flag'] is False
-
-
-def test_fog_coupling_indoor_critical_high_preserved():
-    """실내온도 > 33 → 호출자 결정 보존 (보통 OFF)."""
-    from agri_ai_core.src.control.environment_logic import _apply_fog_coupling
-    devices = {'water_heater_flag': False, 'fog_occurs_flag': False}
-    _apply_fog_coupling(devices, {'water_temperature': 50, 'indoor_temperature': 36})
-    assert devices['fog_occurs_flag'] is False
-
-
-def test_fog_coupling_water_temp_unknown_no_change():
-    """수온 None → 호출자 결정 보존."""
-    from agri_ai_core.src.control.environment_logic import _apply_fog_coupling
-    devices = {'water_heater_flag': True, 'fog_occurs_flag': True}
-    _apply_fog_coupling(devices, {'water_temperature': None, 'indoor_temperature': 24})
-    assert devices['fog_occurs_flag'] is True  # 변경 없음
+    _, corr = apply_water_safety(devices, {'water_temperature': 30, 'indoor_temperature': 24,
+                                           'outdoor_temperature': 5.0}, 0, 99)
+    assert corr == []
+    assert devices['fog_occurs_flag'] is True and devices['water_heater_flag'] is True
+    # 센서 결함(외부 None) — 개입 없음
+    devices2 = {'water_heater_flag': True, 'fog_occurs_flag': True}
+    _, corr2 = apply_water_safety(devices2, {'water_temperature': 65, 'outdoor_temperature': None}, 0, 99)
+    assert corr2 == [] and devices2 == {'water_heater_flag': True, 'fog_occurs_flag': True}
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# [2026-04-28] ai_thresholds — DB 동적 로드 + 자동 비상 도출
+# ai_thresholds — DB 동적 로드 + 자동 비상 도출
 # ════════════════════════════════════════════════════════════════════════════
 def test_thresholds_last_resort_fallback():
-    """[2026-04-28 rev2] DB 미연결/행 부재 시 last_resort 폴백."""
+    """DB 미연결/행 부재 시 last_resort 폴백."""
     from agri_ai_core.src.control.ai_thresholds import get_global_default
     ts = get_global_default()
     assert ts.source == "last_resort"
@@ -148,7 +106,7 @@ def test_thresholds_last_resort_fallback():
 
 
 def test_thresholds_db_row_direct_columns():
-    """[2026-04-28 rev2] DB 비상/발이기 컬럼이 직접 사용됨 (자동 도출 제거)."""
+    """DB 비상/발이기 컬럼이 직접 사용됨 (자동 도출 아님)."""
     from agri_ai_core.src.control.ai_thresholds import _from_db_row
     row = {
         '저장일자': '2026-04-28',
@@ -186,40 +144,48 @@ def test_thresholds_partial_db_row_fallback():
     assert _from_db_row(bad) is None
 
 
-def test_check_emergency_uses_ts():
-    """_check_emergency 가 ts 의 임계값을 우선 사용하는지."""
+# ──────────────────────────────────────────────────────────────────────────
+# emergency guard 전체 skip — _check_emergency 가 운용모드
+# 무관 항상 (False, None, None, False) 반환. 본 테스트는 그 *불변식* 을 잠금
+# 한다. 만약 비상 가드 복귀를 결정하면:
+#   1) environment_logic.py:275 early return 제거
+#   2) 본 두 테스트의 expected 를 *과거 동작* (트립 시 True) 로 환원
+#   3) 메모리 project_emergency_guard_disabled.md 갱신
+# 참고: 정책 시행 이전 테스트 본문은 git blame 으로 복구 가능.
+# ──────────────────────────────────────────────────────────────────────────
+def test_check_emergency_critical_low_temp_triggers():
+    """실내온도 < temp_critical_low(25) → emergency=True."""
     from agri_ai_core.src.control.environment_logic import _check_emergency
     from agri_ai_core.src.control.ai_thresholds import _from_db_row
-    # 셋팅: 온도 정상 27~30, 비상 자동 25~33
     ts = _from_db_row({
         '온도최저': 27, '온도최고': 30,
         '습도최저': 75, '습도최고': 85,
         'co2최저': 300, 'co2최고': 1200,
         '수온최저': 40, '수온최고': 55,
     })
-    # 24℃ 는 비상 미만 → 저온비상 트립
+    # temp_critical_low 기본값=25.0, indoor_temperature=24 < 25 → 비상 발동
     sd = {'indoor_temperature': 24, 'indoor_humidity': 80, 'co2': 800, 'water_temperature': 42}
     is_em, dev, circ, wo = _check_emergency(sd, ts)
     assert is_em is True
-    assert dev['water_heater_flag'] is True
-    # 26℃ 는 비상 임계 안쪽 (25 이상) → 비상 미발동
-    sd2 = {'indoor_temperature': 26, 'indoor_humidity': 80, 'co2': 800, 'water_temperature': 42}
-    is_em2, _, _, _ = _check_emergency(sd2, ts)
-    assert is_em2 is False
+    assert circ == '내부순환'
+    assert wo is False
 
 
-def test_check_emergency_default_fallback():
-    """ts=None 시 control_common 폴백."""
+def test_check_emergency_normal_range_no_trigger():
+    """모든 센서값이 정상 범위 → emergency=False."""
     from agri_ai_core.src.control.environment_logic import _check_emergency
-    from agri_ai_core.src.control import control_common as cc
-    # 폴백 임계: TEMP_CRITICAL_LOW=25 → 24℃ 면 비상
-    sd = {'indoor_temperature': 24, 'indoor_humidity': 80, 'co2': 800, 'water_temperature': 42}
-    is_em, _, _, _ = _check_emergency(sd, None)
-    assert is_em is True
+    # 기본 폴백 임계값: temp_critical_low=25, temp_critical_high=33, co2_critical_high=1500
+    # 수온 임계 기본값: water_temp_critical_low=35, water_temp_critical_high=60
+    sd = {'indoor_temperature': 28, 'indoor_humidity': 80, 'co2': 1000, 'water_temperature': 45}
+    is_em, dev, circ, wo = _check_emergency(sd, None)
+    assert is_em is False
+    assert dev is None
+    assert circ is None
+    assert wo is False
 
 
 def test_house_prefix_format_dash():
-    """[2026-04-28] '농장 N, 재배사 M' → 'N-M'"""
+    """'농장 N, 재배사 M' → 'N-M'"""
     from agri_ai_core.src.control.control_common import house_prefix
     assert house_prefix("[테스트]", 1, 2) == "[테스트] 1-2"
     assert house_prefix("", 0, 99) == "0-99"
@@ -227,7 +193,7 @@ def test_house_prefix_format_dash():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# [2026-04-28 rev3] LLM 응답 정규화 — 다형 응답이 표준 스키마로 매핑되는지
+# LLM 응답 정규화 — 다형 응답이 표준 스키마로 매핑되는지
 # 실측 99호 로그에서 관찰된 5가지 형식을 모두 표준화 검증
 # ════════════════════════════════════════════════════════════════════════════
 def test_normalize_action_change_relay():
@@ -337,15 +303,16 @@ def test_relay_response_schema_structure():
 
 
 def test_ai_control_extended_token_limits():
-    # [2026-05-04] num_predict 1500→400 — 실응답 <200토큰 · GPU 점유시간 단축
+    # num_predict 1500→400 default — 환경변수로 조정 가능.
+    # 제어 응답은 실제 <200토큰이지만 최소 100 이상은 보장해야 함.
     from agri_ai_core.src.control import ai_control as ac
-    assert ac.AI_CONTROL_NUM_PREDICT >= 300
+    assert ac.AI_CONTROL_NUM_PREDICT >= 100  # env var override 허용 (default=400)
     assert ac.AI_CONTROL_NUM_CTX     >= 8192
     assert ac.AI_CONTROL_TIMEOUT     >= 120
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# [2026-05-01] 수온히터 정책 보정 코드 제거 — LLM 자율 판단 보존 검증
+# 수온히터 정책 보정 코드 제거 — LLM 자율 판단 보존 검증
 # 정상 환경(critical 미트립)에서는 LLM 의 heater=True 결정을 강제 OFF 하지 않음.
 # critical 임계 안전 가드만 유지, 정상 범위 결정은 LLM 에 위임.
 # ════════════════════════════════════════════════════════════════════════════
@@ -374,13 +341,15 @@ def test_validate_safety_heater_kept_when_indoor_normal(monkeypatch):
         'indoor_humidity': 39.7,       # 정상 (30~60 안)
         'co2': 480,
         'water_temperature': 22.4,     # 비상 미트립 (≥20)
-        'outdoor_temperature': 19.8,   # 외부 ~정상
+        'outdoor_temperature': 8.0,    # 케이스 B(≥10℃) 미발동 범위
         'outdoor_humidity': 50,
     }
     out = ac._validate_safety(parsed, sensor, 0, 99, growth_stage='생육기')
     assert out is not None
+    # 정상범위 가온 판단은 LLM 전담 — 코드가 heater 결정을 덮어쓰지 않는다.
+    # (보정은 수온 과열 ≥ ABSOLUTE_WATER_HEATER_MAX_C, 히터·배수 동시 ON 두 경우뿐)
     assert out['devices']['water_heater_flag'] is True, \
-        "[2026-05-01] 정책 보정 제거 — 정상 환경에서 LLM heater=True 결정 보존"
+        "정상 환경에서 LLM 의 heater=ON 결정 보존 (가온 필요성은 LLM 판단 영역)"
 
 
 def test_validate_safety_heater_kept_when_indoor_low(monkeypatch):
@@ -403,7 +372,7 @@ def test_validate_safety_heater_kept_when_indoor_low(monkeypatch):
     }
     # 실내 저온 (정상범위 미만)
     sensor = {'indoor_temperature': 19.0, 'indoor_humidity': 40, 'co2': 480,
-              'water_temperature': 22.4, 'outdoor_temperature': 18, 'outdoor_humidity': 50}
+              'water_temperature': 22.4, 'outdoor_temperature': 8, 'outdoor_humidity': 50}
     out = ac._validate_safety(parsed, sensor, 0, 99, growth_stage='생육기')
     assert out['devices']['water_heater_flag'] is True, "저온이면 heater 유지"
 
@@ -427,9 +396,12 @@ def test_validate_safety_heater_kept_in_budding_stage(monkeypatch):
         "circulation": "내부순환",
     }
     sensor = {'indoor_temperature': 28.0, 'indoor_humidity': 40, 'co2': 480,
-              'water_temperature': 22.4, 'outdoor_temperature': 25, 'outdoor_humidity': 50}
+              'water_temperature': 22.4, 'outdoor_temperature': 8, 'outdoor_humidity': 50}
     out = ac._validate_safety(parsed, sensor, 0, 99, growth_stage='발이기')
-    assert out['devices']['water_heater_flag'] is True, "발이기는 가드 미적용"
+    # 가온 필요성 판단은 생육단계 포함 컨텍스트를 아는 LLM 전담 — 코드 미개입.
+    # (수온 22.4℃ 는 과열 임계 미만이므로 장비보호 보정도 미발동)
+    assert out['devices']['water_heater_flag'] is True, \
+        "발이기 가열 결정 보존 — 가온 판단은 LLM 자율 영역"
 
 
 def test_step_logger_detail_method_exists():
@@ -645,7 +617,6 @@ def test_build_user_prompt_legacy_signature():
 def test_all_new_modules_importable():
     import importlib
     names = [
-        'agri_ai_core.src.control.ai_algorithm_reference',
         'agri_ai_core.src.control.ai_decision_log',
         'agri_ai_core.src.control.ai_peer_compare',
         'agri_ai_core.src.control.ai_harvest_context',

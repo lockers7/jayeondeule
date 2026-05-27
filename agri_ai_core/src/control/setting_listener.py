@@ -1,5 +1,5 @@
 # ════════════════════════════════════════════════════════════════════
-# [Phase 5 · 2026-05-09] PostgreSQL LISTEN/NOTIFY 기반 즉시 변경 알림.
+# PostgreSQL LISTEN/NOTIFY 기반 즉시 변경 알림.
 #
 # 설계:
 #   - DB 트리거(migration 004)가 setting 테이블 INSERT/UPDATE/DELETE 시

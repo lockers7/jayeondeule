@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════════════════
-# Phase 5 단위테스트 — setting_listener (PostgreSQL LISTEN/NOTIFY).
+# 단위테스트 — setting_listener (PostgreSQL LISTEN/NOTIFY).
 #
 # 검증:
 #   1) register_callback 으로 등록한 함수가 _handle_notification 에서 호출됨

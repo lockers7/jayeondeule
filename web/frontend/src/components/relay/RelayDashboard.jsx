@@ -45,7 +45,7 @@ export default function RelayDashboard({farmId, house, setSelectedHouse}) {
                 {label: "흡입밸브(11)", num: 11},   // [변경1] 10 → 11
                 {label: "배출밸브(12)", num: 12},   // [변경1] 11 → 12
                 {label: "배수밸브(13)", num: 13},   // [변경1] 12 → 13
-                {label: "포그생성(순환모터)(2)", num: 2},
+                {label: "포그생성(2)", num: 2},
                 {label: "조명(5)", num: 5},
                 {label: "관수(6)", num: 6},
                 {label: "수온히터(1)", num: 1},
@@ -61,7 +61,7 @@ export default function RelayDashboard({farmId, house, setSelectedHouse}) {
             {label: "흡입밸브(14)", num: 14},
             {label: "배출밸브(11)", num: 11},
             {label: "배수밸브(3)", num: 3},
-            {label: "포그생성(순환모터)(2)", num: 2},
+            {label: "포그생성(2)", num: 2},
             {label: "조명(7)", num: 7},
             {label: "관수(8)", num: 8},
             {label: "수온히터(1)", num: 1},

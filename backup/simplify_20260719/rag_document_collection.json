@@ -1,0 +1,168 @@
+{
+ "document_collection": [
+  {
+   "meta": {
+    "source": "casual_chat",
+    "doc_id": "interest_20260712_084419_09139d",
+    "created_at": "2026-07-12 08:44",
+    "data_type": "farmer_interest"
+   },
+   "doc": "안녕.. 안녕...\n즐거운 일요일이다.."
+  },
+  {
+   "meta": {
+    "data_type": "domain_knowledge",
+    "source": "user_chat",
+    "created_at": "2026-07-12 10:05:14",
+    "tags": "CO2,배출밸브,배출팬,배기순환,여름",
+    "farm_id": "1",
+    "category": "제어룰",
+    "doc_id": "user_knowledge_20260712_100514_9141d1",
+    "title": "고CO2 대응 — 여름철 내부공기 배출 우선"
+   },
+   "doc": "[제어룰] 고CO2 대응 — 여름철 내부공기 배출 우선\n\nCO2가 높을 때는 배출밸브 ON + 배출팬 ON 으로 내부 공기를 외부로 배출하면 CO2가 낮아진다. 가장 효과적인 방법은 공기 외부순환이지만, 여름철에는 외부 공기가 뜨거우므로 외부순환 대신 내부 공기 배출(배출밸브 ON + 배출팬 ON, 배기순환)이 효과적이다. 즉 여름 고CO2: 배기순환(배출밸브+배출팬) 우선, 외부순환은 외기 온도가 적정할 때만."
+  },
+  {
+   "meta": {
+    "category": "제어룰",
+    "data_type": "domain_knowledge",
+    "source": "user_chat",
+    "title": "고습도 대응 — 샌드위치판넬 재배사 배기",
+    "farm_id": "1",
+    "tags": "습도,배출밸브,배출팬,배기순환,샌드위치판넬",
+    "doc_id": "user_knowledge_20260712_100517_20ae29",
+    "created_at": "2026-07-12 10:05:17"
+   },
+   "doc": "[제어룰] 고습도 대응 — 샌드위치판넬 재배사 배기\n\n재배사가 샌드위치 판넬 구조라 습도가 높은 편이다. 습도가 높을 때는 배출밸브 ON + 배출팬 ON 으로 내부 공기를 외부로 배출하면 습도를 낮추는 데 효과가 있다. 고CO2 대응과 동일한 조작(배기순환)이다. 여름철에는 외부순환보다 내부 공기 배출이 효과적이다."
+  },
+  {
+   "meta": {
+    "created_at": "2026-07-12 11:44",
+    "data_type": "analysis_lesson",
+    "source": "teach",
+    "doc_id": "lesson_20260712_114403_47bfcd"
+   },
+   "doc": "장소 추천 질문('근처/주변/가까운 곳' — 낚시터·맛집·병원 등)에서는 search_web 의 query 에 '농장 근처'나 '농장ID N' 같은 문자열을 절대 넣지 말 것 — 검색엔진은 농장 위치를 모른다. 반드시 농장 소재지의 실제 지명(시/군 단위, 예: '정읍')을 검색어에 넣어라. 예: '농장 근처 붕어 낚시 3곳' → query='정읍 붕어 낚시터 추천'. 농장 주소를 모르면 db_read_query 로 farm_m_info 의 주소를 먼저 조회해 지명을 추출하라."
+  },
+  {
+   "meta": {
+    "created_at": "2026-07-14 22:25:03",
+    "farm_id": "0",
+    "source": "user_chat",
+    "title": "CO2 저감 조치 기록",
+    "doc_id": "user_knowledge_20260714_222503_057d04",
+    "house_id": "0",
+    "data_type": "domain_knowledge",
+    "category": "운영노하우"
+   },
+   "doc": "[운영노하우] CO2 저감 조치 기록\n\n배출팬 및 배출밸브 ON을 통해 CO2 농도를 낮추는 조치를 수행함."
+  },
+  {
+   "meta": {
+    "doc_id": "user_knowledge_20260714_223041_683672",
+    "farm_id": "1",
+    "title": "CO2 저감 조치 기록",
+    "data_type": "domain_knowledge",
+    "category": "운영노하우",
+    "created_at": "2026-07-14 22:30:41",
+    "house_id": "0",
+    "source": "user_chat"
+   },
+   "doc": "[운영노하우] CO2 저감 조치 기록\n\n배출팬 및 배출밸브 ON을 통해 CO2를 낮춤."
+  },
+  {
+   "meta": {
+    "house_id": "0",
+    "created_at": "2026-07-14 22:38:08",
+    "source": "user_chat",
+    "doc_id": "user_knowledge_20260714_223808_21a968",
+    "data_type": "domain_knowledge",
+    "farm_id": "1",
+    "title": "통합정보재배 제외 조건",
+    "category": "운영노하우"
+   },
+   "doc": "[운영노하우] 통합정보재배 제외 조건\n\n자연들에 재배사 운영 모드 변경 시 통합정보재배는 제외하고 버섯 재배사에 대해서만 적용."
+  },
+  {
+   "meta": {
+    "data_type": "analysis_lesson",
+    "created_at": "2026-07-15 22:24",
+    "doc_id": "lesson_20260715_222409_e40b45",
+    "source": "teach"
+   },
+   "doc": "릴레이 제어의 '왜/이유/근거' 질문이면 추측 금지 — 주체별 사유 조회: ① ai_decision_log(AI 사이클) ② agent_decision_log(구독 Agent, final_report=조치사유). 예: SELECT to_char(started_at,'MM-DD HH24:MI') 시각, final_report FROM agent_decision_log WHERE farm_id=1 AND started_at>now()-interval '24 hours' AND final_report<>'' ORDER BY started_at DESC. ⛔ SQL에 임의 컬럼 추가 금지 — 필요시 db_describe_table 선행."
+  },
+  {
+   "meta": {
+    "created_at": "2026-07-15 22:33:27",
+    "tags": "습도,배기,배수밸브,금지",
+    "source": "user_chat",
+    "category": "제어룰",
+    "title": "고습도 대응 — 배기 사용, 배수밸브 금지",
+    "data_type": "domain_knowledge",
+    "farm_id": "0",
+    "doc_id": "user_knowledge_20260715_223327_9e18da"
+   },
+   "doc": "[제어룰] 고습도 대응 — 배기 사용, 배수밸브 금지\n\n습도가 임계를 초과하면 배기(배출밸브 ON + 배출팬 ON)로 내부 공기를 배출해 낮춘다. 배수밸브는 습도 대응 수단이 아니다 — 배수는 여름 냉각(포그와 세트, 실시간 지하수를 안개화해 실내 온도를 낮추는 용도)에만 사용한다. 고습도를 이유로 배수밸브를 켜는 것은 금지. (2026-07-14 Agent가 습도 100% 대응으로 1호 배수밸브를 잘못 ON한 사례의 교정 룰)"
+  },
+  {
+   "meta": {
+    "source": "teach",
+    "created_at": "2026-07-15 23:19",
+    "doc_id": "lesson_20260715_231921_2e90c1",
+    "data_type": "analysis_lesson"
+   },
+   "doc": "알림/보고/모니터링의 주기·횟수를 묻는 질문('몇 분마다 보내나', '카카오 알림 주기', '얼마나 자주 보고하나')이면 반드시 list_agent_subscriptions 를 조회하라 — 카카오 주기 보고의 실체는 '구독(agent_subscriptions)'이다. list_monitors 는 단순 임계감시 Job 전용이라 이 질문의 답이 아니며 재시작 후 비어있을 수 있다."
+  },
+  {
+   "meta": {
+    "doc_id": "lesson_20260716_000406_2b4fb6",
+    "created_at": "2026-07-16 00:04",
+    "source": "teach",
+    "data_type": "analysis_lesson"
+   },
+   "doc": "주기/구독을 '확인·조회'만 하는 질문('몇 분마다 보내나', '2시간마다 맞는지 확인', '구독 목록')에는 list_agent_subscriptions 만 계획하고 agent_subscribe(신규 등록)를 절대 함께 계획하지 마라 — 조회에 등록이 섞이면 구독이 중복 누적된다(실사고: 조회 질문마다 신규 구독 생성)."
+  },
+  {
+   "meta": {
+    "doc_id": "lesson_20260716_000409_be441b",
+    "created_at": "2026-07-16 00:04",
+    "data_type": "analysis_lesson",
+    "source": "teach"
+   },
+   "doc": "구독 취소는 cancel_agent_subscription(subscription_id) 를 사용하라 — cancel_monitor(단순 임계감시 Job 전용) 아님. '낮은/높은/방금 그 ID' 처럼 상대 지목이면 먼저 list_agent_subscriptions 로 목록을 조회해 실제 대상 ID를 확정한 뒤 취소하라(임의 ID 추측 금지)."
+  },
+  {
+   "meta": {
+    "category": "제어룰",
+    "tags": "순환밸브,배기순환,고습도,고CO2",
+    "doc_id": "user_knowledge_20260716_091759_aa9178",
+    "data_type": "domain_knowledge",
+    "source": "user_chat",
+    "title": "순환밸브의 정확한 역할 — 배기·외부순환 시 순환밸브 OFF 필수",
+    "created_at": "2026-07-16 09:17:59",
+    "farm_id": "0"
+   },
+   "doc": "[제어룰] 순환밸브의 정확한 역할 — 배기·외부순환 시 순환밸브 OFF 필수\n\n순환밸브(air_circulation_valve)는 '외기 차단'용이다. 순환밸브 ON = 외부와의 통로를 닫고 내부 공기만 재순환(내부순환)하는 것. 따라서 내부 공기를 밖으로 '배출'하려는 배기순환에서 순환밸브를 켜면 배출 통로가 막혀 배기 효과가 사라진다 — 오히려 습한 내부 공기를 가둬 습도가 더 나빠진다.\n\n세 가지 순환모드의 순환밸브 상태(반드시 준수):\n- 배기순환(내부공기 외부 배출): 배출밸브 ON + 배출팬 ON + 순환밸브 OFF. (고습·고CO2 대응)\n- 외부순환(외기 유입·교환): 흡입밸브 ON + 배출밸브 ON + 양쪽 팬 ON + 순환밸브 OFF.\n- 내부순환(외기 차단·내부만 순환): 순환밸브 ON + 흡입/배출밸브 OFF + 팬 ON.\n\n금지: 고습/고CO2 대응으로 '배기순환을 강화'한다며 순환밸브를 ON 하는 것은 잘못이다. 배기순환 강화는 배출밸브·배출팬을 켜는 것이며 순환밸브는 반드시 OFF여야 한다. 순환밸브 ON은 오직 외기를 완전히 차단한 내부순환이 필요할 때만 사용한다. (2026-07-16 Agent가 습도 100% 대응으로 1호 순환밸브를 '배기순환 강화'라며 ON 하여 배기가 무력화된 사례 교정.)"
+  },
+  {
+   "meta": {
+    "created_at": "2026-07-17 07:59",
+    "data_type": "analysis_lesson",
+    "source": "teach",
+    "doc_id": "lesson_20260717_075929_1e787c"
+   },
+   "doc": "서버 리소스·시스템 상태 질문(예: '서버 리소스 상태 분석해줘', 'CPU/메모리/디스크/GPU 어때', '서버 점검해줘', '시스템 자원 사용량')은 반드시 get_server_resources 도구를 사용하라. 이 도구가 CPU(코어·사용률·부하평균)·메모리·디스크(경로별)·GPU(메모리·사용률·온도)·agri_ai_core 서비스 상태를 실측값으로 반환한다. ⛔ 이런 질문에 search_web 절대 금지 — 우리 서버 상태는 웹에 없어서 리눅스 모니터링 일반론 기사(htop 쓰세요, Zenius SMS 등)만 나온다. 2026-07-17 실제로 233초 걸려 쓸모없는 기사를 답한 사고가 있었다. 농장 서비스 상태만 필요하면 list_services, 재배사 제어모드·생육단계는 get_system_st"
+  },
+  {
+   "meta": {
+    "doc_id": "interest_20260719_085525_91724a",
+    "created_at": "2026-07-19 08:55",
+    "source": "casual_chat",
+    "data_type": "farmer_interest"
+   },
+   "doc": "안녕하세요 반가워요"
+  }
+ ],
+ "domain_rule_collection": []
+}

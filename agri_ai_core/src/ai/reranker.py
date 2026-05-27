@@ -11,7 +11,7 @@ import time
 from typing import Any, Dict, List
 
 from agri_ai_core.logs import setup_logger
-from agri_ai_core.config import get_model_name
+from agri_ai_core.config import get_model_name, NUM_CTX
 from agri_ai_core.src.utils.json_utils import safe_json_load
 
 logger = setup_logger(__name__)
@@ -111,6 +111,10 @@ def rerank_results(
             options = {
                 "temperature": 0 if attempt == 0 else 0.3,
                 "num_predict": 60,
+                # ⛔ num_ctx 는 모든 gemma3:27b 소비자와 동일(16384)해야 한다. 누락 시
+                #   Ollama 기본값으로 로드돼 직전 소비자(16384)와 불일치 → 매 호출 모델
+                #   리로드(~60s). reranker 만 이 통일 스윕에서 빠져 있었다(2026-07-25 실측).
+                "num_ctx": NUM_CTX,
                 "think": False,
             }
 

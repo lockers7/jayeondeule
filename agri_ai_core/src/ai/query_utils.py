@@ -1,5 +1,5 @@
 # ════════════════════════════════════════════════════════════════
-# 질의 처리 공용 유틸 — query_handler_simple.py에서 분리된 pure helper
+# 질의 처리 공용 유틸 — 상태/통신 없는 pure helper (query_handler_simple.py 에서 사용)
 # 중복 제거, 스트리밍 단위 분할 등.
 # --->
 # dedupe_list: 순서 유지 중복 제거 (타입 체크 + key 함수 기반)

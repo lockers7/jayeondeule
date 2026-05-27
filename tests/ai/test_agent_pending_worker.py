@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# test_agent_pending_worker — Phase 3.3 단위 테스트 [2026-05-25]
+# test_agent_pending_worker — agent_pending_worker 단위 테스트
 #
 # 대상: agri_ai_core/src/control/agent_pending_worker.py
 #   · _execute_action  : tool_name 별 dispatch + status 갱신
@@ -168,13 +168,23 @@ class TestExecSetGrowth:
 
 
 # ────────────────────────────────────────────────────────────────────
-# _exec_send_alert — level 별 logger
+# _exec_send_alert — level 별 logger + 실전달(저장/카카오)
 # ────────────────────────────────────────────────────────────────────
 class TestExecSendAlert:
+    @pytest.fixture(autouse=True)
+    def _mock_save(self, monkeypatch):
+        # 실 DB 저장·카카오 발송 차단 (호출 여부만 검증)
+        import agri_ai_core.src.control.agent_scheduler as sched
+        self.saved = []
+        monkeypatch.setattr(sched, "_save_alert",
+                            lambda *a, **kw: self.saved.append(a))
+
     def test_returns_success(self, W):
         r = W._exec_send_alert({"level": "warning", "message": "test"})
         assert r["success"] is True
-        assert r["delivered_via"] == "log"
+        # 로그 + 알림탭 저장 + 카카오 푸시 실전달
+        assert r["delivered_via"] == "log+queue+kakao"
+        assert len(self.saved) == 1 and self.saved[0][3] == "warning"
 
     def test_unknown_level_defaults_info(self, W):
         # invalid level 도 worker 단계서는 logger.info 로 fallback (큐 진입은 이미

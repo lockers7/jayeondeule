@@ -1,6 +1,6 @@
 # ═══════════════════════════════════════════════════════════════════════
 # LLM 전송 계층 — Ollama 모델 선택, GPU 비율 산출, 3가지 전송 방식.
-# llm_client.py에서 분리. package/direct-HTTP/MCP 3가지 Ollama 전송을 관리한다.
+# package/direct-HTTP/MCP 3가지 Ollama 전송을 관리한다.
 # --->
 # _get_model_gpu_ratio: Ollama /api/ps에서 GPU 탑재 비율 조회 (TTL 캐시)
 # _get_free_vram_mib: nvidia-smi로 여유 VRAM 조회
@@ -32,6 +32,7 @@ except Exception:
 
 from agri_ai_core.logs import setup_logger
 from agri_ai_core.config import NUM_PREDICT, NUM_CTX, get_ollama_url, get_model_name as _config_get_model_name
+from agri_ai_core.src.ai.llm_runtime_guard import llm_activity
 from agri_ai_core.src.utils.validators import is_true
 
 logger = setup_logger(__name__)
@@ -202,20 +203,23 @@ def _pkg_ollama_list_models() -> List[str]:
 _LLM_TIMEOUT_SEC = 300  # 최장 5분 — hang 방지
 
 # ────────────────────────────────────────────────────────────────────
-# ollama 패키지 chat 호출 (timeout 300초). hang 시 자동 RuntimeError.
+# ollama 패키지 chat 호출 (기본 300초). hang 시 자동 RuntimeError.
+# timeout_sec: 호출별 타임아웃(초). None이면 _LLM_TIMEOUT_SEC 사용.
 # ────────────────────────────────────────────────────────────────────
-def _pkg_ollama_chat(model, messages, options=None, tools=None, keep_alive=None, think=None) -> Any:
+def _pkg_ollama_chat(model, messages, options=None, tools=None, keep_alive=None,
+                     think=None, timeout_sec=None) -> Any:
     if not _use_ollama_package():
         raise RuntimeError("ollama package unavailable")
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+    _t = timeout_sec if timeout_sec is not None else _LLM_TIMEOUT_SEC
     payload = _build_chat_payload(model, messages, options, tools, keep_alive, think)
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(ollama.chat, **payload)
         try:
-            return future.result(timeout=_LLM_TIMEOUT_SEC)
+            return future.result(timeout=_t)
         except FuturesTimeout:
-            logger.error(f"[Ollama] ollama.chat timeout ({_LLM_TIMEOUT_SEC}s) — model={model}")
-            raise RuntimeError(f"Ollama chat timeout ({_LLM_TIMEOUT_SEC}s)")
+            logger.error(f"[Ollama] ollama.chat timeout ({_t}s) — model={model}")
+            raise RuntimeError(f"Ollama chat timeout ({_t}s)")
 
 
 def _build_ollama_url(path: str) -> str:
@@ -328,7 +332,7 @@ def _get_available_models() -> List[str]:
 # ────────────────────────────────────────────────────────────────────
 # 현재 사용할 모델명 결정 (캐시 + 설정 + 자동 선택).
 # 스레드 안전: _model_cache_lock으로 보호.
-# [변경9 · 2026-04-30] preferred 가 변경되면 _cached_model_name 자동 invalidate.
+# preferred 가 변경되면 _cached_model_name 자동 invalidate.
 # .env MODEL_NAME 변경(웹 UI 의 change_model API 등) 이 모든 프로세스에 즉시
 # 반영되도록 — config.get_model_name() 이 .env 매번 read + mtime 캐시.
 # ────────────────────────────────────────────────────────────────────
@@ -445,19 +449,25 @@ def _log_llm_response_json(result, transport, elapsed):
 # 3가지 전송(package/MCP/direct) 중 가용한 것으로 Ollama chat 호출.
 # 전송 실패 시 다음 전송으로 폴백. 모두 실패 시 RuntimeError.
 # ────────────────────────────────────────────────────────────────────
-# [2026-05-04 D안] Ollama "server busy / 503" 일시 자원 부족 에러 감지 헬퍼.
+# Ollama "server busy / 503" 일시 자원 부족 에러 감지 헬퍼.
 #   대화 LLM 호출 시 제어 LLM 또는 임베딩이 슬롯을 점유 중이면 503 발생.
 #   짧은 backoff 후 재시도하면 슬롯 확보되어 정상 응답 받을 가능성 높음.
+#   Ollama crash 방어: connection refused / server disconnected 도 재시도 대상.
+#   두 transport 가 모두 같은 Ollama 포트를 사용하므로 transport fallback 이 아니라
+#   동일 transport 내 backoff 재시도로 Ollama 재시작(5-20초)을 기다려야 한다.
 def _is_ollama_busy_error(err: Exception) -> bool:
     s = str(err).lower()
     return (
         "server busy" in s
         or "maximum pending requests" in s
         or "503" in s
+        or "connection refused" in s
+        or "server disconnected" in s
+        or ("connection error" in s and "ollama" in s)
     )
 
 
-_OLLAMA_BUSY_BACKOFFS = (1.0, 2.0, 4.0)  # 총 1+2+4=7초 추가 대기
+_OLLAMA_BUSY_BACKOFFS = (5.0, 15.0, 30.0)  # Ollama crash 재시작 대기: 총 50초
 
 
 def _ollama_chat(
@@ -466,32 +476,10 @@ def _ollama_chat(
     options: dict = None,
     tools: list = None,
     keep_alive: str = None,
+    timeout_sec: int = None,
 ):
-    # [2026-05-25] LLM_BACKEND=vllm 일 때 vLLM OpenAI 호환 API 로 위임.
-    # default LLM_BACKEND='ollama' → 아래 기존 흐름 그대로 (회귀 영향 0).
-    try:
-        from agri_ai_core.src.ai import llm_backend_vllm as _vllm_backend
-        if _vllm_backend.is_enabled():
-            think_value = None
-            opts = dict(options or {})
-            if "think" in opts:
-                think_value = opts.pop("think")
-            t0 = time.time()
-            try:
-                result = _vllm_backend.vllm_chat(
-                    model=model, messages=messages,
-                    options=opts, tools=tools,
-                    keep_alive=keep_alive, think=think_value,
-                )
-                elapsed = time.time() - t0
-                logger.info(f"[LLM] backend=vllm ({elapsed:.1f}s)")
-                return result
-            except Exception as e:
-                logger.error(f"[LLM] vllm 호출 실패 — ollama 폴백: {e}")
-                # vLLM 실패 시 ollama 흐름으로 폴백 (안전망)
-    except Exception:
-        pass
-
+    # LLM backend 은 Ollama 단일. vLLM 대체는 16GB VRAM 한계로 무의미하여 제거됨
+    # (엔진이 아니라 VRAM 이 병목 — 상세: docs/dev/vllm_infeasible.md). ⛔재착수금지.
     think_value = None
     if options and "think" in options:
         think_value = options.pop("think")
@@ -516,14 +504,23 @@ def _ollama_chat(
     for label, check_fn, call_fn in _TRANSPORTS:
         if not check_fn():
             continue
-        # [2026-05-04 D안] 동일 transport 내 503/busy 재시도 (1s → 2s → 4s backoff)
+        # 동일 transport 내 503/busy 재시도 (_OLLAMA_BUSY_BACKOFFS 단계 backoff)
         last_err = None
         for attempt in range(len(_OLLAMA_BUSY_BACKOFFS) + 1):
             try:
-                result = call_fn(
-                    model=model, messages=messages, options=options,
-                    tools=tools, keep_alive=keep_alive, think=think_value,
-                )
+                _extra = {"timeout_sec": timeout_sec} if (label == "package" and timeout_sec is not None) else {}
+                # 제어(ai_control)/agent 와 동일한 상호배제 — 채팅이 제어/agent 와
+                # 동시에 Ollama 를 점유해 fallback/충돌을 유발하지 않도록
+                # 실제 호출 순간에만 락 점유(chat_llm_gate 는 그 앞단 우선순위 양보 담당).
+                from agri_ai_core.src.ai.llm_runtime_guard import llm_call_lock as _chat_llm_call_lock
+                _chat_wait = timeout_sec or _LLM_TIMEOUT_SEC
+                with _chat_llm_call_lock("chat", wait_sec=_chat_wait):
+                    with llm_activity(f"llm_transport:{label}", timeout_sec or _LLM_TIMEOUT_SEC):
+                        result = call_fn(
+                            model=model, messages=messages, options=options,
+                            tools=tools, keep_alive=keep_alive, think=think_value,
+                            **_extra,
+                        )
                 elapsed = time.time() - t_start
                 _log_llm_response_json(result, label, elapsed)
                 resp_content = _extract_message_content(result)

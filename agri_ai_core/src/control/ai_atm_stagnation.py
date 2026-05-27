@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# AI 환경제어 — 대기정체지수 모듈 (M13) [2026-05-19 신규]
+# AI 환경제어 — 대기정체지수 모듈 (M13)
 #
 # 기상청 생활기상지수(getAirDiffusionIdxV4) — 대기정체지수 조회 →
 # 시간대별 (3h 간격) 대기정체 강도 0~100 을 user_prompt 컨텍스트로 주입.
@@ -33,7 +33,8 @@ logger = setup_logger(__name__)
 
 
 _CACHE_TTL = 21600  # 6시간 (발표 12h 간격 안전 여유)
-_DEFAULT_URL = "http://apis.data.go.kr/1360000/LivingWthrIdxServiceV4/getAirDiffusionIdxV4"
+# V4 는 이 키에 미승인(403) — 반드시 LivingWthrIdxServiceV5 엔드포인트 사용.
+_DEFAULT_URL = "https://apis.data.go.kr/1360000/LivingWthrIdxServiceV5/getAirDiffusionIdxV5"
 
 # {farm_id: (expires_at, payload)}
 _CACHE: Dict[int, tuple] = {}
@@ -93,11 +94,25 @@ def get_atm_stagnation(farm_id) -> Dict[str, Any]:
         return cached
 
     api_key = os.getenv("ATM_STG_API_KEY") or os.getenv("KMA_API_KEY")
-    area_no = os.getenv("ATM_STG_AREA_NO")
-    area_name = os.getenv("ATM_STG_AREA_NAME", "")
+    # 지역정보는 농장 속성 — farm_m_info(kma_area_no) 실시간 read.
+    # env(ATM_STG_AREA_NO/NAME)는 DB 미설정 농장의 폴백으로만 사용.
+    area_no, area_name = None, ""
+    try:
+        from agri_ai_core.src.postgresql.connection import db_session
+        import agri_ai_core.src.postgresql.queries as dbQry
+        with db_session() as d:
+            row = d.fetch_one(dbQry.GET_FARM_GEO, (int(farm_id),))
+        if row and row.get("kma_area_no"):
+            area_no = str(row["kma_area_no"])
+            area_name = str(row.get("farm_name") or "")
+    except Exception as e:
+        logger.warning(f"[AI대기정체] 농장 지역정보 조회 실패 farm={farm_id}: {e}")
+    if not area_no:
+        area_no = os.getenv("ATM_STG_AREA_NO")
+        area_name = os.getenv("ATM_STG_AREA_NAME", "")
     if not api_key or not area_no:
         logger.info(
-            f"[AI대기정체] 비활성 — ATM_STG_API_KEY/ATM_STG_AREA_NO 환경변수 미설정 "
+            f"[AI대기정체] 비활성 — farm_m_info.kma_area_no/ATM_STG_API_KEY 미설정 "
             f"farm={farm_id}"
         )
         return {}

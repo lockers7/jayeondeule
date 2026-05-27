@@ -45,7 +45,24 @@ def db_mock(monkeypatch):
     monkeypatch.setattr(rm, "db_session", _Sess)
     # 백그라운드 IoT 폴링 스레드는 테스트에서 시작하지 않음
     monkeypatch.setattr(rm, "_persist_relay_values", lambda *a, **kw: None)
+    # 라이브 관리자지시 격리 — 실DB 활성 지시가 테스트 기대값을 강제 변경하는
+    # 간섭 차단
+    import agri_ai_core.src.control.admin_directive as _ad
+    monkeypatch.setattr(_ad, "apply_to_relay_values",
+                        lambda farm, house, rv, pin_map: (rv, []))
     return captured
+
+
+import pytest as _pytest
+
+
+@_pytest.fixture(autouse=True)
+def _no_live_sensor(monkeypatch):
+    # raw 경로의 비상가드·수온계 안전은 실 DB 센서를 읽음 — 계절에 따라 결과가
+    # 변하지 않도록 빈 센서로 고정 (인터록/컬럼순서 검증에 집중)
+    monkeypatch.setattr("agri_ai_core.src.postgresql.reader.read_current_sensor_info",
+                        lambda f, h: {})
+    yield
 
 
 def _build(house_id, **flags):
@@ -106,7 +123,7 @@ def test_raw_mode_still_applies_gate(monkeypatch, db_mock):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 4) OFF 차단 (rev2) — 흡입밸브 OFF 요청 시 흡입팬이 ON 이면 차단되어
+# 4) OFF 차단 — 흡입밸브 OFF 요청 시 흡입팬이 ON 이면 차단되어
 #    DB 에는 밸브가 ON 그대로 기록되고 violations 에 off_blocked 가 포함된다.
 # ══════════════════════════════════════════════════════════════════════════
 def test_valve_off_blocked_when_dependent_fan_on(monkeypatch, db_mock):

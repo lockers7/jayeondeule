@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# Agent API Router — Phase 4 web UI 백엔드 (REST) [2026-05-25]
+# Agent API Router — web UI 백엔드 (REST)
 #
 # 사용자/운영자가 채팅창 외부에서 agent 이력·큐·구독·알림을 직접 조회/제어.
 # 채팅 LLM 도구(tools_agent_sub) 와 *동일 함수* 호출 — 코드 중복 없음.
@@ -8,7 +8,8 @@
 #   GET    /api/v1/agent/history           — agent_decision_log 조회 (페이지네이션)
 #   GET    /api/v1/agent/pending           — agent_pending_actions 큐 조회
 #   POST   /api/v1/agent/pending/{id}/cancel — pending action 취소
-#   POST   /api/v1/agent/trigger           — 수동 1회 ReAct 분석
+#   POST   /api/v1/agent/trigger           — 수동 1회 ReAct 분석 (비동기 → job_id 즉시 반환)
+#   GET    /api/v1/agent/trigger/status/{job_id} — trigger job 상태 polling
 #   GET    /api/v1/agent/subscriptions     — 구독 목록
 #   POST   /api/v1/agent/subscribe         — 신규 구독 등록
 #   POST   /api/v1/agent/subscriptions/{id}/cancel — 구독 취소
@@ -18,12 +19,15 @@
 #   get_history          : 사이클 이력 조회
 #   get_pending          : 큐 조회
 #   cancel_pending       : 큐 항목 취소
-#   trigger_oneshot      : 1회 ReAct 분석 (백그라운드 + 결과 polling)
+#   trigger_oneshot      : 1회 ReAct 분석 비동기 시작 (daemon thread)
+#   trigger_status       : trigger job 상태 조회 (running/done/error)
 #   list_subs            : 구독 목록
 #   create_sub           : 신규 구독
 #   cancel_sub           : 구독 취소
 #   get_alerts           : 알림 조회 + mark_read
 # ══════════════════════════════════════════════════════════════════════════════
+import threading
+import uuid
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -220,21 +224,37 @@ def cancel_pending(action_id: int, req: Optional[CancelPendingRequest] = None) -
 
 
 # ════════════════════════════════════════════════════════════════════
-# 5) POST /trigger — 수동 1회 ReAct 분석 (동기, 100~250초 소요)
+# 5) POST /trigger — 수동 1회 ReAct 분석 (비동기 — 즉시 job_id 반환)
+#
+# run_agent 1 사이클은 gemma3:27b · MAX_STEPS 누적으로 수백 초~9분까지
+# 걸릴 수 있어 동기 응답 시 nginx proxy_read_timeout(300s) 초과 → 504 HTML →
+# 프론트 JSON.parse 실패. 따라서 daemon thread 로 백그라운드 실행하고
+# job_id 만 즉시 반환, 프론트는 GET /trigger/status/{job_id} 로 polling.
+# run_agent 자체는 scheduler·subscription 과 동일하게 trigger_type='user' 호출
+# (분리 원칙 — control 영역 미수정). 실제 결과는 agent_decision_log 에 영속.
 # ════════════════════════════════════════════════════════════════════
 class TriggerRequest(BaseModel):
     task: str = Field(..., description="agent 가 수행할 작업 (한국어 한 문장)")
     farm_id: int = Field(1, description="농장 ID")
 
 
-@agent_router.post("/trigger")
-def trigger_oneshot(req: TriggerRequest) -> Dict[str, Any]:
-    """동기 호출 — agent ReAct 1 사이클 완료 후 결과 반환. 100~250초 소요."""
+# in-memory job 레지스트리 (uvicorn 단일 워커 가정). 서버 재시작 시 휘발 —
+# 실제 결과는 run_agent 가 agent_decision_log 에 영속하므로 '사이클 이력' 에서 조회 가능.
+_TRIGGER_JOBS: Dict[str, Dict[str, Any]] = {}
+_TRIGGER_JOBS_LOCK = threading.Lock()
+_TRIGGER_JOBS_MAX = 50    # 최근 N건만 유지 (오래된 항목부터 제거)
+
+
+def _run_trigger_job(job_id: str, task: str, farm_id: int) -> None:
+    """daemon thread 본체 — run_agent 완료 후 job 상태 갱신."""
     try:
         from agri_ai_core.src.control.ai_monitor_agent import run_agent
-        result = run_agent(task=req.task.strip(), farm_id=int(req.farm_id),
-                           trigger_type="user")
-        return {
+        # 종합 진단류 task 는 데이터 수집(센서+임계)만으로 기본 단계가 소진될 수 있어
+        # user 수동 트리거만 max_steps 를 높게 지정 (scheduler/subscription/event 기본값과 분리).
+        result = run_agent(task=task, farm_id=farm_id, trigger_type="user",
+                           max_steps=12)
+        update = {
+            "status": "done",
             "success": bool(result.get("success")),
             "log_id": result.get("log_id"),
             "duration_sec": result.get("duration_sec"),
@@ -243,8 +263,57 @@ def trigger_oneshot(req: TriggerRequest) -> Dict[str, Any]:
             "reason": result.get("reason"),
         }
     except Exception as e:
-        logger.warning(f"[Agent API] trigger 실패: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning(f"[Agent API] trigger job {job_id} 예외: {e}")
+        update = {"status": "error", "success": False, "reason": str(e),
+                  "log_id": None, "duration_sec": None, "steps": 0, "final": None}
+    with _TRIGGER_JOBS_LOCK:
+        if job_id in _TRIGGER_JOBS:
+            _TRIGGER_JOBS[job_id].update(update)
+
+
+@agent_router.post("/trigger")
+def trigger_oneshot(req: TriggerRequest) -> Dict[str, Any]:
+    """비동기 트리거 — 즉시 job_id 반환. 결과는 /trigger/status/{job_id} polling."""
+    task = (req.task or "").strip()
+    if not task:
+        raise HTTPException(status_code=422, detail="task 는 비어 있을 수 없습니다")
+    job_id = uuid.uuid4().hex
+    with _TRIGGER_JOBS_LOCK:
+        # [동시실행 가드] 이미 실행 중인 user agent 가 있으면 거부.
+        #   동시 run_agent 는 단일 Ollama(gemma3:27b)를 과부하 → 타임아웃·Connection
+        #   refused(다운) → 실시간 제어 LLM 까지 정지시킴.
+        #   따라서 즉시분석은 항상 1건만 허용.
+        running = [jid for jid, j in _TRIGGER_JOBS.items() if j.get("status") == "running"]
+        if running:
+            raise HTTPException(
+                status_code=409,
+                detail=(f"이미 즉시분석이 실행 중입니다 (job={running[0]}). 완료 후 다시 시도하세요. "
+                        f"동시 실행은 Ollama·실시간 제어에 부하를 줍니다."))
+        # 레지스트리 상한 — 삽입 순서 보존 dict 에서 오래된 것부터 제거
+        while len(_TRIGGER_JOBS) >= _TRIGGER_JOBS_MAX:
+            _TRIGGER_JOBS.pop(next(iter(_TRIGGER_JOBS)), None)
+        _TRIGGER_JOBS[job_id] = {
+            "status": "running", "task": task, "farm_id": int(req.farm_id),
+            "success": None, "log_id": None, "duration_sec": None,
+            "steps": 0, "final": None, "reason": None,
+        }
+    threading.Thread(target=_run_trigger_job, args=(job_id, task, int(req.farm_id)),
+                     daemon=True, name=f"agent-trigger-{job_id[:8]}").start()
+    logger.info(f"[Agent API] trigger 비동기 시작 job={job_id} task={task!r}")
+    return {"success": True, "job_id": job_id, "status": "running"}
+
+
+@agent_router.get("/trigger/status/{job_id}")
+def trigger_status(job_id: str) -> Dict[str, Any]:
+    """trigger job 상태 조회 — status: running/done/error."""
+    with _TRIGGER_JOBS_LOCK:
+        job = _TRIGGER_JOBS.get(job_id)
+        snapshot = dict(job) if job else None
+    if snapshot is None:
+        raise HTTPException(
+            status_code=404,
+            detail="job_id 없음 (만료되었거나 서버 재시작됨). '사이클 이력' 탭을 확인하세요.")
+    return {"job_id": job_id, **snapshot}
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -333,7 +402,7 @@ def get_alerts(
 
 
 # ════════════════════════════════════════════════════════════════════
-# 10) GET /stream — SSE 알림 실시간 push (Phase 4 W-4)
+# 10) GET /stream — SSE 알림 실시간 push
 #
 # 채팅 프론트엔드 또는 admin 대시보드가 EventSource 로 구독.
 # 새 unread 알림 발생 시 즉시 push (5초 polling, 클라이언트 입장에선 push).

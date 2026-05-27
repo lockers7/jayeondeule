@@ -1,0 +1,37 @@
+// 큰 모델 바이너리 — sync 제외
+.ollama/
+*.safetensors
+*.gguf
+*.bin
+
+// Python venv (플랫폼별)
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+// Node
+node_modules/
+
+// Git internal
+.git/objects/
+.git/logs/
+
+// 로그
+logs/
+*.log
+
+// IDE
+.idea/
+.vscode-server/
+.cursor/
+
+// 임시
+/tmp/
+.cache/
+
+// macOS/Windows junk
+.DS_Store
+Thumbs.db

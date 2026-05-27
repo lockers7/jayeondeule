@@ -1,0 +1,11 @@
+cd ~
+wget -O code_latest_arm64.deb "https://update.code.visualstudio.com/latest/linux-deb-arm64/stable"
+sudo dpkg -i code_latest_arm64.deb
+
+sudo apt update && sudo apt install --only-upgrade code
+sudo apt upgrade -y
+
+tar czf ~/vscode_backup_$(date +%Y%m%d).tar.gz \
+  ~/.config/Code/User \
+  ~/.vscode/extensions
+tar xzf ~/vscode_backup_YYYYMMDD.tar.gz -C /

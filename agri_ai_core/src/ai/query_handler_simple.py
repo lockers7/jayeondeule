@@ -1,6 +1,6 @@
 # ════════════════════════════════════════════════════════════════════════════
 # LLM 쿼리 핸들러 — Tool Use 방식으로 사용자 질문 처리 및 SSE 스트리밍.
-# 대화 컨텍스트는 conversation_context.py, 3단계 파이프라인은 pipeline/runner.py에 분리됨.
+# 대화 컨텍스트는 conversation_context.py, 3단계 파이프라인은 pipeline/runner.py 에 정의.
 # --->
 # _build_default_tool_args: 도구별 기본 인자 생성 (파일명 감지 포함)
 # _call_llm_with_timeout: LLM 호출 + 타임아웃 처리
@@ -34,10 +34,10 @@ _STREAM_HEARTBEAT_SECONDS = max(1, int(os.getenv("STREAM_HEARTBEAT_SECONDS", "3"
 _USE_3STAGE_PIPELINE = os.getenv("USE_3STAGE_PIPELINE", "false").lower() == "true"
 
 
-# _dedupe_list는 query_utils.py로 이동됨 (하위 호환 alias)
+# dedupe_list 는 query_utils.py 에 정의 (하위 호환 alias)
 from agri_ai_core.src.ai.query_utils import dedupe_list as _dedupe_list
 
-# _split_for_streaming은 query_utils.py로 이동됨 (하위 호환 alias)
+# split_for_streaming 은 query_utils.py 에 정의 (하위 호환 alias)
 from agri_ai_core.src.ai.query_utils import split_for_streaming as _split_for_streaming
 
 
@@ -106,7 +106,7 @@ async def _call_llm_with_timeout(full_query, farm_name, default_tool_args, conve
 
 # ════════════════════════════════════════════════════════════════════════════
 # LLM 결과를 (response, sources, tools_used, response_type, tool_calls_detail)
-# 튜플로 언패킹. tool_calls_detail 은 Wave 4 E1 도구 호출 감사 로그 (선택적).
+# 튜플로 언패킹. tool_calls_detail 은 도구 호출 감사 로그 (선택적).
 # ════════════════════════════════════════════════════════════════════════════
 def _unpack_llm_result(result):
     if isinstance(result, dict):
@@ -127,6 +127,21 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
                            farm_name=None, house_name=None, session_id=None, speech_style=None,
                            auth_farm_id=None):
     start_time = datetime.now()
+
+    # ─── [제어우선 게이트] 농장제어 LLM 절대우선 — 대화는 항상 양보한다 ───
+    from agri_ai_core.src.ai.chat_llm_gate import (
+        register as _gate_register, release as _gate_release,
+        wait_turn as _gate_wait_turn, is_admin_tier as _gate_is_admin,
+        CANCELLED_MESSAGE as _GATE_CANCELLED,
+    )
+    _gate_tier = "admin" if _gate_is_admin(auth_farm_id) else "user"
+    _gate_handle = await _gate_register(_gate_tier)
+    if not await _gate_wait_turn(_gate_handle):
+        logger.info(f"[대화중재] 요청 취소(새 요청에 대체됨) tier={_gate_tier} session={session_id}")
+        yield {"response": _GATE_CANCELLED, "sources": [], "tools_used": [],
+               "response_type": "general"}
+        return
+    await _gate_release(_gate_handle)
 
     try:
         # [1/3] 사용자 질문
@@ -209,7 +224,7 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
         logger.info(f"[최종답변] len={len(response_text or '')} 총소요={total_elapsed:.1f}s")
         logger.info(f"[답변내용] {answer_preview}")
 
-        save_conversation_turn_hybrid(session_id, user_query, response_text, farm_id)
+        save_conversation_turn_hybrid(session_id, user_query, response_text, farm_id, tools_used=tools_used)
 
         # 웹 로그: 응답 JSON 기록
         response_json = {
@@ -235,7 +250,7 @@ async def query_llm_simple(user_query, file_paths=None, farm_id=None, house_id=N
             "sources": sources,
             "tools_used": tools_used,
             "response_type": response_type,
-            "tool_calls_detail": tool_calls_detail,   # [E1] 감사 로그 pass-through
+            "tool_calls_detail": tool_calls_detail,   # 감사 로그 pass-through
         }
 
     except Exception as e:
@@ -257,6 +272,66 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
                                    auth_farm_id=None):
     start_time = datetime.now()
 
+    # ─── [제어우선 게이트] 농장제어 LLM 절대우선 — 대화는 항상 양보한다 ───
+    # 즉시 응답(ack) + 백그라운드 처리: 스트리밍 연결은 그대로 유지하며 상태
+    # 이벤트로 우선 안내하고, 제어/agent 가 비면 같은 연결에서 실제 답변을 이어준다.
+    from agri_ai_core.src.ai.chat_llm_gate import (
+        register as _gate_register, release as _gate_release,
+        wait_turn as _gate_wait_turn, is_admin_tier as _gate_is_admin,
+        is_control_busy as _gate_is_busy,
+        busy_wait_message as _gate_busy_msg, CANCELLED_MESSAGE as _GATE_CANCELLED,
+    )
+    _gate_tier = "admin" if _gate_is_admin(auth_farm_id) else "user"
+    _gate_handle = await _gate_register(_gate_tier)
+    _gate_cancelled = False
+    if _gate_is_busy():
+        # 세션 농장명 동적 표시 (farm 0/미지정은 일반 표기)
+        _fname = None
+        try:
+            if farm_id and str(farm_id) != "0":
+                from agri_ai_core.src.ai.farm_cache import get_farm_name as _gfn
+                _fname = _gfn(farm_id)
+        except Exception:
+            _fname = None
+        # 제어(우선) 작업이 끝나길 기다리는 구간 — 문구는 그대로 두고 경과시간만
+        # 하트비트로 갱신한다(농장주 요청 2026-07-19). ⛔ start_time(위) 기준이라
+        # 이 대기시간이 최종 elapsed_sec(전체 응답시간)에 그대로 포함된다.
+        from agri_ai_core.src.ai.chat_llm_gate import (
+            wait_turn_step as _gate_wait_step, MAX_WAIT_SEC as _GATE_MAX_WAIT,
+        )
+        _gate_msg = _gate_busy_msg(_fname)
+        _gate_deadline = time.monotonic() + _GATE_MAX_WAIT
+        yield {"type": "status", "content": _gate_msg, "phase": "gate_waiting"}
+        while True:
+            _step = await _gate_wait_step(_gate_handle, _STREAM_HEARTBEAT_SECONDS)
+            if _step == "ready":
+                break
+            if _step == "cancelled":
+                _gate_cancelled = True
+                break
+            if time.monotonic() >= _gate_deadline:
+                logger.warning(f"[대화중재] 대기 한도({_GATE_MAX_WAIT}s) 초과 — 진행 tier={_gate_tier}")
+                break
+            _waited = int((datetime.now() - start_time).total_seconds())
+            yield {"type": "status",
+                   "content": f"{_gate_msg} ({_waited}초 경과)",
+                   "phase": "gate_waiting"}
+    else:
+        if not await _gate_wait_turn(_gate_handle):
+            _gate_cancelled = True
+    if _gate_cancelled:
+        logger.info(f"[대화중재] 요청 취소(새 요청에 대체됨) tier={_gate_tier} session={session_id}")
+        for _chunk in _split_for_streaming(_GATE_CANCELLED):
+            yield {"type": "token", "content": _chunk}
+        yield {
+            "type": "done", "session_id": session_id,
+            "sources": [], "tools_used": [], "response_type": "general",
+            "tool_calls_detail": [],
+            "elapsed_sec": round((datetime.now() - start_time).total_seconds(), 1),
+        }
+        return
+    await _gate_release(_gate_handle)
+
     try:
         # [1] 질문 분석
         yield {"type": "status", "content": "질문을 분석하고 있습니다..."}
@@ -273,9 +348,8 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
             }, ensure_ascii=False, indent=2),
         )
 
-        # [1.5] [2026-05-26 hotfix] fast_classify=greeting 빠른 우회
+        # [1.5] fast_classify=greeting 빠른 우회 — load_hybrid_context(임베딩) 를 건너뛴다.
         # _GREETING_RE 매칭 = 농장 컨텍스트 불필요한 일상 인사 (사용자 룰 예외 허용 범위).
-        # load_hybrid_context (ChromaDB 임베딩) 가 5분 hang 발생 사례 (bge-m3 첫 로드 VRAM swap).
         # 이 분기는 *극히 명확한 인사 패턴만* 우회 — 그 외 질문은 모두 ANALYZER+MCP 흐름.
         try:
             from agri_ai_core.src.ai.pipeline.question_analyzer import fast_classify
@@ -366,8 +440,7 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
             ],
             "llm_generating": [
                 # 데이터 기반 응답(농장 센서/검색/도구 결과 종합 등) — 표·리스트 가능, 다소 김
-                # [변경13 · 2026-04-30] 인사·짧은 답변에 부적절했던 "📊 표와 구조를
-                # 구성하고 있습니다" 메시지 제거. 답변 형식과 무관한 일반 표현으로 통일.
+                # 답변 형식과 무관한 일반 표현으로 통일.
                 (0,   "✍️ 답변을 작성하고 있습니다..."),
                 (10,  "✍️ 답변을 정리하고 있습니다..."),
                 (30,  "✍️ 답변을 다듬고 있습니다..."),
@@ -429,7 +502,10 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
                 except QueueEmpty:
                     pass
 
-                elapsed_wait = int((datetime.now() - llm_start).total_seconds())
+                # ⛔ start_time(요청 도착) 기준 — llm_start(게이트+컨텍스트로드 이후)로
+                #   재면 게이트 대기 종료 후 경과시간이 0으로 리셋된다(농장주 지적 2026-07-19).
+                #   소요시간 = 제어대기 + 준비 + 생성 + 출력 을 연속 표시하려면 start_time.
+                elapsed_wait = int((datetime.now() - start_time).total_seconds())
 
                 if new_events:
                     # 새 이벤트가 있으면 최신 것을 표시하고 이력에 추가
@@ -491,7 +567,7 @@ async def query_llm_simple_stream(user_query, farm_id=None, house_id=None,
             "sources": sources,
             "tools_used": tools_used,
             "response_type": response_type,
-            "tool_calls_detail": tool_calls_detail,   # [E1] 감사 로그 pass-through
+            "tool_calls_detail": tool_calls_detail,   # 감사 로그 pass-through
             "elapsed_sec": round(total_elapsed, 1),
         }
 

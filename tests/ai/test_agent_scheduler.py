@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# test_agent_scheduler.py — agent_scheduler 단위 테스트 (Phase 2.3) [2026-05-25]
+# test_agent_scheduler.py — agent_scheduler 단위 테스트
 #
 # 대상: agri_ai_core/src/control/agent_scheduler.py
 #   · _next_interval_dt    : 다음 cycle 시각 계산 (정각 boundary)
@@ -110,10 +110,12 @@ class TestBuildDefaultTask:
         import re
         assert re.search(r"\d{2}:\d{2}", task), "HH:MM 형식이 포함되어야 함"
 
-    def test_contains_monitor_keywords(self, scheduler_module):
+    def test_contains_control_keywords(self, scheduler_module):
         task = scheduler_module._build_default_task(farm_id=1)
-        assert "모니터링" in task
+        # 자율 환경제어 지시문 — "제어" + 센서/임계 키워드
+        assert "제어" in task
         assert "센서" in task or "임계" in task
+        assert "set_relay" in task or "릴레이" in task
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -150,6 +152,139 @@ class TestRunCycle:
             assert mra.call_count == 0
         finally:
             scheduler_module._STOP = False
+
+
+# ────────────────────────────────────────────────────────────────────
+# _advance_subscription 동적 재스케줄 + _run_subscription 연동
+# ────────────────────────────────────────────────────────────────────
+class TestAdvanceSubscription:
+    """_advance_subscription override_minutes 분기 검증 (DB mock)."""
+
+    def _call_advance(self, scheduler_module, sub_id, interval_min, override_minutes=None):
+        """DB 실제 호출 없이 SQL 인자만 캡처."""
+        captured = {}
+
+        class FakeCursor:
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def execute(self, sql, params):
+                captured["sql"] = sql
+                captured["params"] = params
+
+        class FakeConn:
+            def cursor(self): return FakeCursor()
+            def commit(self): pass
+            def rollback(self): pass
+
+        class FakeDB:
+            def _getconn(self): return FakeConn()
+            def _putconn(self, c): pass
+
+        with patch.dict("sys.modules", {"agri_ai_core.src.postgresql.connection": type("M", (), {"db": FakeDB()})()}):
+            with patch("agri_ai_core.src.postgresql.connection.db", FakeDB()):
+                scheduler_module._advance_subscription(sub_id, interval_min,
+                                                       override_minutes=override_minutes)
+        return captured
+
+    def test_no_override_uses_greatest(self, scheduler_module):
+        """override_minutes 없으면 GREATEST(NOW(), next_run_at) SQL 사용."""
+        captured = {}
+        orig = scheduler_module._advance_subscription
+
+        def fake_adv(sub_id, interval_min, override_minutes=None):
+            captured["override"] = override_minutes
+            captured["interval"] = interval_min
+
+        with patch.object(scheduler_module, "_advance_subscription", side_effect=fake_adv):
+            scheduler_module._advance_subscription(99, 30, override_minutes=None)
+        assert captured["override"] is None
+        assert captured["interval"] == 30
+
+    def test_override_passed_correctly(self, scheduler_module):
+        """override_minutes=10 이 _advance_subscription 에 전달됨."""
+        captured = {}
+
+        def fake_adv(sub_id, interval_min, override_minutes=None):
+            captured["override"] = override_minutes
+
+        with patch.object(scheduler_module, "_advance_subscription", side_effect=fake_adv):
+            scheduler_module._advance_subscription(99, 30, override_minutes=10)
+        assert captured["override"] == 10
+
+    def test_ncm_min_constant(self, scheduler_module):
+        """_NCM_MIN 상수 존재 + 값 확인."""
+        assert hasattr(scheduler_module, "_NCM_MIN")
+        assert scheduler_module._NCM_MIN >= 1
+
+    def test_ncm_max_constant(self, scheduler_module):
+        """_NCM_MAX 상수 존재 + 값 확인."""
+        assert hasattr(scheduler_module, "_NCM_MAX")
+        assert scheduler_module._NCM_MAX <= 120
+
+    def test_ncm_min_lt_max(self, scheduler_module):
+        """_NCM_MIN < _NCM_MAX."""
+        assert scheduler_module._NCM_MIN < scheduler_module._NCM_MAX
+
+
+class TestRunSubscriptionNcm:
+    """_run_subscription 이 run_agent 의 next_check_minutes 를 _advance_subscription 에 전달하는지."""
+
+    def test_ncm_forwarded_to_advance(self, scheduler_module):
+        """run_agent 반환 next_check_minutes=5 → _advance_subscription(override_minutes=5)."""
+        mock_result = {
+            "success": True, "log_id": 1, "final": "이상 감지 — 히터 ON",
+            "next_check_minutes": 5,
+        }
+        sub = {"id": 1, "farm_id": 1, "task": "테스트", "user_id": None,
+               "interval_min": 30, "intent": "__default_cron__"}
+        advance_calls = []
+
+        def fake_advance(sub_id, interval_min, override_minutes=None):
+            advance_calls.append({"sub_id": sub_id, "interval": interval_min,
+                                   "override": override_minutes})
+
+        with patch.object(scheduler_module, "run_agent", return_value=mock_result), \
+             patch.object(scheduler_module, "_advance_subscription", side_effect=fake_advance):
+            scheduler_module._run_subscription(sub)
+
+        assert len(advance_calls) == 1
+        assert advance_calls[0]["override"] == 5
+        assert advance_calls[0]["interval"] == 30
+
+    def test_ncm_none_forwarded_when_absent(self, scheduler_module):
+        """run_agent 반환에 next_check_minutes 없음 → override=None."""
+        mock_result = {
+            "success": True, "log_id": 2, "final": "정상",
+        }
+        sub = {"id": 2, "farm_id": 1, "task": "테스트", "user_id": None,
+               "interval_min": 30, "intent": "__default_cron__"}
+        advance_calls = []
+
+        def fake_advance(sub_id, interval_min, override_minutes=None):
+            advance_calls.append(override_minutes)
+
+        with patch.object(scheduler_module, "run_agent", return_value=mock_result), \
+             patch.object(scheduler_module, "_advance_subscription", side_effect=fake_advance):
+            scheduler_module._run_subscription(sub)
+
+        assert advance_calls[0] is None
+
+    def test_ncm_exception_still_advances(self, scheduler_module):
+        """run_agent 예외 발생해도 _advance_subscription 는 반드시 호출됨 (finally)."""
+        sub = {"id": 3, "farm_id": 1, "task": "테스트", "user_id": None,
+               "interval_min": 30, "intent": "__default_cron__"}
+        advance_calls = []
+
+        def fake_advance(sub_id, interval_min, override_minutes=None):
+            advance_calls.append(override_minutes)
+
+        with patch.object(scheduler_module, "run_agent", side_effect=RuntimeError("오류")), \
+             patch.object(scheduler_module, "_advance_subscription", side_effect=fake_advance):
+            scheduler_module._run_subscription(sub)
+
+        # 예외가 발생해도 finally 블록에서 advance 호출됨 — override 는 None
+        assert len(advance_calls) == 1
+        assert advance_calls[0] is None
 
 
 if __name__ == "__main__":

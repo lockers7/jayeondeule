@@ -1,0 +1,351 @@
+# LLM 농장제어 시스템 전면 감사 — 참조 문서 (2026-07-04)
+
+## ★ A1~A8 개선 완료 로그 (2026-07-04 01:40~02:50)
+
+| # | 조치 | 검증 |
+|---|---|---|
+| A1 | set_relay 한도 200→500 (`tools_agent_write.py`) + LLM 도구설명 정정("일일 10회" 구정보 제거) | 단위 24/24 + 라이브(실행 5/거부 0) |
+| A2 | send_user_alert dedupe 30분(`_same_alert_recent`) + 한도 50→100 + LLM 에 사유 회신 | 단위 28/28 + 회귀 67/67 |
+| A3 | user 프롬프트 "수온=None℃" → "측정불가(수온센서 장애)"+판단근거 안내 (`ai_control.py:_build_user_prompt`) | 신규 3/3. house3 센서 간헐복구로 라이브 발동은 결함 순간에만 |
+| A4 | **RAG 이중 평탄화 KeyError(0) 수정** (`ai_doc_rag.py`/`ai_rag_context.py` — query_documents 는 이미 평탄화 반환, 추가 [0] 제거) | 신규 4+회귀 6 통과. 라이브: 매 사이클 유사시기 2건+도메인 2건 주입 개시 |
+| A5 | 신규 구축 불필요 판명 — growth_rag_processor 가 매일 00:05 적재 중(farm_knowledge 2,872건). 이전 감사의 "0건"은 컬렉션명 오조회였음 | v2 API count 실측 |
+| A6 | 대기정체 API 403 해결 — 승인 엔드포인트는 **V5**(`LivingWthrIdxServiceV5`), 코드가 V4 호출이 원인 ①. areaNo 구 행정코드(전북 45→52 개편) 가 원인 ② → `_DEFAULT_URL` V5+https, `.env ATM_STG_AREA_NO=5218000000` | 라이브: 403→0, slots=8 실데이터 수신. 가드 테스트 1/1 |
+| A7 | house0 단절경고 노이즈 제거(`agent_event_listener.py` hous_id!=0) + backup 테이블 DROP(487MB 회수, 사용자 승인) | 30분 검증 경고 0 |
+| A8-1 | agent 효율지침(구독 309 task 에 "[효율 지침]" — 코드 아닌 LLM 지침) | 30분 검증: **12.8→3.8콜/사이클(70%↓)**, duty cycle 88%→~55% 추정 |
+| A8-2 | **미시행 결정** — KV q8_0 은 attention 정밀도 미세 저하(사용자 절대원칙 "LLM 판단 악영향 금지" 위배), flash attention 은 속도 목적인데 "속도 무관" 방침 + A8-1 로 여유 확보되어 이득 없음 | 원칙 기반 판단 |
+| 부수 | 구정책 문서화 상태였던 stale 테스트 4건 현행 정책으로 정합화(07-01 가온게이트·07-02 예외재시도·프롬프트 문구) | **전체 스위트 556 passed / 0 failed** |
+
+## ★ 잡담·친교 대화 모드 신설 (2026-07-10, 농장주 사전 승인 개선안 ①~④)
+
+**요구**: 농장주가 인사·잡담·시간때우기 대화를 원할 때 다양한 화제의 친절한 말벗 —
+단 제어·시스템 기능 완전 불변, 의도 파악 선행, 대화 패턴·관심사 지속 RAG.
+**구현**: ① question_type `casual_chat` 신설(혼합 발화 업무 우선 ⛔절대규칙 포함,
+chunk 동기화) ② 말벗 페르소나 `_generate_casual_response` — 화제 팔레트(버섯·계절·
+정읍/고흥·유머·되묻기), 업무 상투구 금지, temperature 0.8, 페르소나는 chunk
+`chat_casual_persona`(채팅 지시로 조정 가능) ③ fast_classify 확장 — 잡담 표지+업무
+차단어 전무 시 규칙분류(0ms)로 1단계 LLM 생략(보수: 애매하면 전부 LLM행) ④ 신규
+`ai/chat_profile.py` — 잡담 발화를 farmer_interest 로 임베딩 저장(백그라운드)+다음
+잡담 시 유사 관심사 회상 주입. 농장제어 코드 0줄 수정.
+**테스트가 잡은 것**: 오분류 방지 6케이스 확정 / recall 의 이중 평탄화 버그(과거 RAG
+사고 동일 함정) / ChromaDB 저장 직후 인덱싱 지연 하이젠버그(테스트 재시도로 처리).
+신규 8 테스트, **전체 639 passed ×2**.
+**E2E 3종 전부 성공**: 순수 잡담 — 분류 0ms(기존 65~130s), 총 117s(기존 175s),
+정읍 설화+되묻기 / 혼합 "가는 길인데 2호 온도?" — farm_sensor+도구로 정확 분기,
+실측 26.584℃ 보고 / 잡담 2회차 — 관심사 저장·회상 동작, 내장산·고흥 화제 전개.
+
+## ★ 포그 절대 룰 보강 — 내부순환 전제 명문화 (2026-07-07 심야)
+
+**농장주 지적**: 3호가 12시간째 "고온+수온센서오류 → fog ON + drainage ON + 배기순환"
+반복 — 포그의 효과(지하수 온·습 유입)는 순환밸브 ON(내부순환)일 때만 유효한데
+배기 중 분사는 즉시 배출되어 무효.
+**원인**: LLM 고집이 아니라 프롬프트 준수 — CTRL_SEC_SEASON "고온계절: drainage+fog ON"
+이 무조건 지시. 절대 룰 3에 순환 전제가 없었음.
+**조치**: ① CTRL_ROLE 절대 룰 3에 공통 전제 추가(fog=true 는 순환밸브 ON 전제, 배기/외부
+순환 중 금지, 냉각=fog+drainage+내부순환 / 배열=fog OFF+배기순환 — 동시 금지)
+② 1차 반영 후 부분 준수(사유엔 fog 제외, 장치값은 true) — **프롬프트 내부 충돌**(SEC_SEASON
+구지침) 발견 → SEC_SEASON·SEC3 를 절대 룰과 일치시켜 해소 ③ 도메인 지식 영구 저장.
+**검증**: 23:18 사이클 — "fog ON + drainage ON + **내부순환**"으로 전환(실측 순환밸브 ON
+확인). LLM 이 fog 를 끄는 대신 순환을 내부로 바꿔 유효 조합을 선택 — 룰 취지 정확 반영.
+※ 교훈: 절대 룰 추가 시 기존 섹션들과의 상충 여부 전수 확인 필수(프롬프트끼리 싸우면
+gemma 는 절충한다).
+
+## ★ opinet(유가) 기능 전면 제거 (2026-07-07 밤)
+
+**판단 근거(사전 보고 후 사용자 승인)**: 3/16부터 매일 수집(테이블 3개 18.5만 행)
+했으나 소비처 0 — 채팅 도구 search_gas_price 호출 이력 0건, 제어/Agent 미사용.
+**제거 범위**: src/opinet 폴더 + opinet_tools.py + 스케줄러 opinet_daily_job
+(startup 주입 포함) + 도구 배선 9파일(definition/executor/prompts+chunk 동기화/
+llm_client/data_collector/answer_generator/question_analyzer 유형·화이트리스트) +
+tool_definition_m 행 + 테이블 3개 DROP(사전 백업 backups/opinet_final_20260707.sql.gz
+3.3M — 복원 가능) + 테스트 2파일 정합화.
+**사고 1건**: 정규식 블록 제거가 db_list_tables 디스패치까지 삼킴 — 커버리지 테스트
+(test_tool_registration_coverage)가 즉시 검출 → 복원. **전체 631 passed**.
+FastAPI·agent 3종·스케줄러 재배포, 제어 사이클 재개 확인(22:09). 활성 도구 34종.
+
+## ★ 디스크 정리 + 백업 체계 재정비 (2026-07-07 밤)
+
+**정리(~30G 회수)**: .vllm_models 19G(현 GPU 사용불가분) · 30일 초과 로그 76개+api.log
+830M · .backup 4/20 스냅샷 4.5G · system-configs/data 2/25 덤프 1.7G · 루트 llama 클론
+69M · 구 dist 5개 · .tmp_* 6개 · __pycache__/.pytest_cache/.phase1_backup/pgvector.
+보존: backups/baseline_agent_20260525(최신 종합본).
+**HDD 미러 3.5개월 정체 발견·수복**: 원인 — 셋업 스크립트 번호 정리 시 파일명 변경
+(hdd_backup_sync.sh→09., os_backup_sync.sh→10.)인데 root 크론이 구경로 호출로 무음
+실패(마지막 성공 3/31). 크론 2건 경로 수정 + 즉시 전체 동기화(21:42~21:52 완료).
+30분 주기 자동 미러 재개. ※ 교훈: 크론 참조 파일 개명 시 크론 동시 갱신 필수.
+**backups/ 일자별 아카이브 세트 신설**(총 5.6G, 전부 gzip 무결성 검증):
+src(21M, 재생성물 제외)·db(666M, pg_dump 55테이블 — PGDB_* 자격 필요, postgres
+peer/스프링 placeholder 로는 불가)·chromadb(2.5G)·uploads(819M, 농장웹+쇼핑몰2)·
+sysconf(systemd/nginx/crontab)·shop_legacy. backup/ 폴더는 backups/ 로 통합 후 삭제.
+
+## ★ 쇼핑몰 재구조화 — shop/ → web/ 공통·농장별 분리 (2026-07-07 밤)
+
+**지시**: shop 폴더의 2개 쇼핑몰을 web 아래로 이전, 공통은 web/common, 농장별은
+web/jayeondeule·web/goheung, 복수 농장 확장 대비, shop 삭제.
+**조사**: 백엔드 src 100% 동일(설정 2파일만 상이 — port/schema/upload/log),
+프론트는 공통 코드 + 농장별 콘텐츠 9파일(index.html, ShopFooter, products.js,
+Efficacy/FarmIntro/Home/HouseIntro/StoryList, lottoAlgorithmInfo).
+**신구조**: `web/common/shop/{backend(단일 소스), frontend-base}` +
+`web/<farm>/{config(application.properties·logback), frontend-custom(9파일),
+upload, dist}`. 백엔드는 공통 jar 1개를 농장별 `--spring.config.location` 외부설정
+으로 기동, 프론트는 `setup/build_shop.sh` 가 하드링크 베이스+커스텀 오버레이 빌드.
+**재배선**: systemd shop_jayeondeule(신설)·shop_goheung(경로 갱신) — 자연들에도
+nohup→systemd 통일(부팅 자동기동), nginx 2컨프 root/uploads 경로, agriAiCore
+shop_* 함수 systemctl 위임, 07.build_all.sh → build_shop.sh 호출.
+**이슈 2건**: rsync --exclude dist 가 node_modules 내부 dist(vite/dist)까지 제외해
+빌드 실패 → `--exclude /dist` 정정 / 자연들에 로그파일 root 소유(구 nohup sudo
+잔재)로 logback 기동 실패 → chown 정리.
+**검증**: 9091·9092 API, 5100·5200 페이지(농장별 타이틀·번들 분리 확인: 고흥 문구
+goheung 번들에만 14건), uploads 서빙, nginx 프록시 — 7개 엔드포인트 전부 200.
+shop/ 은 소스만 아카이브(backup/shop_legacy_20260707.tar.gz, 34M) 후 삭제.
+**의의**: 신규 농장 쇼핑몰 = web/<농장> 폴더 + systemd 유닛 — 코드 변경 0
+(멀티팜 원칙 확장). 시스템구조요약.md §1 갱신 + RAG 재등록.
+
+## ★ 구독 알림 3중 결함 수복 — 주기 무시·200자 잘림·중복 (2026-07-06 밤)
+
+**증상**: 60분 구독 보고가 5~10분마다 폭주(18분간 8건) + 카카오에 1호 내용만 표시.
+**원인 3건**: ① `_advance_subscription` 이 LLM 의 next_check 제안("5분 후 재점검")을
+사용자 지정 주기보다 우선 — 이상 지속 시 조기 재점검 무한 반복 ② 카카오 text 200자
+제한으로 209자 보고의 "2·3호 정상" 부분 절단 ③ 동일 목적 구독 중복(647/676).
+**수정**: ① 사용자 구독은 지정 주기(=관리자 지시) 고정, LLM 동적 재스케줄은
+__default_cron__ 전용 ② send_to_me 분할 발송(줄 경계 우선, "(i/n)" 표기, 접두어
+공간 예약, 최대 4조각) ③ 676 비활성화. 부수: 전날 발견한 critical 경보 미전달
+사각지대(_exec_send_alert 로그 전용) → _save_alert 재사용으로 알림탭+카카오 실전달.
+**검증**: 신규 2 테스트 포함 **전체 620 passed**. 라이브 — 21:30:09 실행 후
+next_run 22:30:09(정확히 +60분), 발송 실패 0. 활성 구독 647 단일(60분).
+
+## ★ 카카오 '나에게 보내기' 실시간 알림 (2026-07-05 밤)
+
+**배경**: Agent 알림 294건이 agent_user_alerts 큐에만 쌓임(웹 알림 탭 열람식) — 실시간
+푸시 채널 부재. 관리자 선택: 카카오 나에게 보내기.
+**구현**: `ai/kakao_notify.py` — kakao_token_m 단일행 토큰 영속(access 6h/refresh 2개월
+자동갱신·회전 교체), 발송 best-effort(전 예외 흡수·데몬 스레드), 미설정 시 완전 no-op.
+훅 2곳: agent_scheduler._save_alert(모든 Agent 알림) + alert_bus.publish(warning 이상
+비상 이벤트). 관리자 API 4종(/admin/kakao/auth-url·callback·status·test).
+env: KAKAO_REST_API_KEY/REDIRECT_URI/PUSH_MIN_LEVEL(기본 info).
+**부수 수복**: question_analyzer._VALID_TOOLS 에 7-05 신규 도구 9종 누락 발견(계획 시
+분석 전체 무효화되는 구조 — chunk 동기화 후 첫 실행에서 터질 뻔) → 등록.
+신규 6 테스트(HTTP mock), **전체 619 passed**. FastAPI+agent 3종 재배포 22:49.
+**연동 완료(07-06 00:03)**: Kakao 앱 Jayeondeule(ID 1504623). 신규 콘솔 개편 대응 과정 —
+플랫폼 키 2개 중 리다이렉트 URI 는 신규 생성 키 **Info_Jayeondeule**(6609ccab…)에 등록
+(Default 키 아님, KOE006 원인) + 해당 키 클라이언트 시크릿 활성이라 토큰 요청에
+client_secret 필수(KOE010 원인 → KAKAO_CLIENT_SECRET env 지원 추가). 1회 동의 완료,
+**테스트 발송 200 성공** — Agent 알림·비상 이벤트 카카오톡 실시간 푸시 가동.
+토큰: access 6h 자동갱신 / refresh ~09-04 만료(발송 시 자동 회전, 2개월 무발송 시 재인증 필요).
+
+## ★★ USE_DB_PROMPTS 함정 발견 — ANALYZER 프롬프트 무음 무효화 (2026-07-05 저녁)
+
+**발견**: `.env USE_DB_PROMPTS=1` 로 ChromaDB `prompt_chunk.chat_analyzer_raw`(6/30 codex
+갱신본, 9,538자)가 코드 `ANALYZER_SYSTEM_PROMPT_RAW` 를 통째로 대체 중 — **7-05 하루 동안
+코드에 넣은 규칙 전부(8b/8c 지시도구, 정직보고, 지속유지 절대규칙, get_weather_forecast,
+call_external_api)가 모델에 전달조차 안 됐음**. "gemma3 7연속 규칙 무시"의 실체는 도구
+항목이 프롬프트에 없었던 것. 세이프티넷(코드 레벨)만 이 함정과 무관해 유일하게 동작.
+**조치**: 양방향 diff(6/30 agent_subscribe 변경은 코드에도 존재, DB 단독 줄은 교체된 구식
+날씨 규칙 3줄뿐) 확인 후 코드 상수를 chunk 에 upsert(→11,963자), 런타임
+get_analyzer_system_prompt() 로 신규 규칙 5종 포함 검증. 나머지 3개 chunk 는 정합.
+**운영 규칙 신설**: prompts.py 4개 프롬프트 수정 시 대응 chunk upsert 동기화 필수
+(memory: project_use_db_prompts_trap). 부수 발견: prompt_block_m(17건) 전량 dead
+(_build_system_prompt_impl_v1_legacy 호출자 없음), tool_definition_m 은 legacy 폴백
+경로 전용 + 7-05 신규 도구 6종 미등록(폴백에서 사용 불가 — 후속 동기화 후보).
+**후속 조치 완료(같은 날 저녁)**: ① prompt_block_m 17건 전량 파일 아카이브
+(docs/dev/prompt_block_m_archive_2026-07-05.json) + 잔여 활성 2건 비활성화. 정정 —
+CIRCULATION_MODES_TABLE 은 mappers.circulation_modes_text 가 참조하던 살아있는 블록
+이었으나, 비활성 시 control_common.CIRCULATION_MODES(SSOT) 자동 생성 폴백으로 전환되어
+의미 동일 + 이중 소스 해소(의도적 유지). ② tool_definition_m 에 신규 도구 9종 등록
+(admin 2 + db 3 + prompt 1 + 날씨 1 + 외부API 2) → 활성 31건, 폴백 경로 일관성 확보.
+
+## ★ 날씨 백스톱 + 범용 외부 API 도구 (2026-07-05 16:15~16:35)
+
+**사고**: 도구 배포 후에도 "웹에서 검색해서" 표현의 농장 날씨 질문에서 ANALYZER 가
+웹검색만 계획 — 433초 실패(16:15). **보완 2건**:
+1. **날씨 백스톱**(`data_collector._ensure_weather_data`): 날씨 키워드 + 농장 문맥
+   (농장/재배사 단어 또는 DB 등록 농장명)이면 get_weather_forecast 자동 병행 수집
+   (읽기전용 데이터 보강 — 판단 개입 아님).
+2. **범용 외부 API 도구**(`tools_external_api.py`): external_api_m 테이블 +
+   manage_external_api(list/get/register/update/disable — 변경 관리자 전용) +
+   call_external_api(GET 전용). 신규 외부 연동 = 채팅 등록 1건, **코드 변경 제로**.
+   보안: 호스트/경로 템플릿 고정(LLM 은 {param} 값만·URL 인코딩), {ENV:키} 서버 치환,
+   사설망 차단, timeout 10s, 응답 8000자 캡. 시연: 기상청 대기정체지수를 데이터로
+   등록·실호출 200 검증.
+**E2E**(16:29 배포 후, 사용자 원문 질의 재현): [날씨백스톱] 발동 → 도구
+search_web+fetch+get_weather_forecast → 답변에 실측 예보(27℃/습도80%/강수60%/비)
+정상 포함. 신규 11 테스트(외부API 6 + 백스톱 1 + 날씨 4), **전체 613 passed**.
+
+## ★ 채팅 날씨 도구 신설 — get_weather_forecast (2026-07-05 14:30~14:45)
+
+**사고**: "고흥뜰에 농장 날씨" 질문을 채팅이 웹검색으로 처리 — LLM 이 농장 이름
+"고흥뜰농장"(존재하지 않는 지명)으로 검색해 380초 소요 후 실패. 시스템은 farm_m_info
+에 주소·KMA 격자(kma_nx/ny)를 이미 보유하고 제어 LLM 은 이를 사용 중이었으나,
+**채팅 도구 목록에 날씨 도구가 없어** 내부 예보를 쓸 방법이 없었음.
+**구현**: `tools_data.get_weather_forecast(farm_id, house_id)` — 제어측
+ai_weather_forecast(인프라성 모듈, 모드분리 예외) 재사용. farm 0 → 실농장 대체,
+주소 헤더 부가. 스펙/디스패치/기본컨텍스트/ANALYZER weather 규칙(1순위 지정 +
+"농장 이름은 지명 아님 — 웹검색 금지") 연결. 농장 추가시 코드 변경 없음(DB 격자 기반).
+**검증**: farm 1·2·시스템(0) 실조회 + executor dispatch 신규 4 테스트,
+**전체 606 passed**. FastAPI 재배포 14:45:14. (고흥 실측: 24℃·습도 95%·강수 100%·비)
+
+## ★ 세이프티넷 해제 방향 확장 (2026-07-05 06:36~06:44)
+
+**실증**: 등록 세이프티넷은 성공(06:00 2호 단건 + 06:16 all 3건 등록, 자율 LLM ON 시도
+06:05/06:12 강제 차단 2회 실측). 그러나 해제 요청("유지 지시를 해제해주라" 06:36)에서
+gemma3 이 release_admin_directive 대신 control_relay(OFF)만 호출하고 "해제했다" 거짓 답변
+— 등록 5회에 이어 해제까지 도구 선택 6연속 오류.
+**수정**: `_ensure_admin_directive` 양방향화 — 해제 키워드 감지 + release 미실행 +
+control_relay 실행 시 그 인자(farm/house/device)를 복사해 release_admin_directive 자동 실행.
+control_relay 조차 없으면 대상 불명으로 개입 보류(경고 로그만, 코드 임의판단 금지).
+**부수**: test_set_relay_value_interlock db_mock 픽스처에 admin_directive 격리 추가
+(라이브 활성 지시가 relay_1 ON 기대값을 강제 OFF 로 바꿔 실패하던 간섭 — 강제 관문
+동작의 역설적 증명). 신규 3 테스트, **전체 600 passed**. FastAPI 재배포 06:44:08.
+**전 수명주기 라이브 검증 완료(06:16~06:59)**: 등록(세이프티넷, all 3건) → 30분 강제
+유지(자율 LLM ON 결정 3회 포함 차단 19회, 전 호기 OFF 유지, 위반 0) → 해제(API E2E,
+해제 세이프티넷 발동 → 3건 released 06:53:06) → 자율 복귀(06:58:47 LLM "저온+고습+고CO2
+→ ON" 결정 → 06:59:34 실측 ON, 차단 없음). 채팅 지속지시 기능 완결.
+
+## ★ 지속지시 세이프티넷 + 시스템농장 대체 (2026-07-05 05:35~05:55)
+
+**배경**: 프롬프트 절대룰(도구목록→분류규칙 섹션 이동 + 구체 예시 + 도구결과 경고)에도
+ANALYZER(gemma3)가 지속 요청에서 set_admin_directive 를 **3회 연속 누락**(05:14/04:18/05:37)
+— 프롬프트 유도만으로 불충분 실증. 부수 발견: 05:35 요청의 웹 farm_id='0'(시스템) —
+제어도구엔 자동대체가 있어 실제 OFF 는 farm1 에 정상 반영됐으나, set_admin_directive 에는
+대체가 없어 지시가 farm0 에 등록되면 영원히 무효가 되는 허점.
+
+1. **세이프티넷**(`pipeline/data_collector.py: _ensure_admin_directive`, ⛔제거금지):
+   2단계 도구실행 직후 — 원문+intent 에 지속 키워드(유지/별도 지시/지시할때/계속/꺼둬…)
+   존재 + 해제 키워드 부재 + control_relay 성공 + set/release_admin_directive 미실행이면
+   **control_relay 인자(farm/house/device/action)를 그대로 복사**해 set_admin_directive 자동
+   실행(단일/devices 리스트형 모두, toggle 등 상태불명 액션 제외). 코드가 새로 판단하는 것
+   없음 — LLM 이 뽑은 값의 재사용. runner→DataCollector 에 raw_user_query 전달.
+2. **시스템농장 대체**(`tools_admin.py: _resolve_physical_farm`): set/release_admin_directive
+   farm_id=0 → GET_ONE_FARM 첫 실농장 자동 대체(tools_data 와 동일 규칙, 농장 하드코딩 없음).
+3. 중복실행 방지 키에 device_name 추가(동일 재배사 다른 장치 제어/지시 허용).
+4. 검증: 신규 7 테스트(`tests/ai/test_directive_safety_net.py`) + **전체 598 passed**.
+   FastAPI 재배포 05:52:47.
+
+## ★ 관리자 강제 지시 + LLM 자율기능 확장 (2026-07-05 04:40~05:05)
+
+**배경**: 채팅 "수온히터 OFF 유지" 요청이 1회성 OFF 후 자율 LLM 에 의해 8분 만에 재ON
+(04:18→04:26 실사고). 채팅 LLM 이 미실행 조치("수동 전환했다")를 답변하는 정직성 문제도 확인.
+
+1. **관리자 강제 지시(admin_device_directive)**: 장치 상태를 해제 전까지 강제 유지.
+   우선순위 **인터록(물리) > 관리자지시 > 비상가드 > LLM**. 구현: `control/admin_directive.py`
+   + relay_manager 최종관문 강제(⛔제거금지 주석) + 제어 LLM user 프롬프트·agent 컨텍스트 주입
+   + 채팅 도구 `set_admin_directive`/`release_admin_directive`. E2E: 지시 OFF 등록 후 LLM ON
+   시도 → 최종 기록 OFF 강제 확인.
+2. **프롬프트 절대 룰 2건**(ANALYZER): 지속 요청("유지/계속/재부팅 후에도") 시 set_admin_directive
+   필수 호출 / **정직 보고** — 실제 호출·성공한 도구 결과만 서술, 미실행 조치 서술 금지.
+3. **DB 자율 조회 도구 3종**(`ai/tools_db.py`): db_list_tables·db_describe_table·db_read_query —
+   읽기전용 다층가드(SELECT만·단일문장·금지키워드·LIMIT 200·timeout 5s). LLM 이 테이블 구조
+   파악·임의 데이터 질의 응답 가능(사용자 절대 요구).
+4. **프롬프트 자가관리 도구** `manage_control_prompt`(list/get/update): LLM 이 사용자 요구로
+   control_prompt_m 을 직접 갱신(관리자 전용, 이전 본문 로그 전문 보존, updt_dttm 즉시반영).
+5. 검증: 신규 11 테스트 + **전체 591 passed / 0 failed**. 4프로세스 배포(FastAPI·스케줄러·agent×2).
+   추가 패키지/환경설정 불필요(기존 스택으로 전부 구현).
+
+## ★ 수온히터 오발동 근본수정 — 센서 결함필터 전 센서 확장 (2026-07-05 03:00~03:30)
+
+**사고**: house1 수온히터가 07-04 15:33 비상가드에 의해 강제 ON(당일 3회 재현).
+**인과**: RPi 는 센서 읽기실패 시 0.0 폴백 기록 → 실내온도 순간 0.0 → 비상가드가
+"실내 0.0 < 비상하한 20" 저온비상으로 오인 → 히터 강제 ON(+배수 보존이라 절대룰1 위반 조합).
+기존 결함필터(reader.py)가 **수온만** 검사하던 사각지대.
+**수정**: `read_current_sensor_info` 필터를 6개 센서로 확장(정확히 0.0=폴백 또는 물리범위 밖 → None
+— 실내/실외온도 -30~80℃, 습도 0~100%, CO2 0~10000ppm, 수온 기존 유지). 습도 100.0 실측은 통과.
+프롬프트 표기도 일반화: None 센서 → "측정불가(센서장애)" + 판단근거 안내(A3 확장).
+비상가드/절대안전게이트/LLM 전부 is-not-None 가드라 None 은 안전 방향으로만 작용.
+**검증**: 신규 8/8(E2E: 결함값으로 비상가드 미발동 포함) + stale 2건 정합화 + 전체 574 passed.
+배포(03:24) 후 라이브: 실내온도 결함 6건 등 전 유형 차단, 비상가드 오발동 0.
+**잔여**: house1 실내온도(SHT30)·house3 수온 센서 하드웨어 점검 필요(간헐 읽기실패 빈발).
+
+## ★ 관리 메뉴 4종 감사 + P1 수복 (2026-07-04 03:00~03:20)
+
+4개 admin 메뉴(/prompt-management·/rule-candidates·/agent-history·/control-prompt-management) 전수 감사:
+- Agent 이력 ✅ 완전 정상(ReAct 추적·구독·알림·트리거). LLM 제어관리 ✅ 정상(control_prompt_m 33섹션 CRUD, body_text 필드, updt_dttm 즉시반영).
+- 프롬프트관리 ✅ API 정상(blocks 17/chunks 4/tools 22). **P3 완료**(03:22): UI dead-code 안내문을 현행(control_prompt_m/LLM 제어관리 메뉴, 저장 즉시 반영)으로 갱신 + vite 재빌드·dist 배포(신규 번들 index-BgxPiQTP.js, 4개 메뉴 유지 확인).
+- 룰 후보: 마이닝 정상(ai_self_evolve, 결정이력 빈도 분석). **P1 수복 완료**: register_approved_rule 이 domain_rule 에만 저장하고 소비자(search_rules) 호출처가 없어 승인이 제어에 무반영이던 단절 → document_collection(data_type=domain_knowledge, doc_id=rule_{rid} 멱등) 이중 upsert 추가. 단위 4/4 + E2E(승인→양쪽 반영→query_domain_knowledge 실검색→정리) 통과. FastAPI 재기동 배포(03:15).
+- **P2 완료**(03:20): 마이닝 쿼리에 `reason NOT LIKE '[algorithm_fallback]%'` 제외 필터 적용 — 순수 LLM 결정만 룰 후보로. FastAPI+agent_monitor 재기동, 단위 2/2(실DB 표본 포함) + 실API 검증(후보 8건 중 fallback 표본 0건). agent 컨텍스트 주입(ai_monitor_agent:402) 경로도 함께 정화됨.
+
+
+> Claude 작업 참조용. 사용자 보고와 동일 내용의 실행 지향 정리본.
+> 각 액션은 파일:줄 + 수정 방법 포함 — 개선 지시 시 이 문서만으로 즉시 착수 가능.
+
+## 실측 스냅샷 (2026-07-04 01:20 기준, 최근 3시간)
+
+| 지표 | 값 |
+|---|---|
+| 제어 LLM 성공률 | 54/54 (100%) — 폴백·Errno22·락타임아웃·파싱실패 전부 0 |
+| 제어 지연 | p50 73s · avg 78s · p90 102s · max 156s |
+| Agent LLM | 230콜 · avg 23s (18사이클, 사이클당 ~12.8콜) |
+| LLM duty cycle | **88%** (제어 39% + agent 49%) — 채팅 여유 12% |
+| 중재 | 스케줄skip 14 · failover 23 · 진행중 agent 개입취소 2 — 설계대로 |
+| 결정이력 | 53 기록 / 0 실패 |
+
+## 액션 목록 (우선순위순)
+
+### A1. 🔴 agent set_relay daily_limit 200 부족 — 위기 시 제어 차단 실사고
+- 증거: house1 어제(07-03) 200/200 소진, 3h 내 거부 29건. 당시 house1 습도 99~100% 위기 중이었음(critical 알림 2건).
+- 원인: 한도 카운트가 (호기,도구,날짜) 단위인데 agent 는 사이클당 릴레이 2~3개 = 2~3콜. 144사이클/일 × 2~3 = 288~432 > 200.
+- 수정: `agri_ai_core/src/ai/tools_agent_write.py:62` TOOL_DAILY_LIMIT_OVERRIDE set_relay 200→500,
+  또는 `_count_today` 를 (호기,도구,**시멘틱flag**,날짜) 단위로 세분화. 진동방지는 cooldown 60s 가 담당하므로 한도는 폭주차단용만.
+
+### A2. 🔴 send_user_alert 50/50 소진 — 알림 23건 거부
+- agent 가 매 사이클 유사 알림 반복 발송 → 한도 소진 → 정작 새 위기 알림 차단 위험.
+- 수정: (a) 동일 내용 알림 dedupe(최근 N분 내 동일 message hash 억제) 를 `tools_agent_write.py` send_user_alert 경로에 추가, (b) 또는 한도 100 상향. dedupe 가 정석.
+
+### A3. 🔴 수온센서 결함 시 프롬프트에 "수온=None℃" 노출
+- `agri_ai_core/src/control/ai_control.py:1140` — `f"수온={sensor_data.get('water_temperature')}℃"` → 결함 필터 후 None 이면 "수온=None℃".
+- gemma3 가 'None' 을 어떻게 해석할지 모호. 수정: None 이면 `"수온=측정불가(센서장애 — 수온 관련 룰 판단 시 실내온도 기준 보수적 판단)"` 로 치환.
+- 참고: 절대안전 게이트(`_apply_absolute_device_safety`)와 reader.py 필터(0<wt<100)가 이미 하드 방어 중이라 실사고는 없음. 프롬프트 품질 문제.
+
+### A4. 🔴 도메인RAG 매 사이클 예외 "검색 실패: 0" — document_collection 450건 미활용
+- `agri_ai_core/src/control/ai_doc_rag.py:80` except 가 잡는 예외 str(e)=="0" (KeyError(0) 추정).
+- 대화형 파이프라인에선 동일 chroma 가 동작하므로 제어 프로세스(root/스케줄러) 특이 or flatten 헬퍼(`src/chroma/operations.py:380+`) 의 dict[0] 접근 의심.
+- 진단법: ai_doc_rag 예외 로깅에 traceback 임시 추가 후 스케줄러 재기동 1사이클 → 정확 라인 확보 → 수정.
+- 효과: 450건 도메인 지식이 제어 프롬프트에 실제 주입되기 시작.
+
+### A5. 🟠 farm_knowledge 컬렉션 0건 — 유사시기 RAG 무기여(학습 루프 부재)
+- `query_similar_periods` 는 정상이나 데이터가 0건. growth_rag 적재 파이프라인이 없거나 미가동.
+- 방향: ai_decision_log(481건/일) + 센서 스냅샷을 주기 배치로 farm_knowledge 에 임베딩 적재(data_type=growth_rag, farm/house 메타) → "과거 유사시기 결정" 컨텍스트 활성화. domain_rule 컬렉션도 0건.
+
+### A6. 🟠 대기정체 API 403 Forbidden — 매 사이클(3h에 54건) 컨텍스트 결손
+- 외부 API 키 만료/권한 문제. 사용자에게 키 갱신 요청 필요(코드 문제 아님). 기상예보 429 도 간헐.
+
+### A7. 🟡 노이즈/정리성
+- EventListener house=0(비활성 재배사) 데이터단절 경고 36건/3h — 리스너 대상에서 house0 제외.
+- `relay_l_recording_backup_change1` 7.4M 행 — 아카이브 후 DROP 후보.
+- chromadb 파이썬 클라이언트 deprecated 경고(HttpClient 직접 생성 시) — 앱 자체 모듈은 REST 직행이라 무영향.
+- 메모리(사용자 auto-memory)의 "PROMPT_BLOCK_M dead code" 노트는 2026-06-21 개편으로 구식 — 현재 control system_prompt 는 control_prompt_m 테이블(prompt_registry, updt_dttm invalidate) 관리. → 메모리 수정 완료(2026-07-04).
+
+### A8. 🟡 성능 여지 (HW 불변 전제)
+- `OLLAMA_FLASH_ATTENTION=0` → 1 + `OLLAMA_KV_CACHE_TYPE=f16` → q8_0 검토: KV 메모리 절감 → GPU 레이어 증가 → 지연 단축 가능. 단 gemma3(SWA) 호환성 사전 검증 필수 — 시도 시 watchdog 감시 하 1시간 A/B.
+- PostgreSQL `shared_buffers=128MB`(기본값) — 10GB DB 대비 작음. 1~2GB 상향 후보(제어 쿼리는 이미 0.2~0.6ms 라 긴급성 낮음).
+- agent 사이클당 LLM 12.8콜 — task 프롬프트에 "get_all_house_status 1회 결과 재사용, 호기별 재조회 금지" 강화 시 duty cycle 88%→70%대 여유 확보 가능. 세션제한초과 압박 주입 9건/3h 도 같은 원인.
+
+## 환경 현황 (감사 결과 — 정상 확인된 것)
+
+### Ollama / LLM
+- Ollama 0.30.10. override.conf: MAX_QUEUE=2048 · NUM_PARALLEL=1 · KEEP_ALIVE=-1 · FLASH_ATTENTION=0 · KV=f16 · CONTEXT_LENGTH=16384.
+- gemma3:27b (27.4B) 21.6GB 로드, VRAM 16.7GB(77%)+CPU. ctx 16384 (모델 최대 131072).
+- 제어 호출: temperature=0 · num_predict=200 · num_ctx=16384 · format=RELAY_RESPONSE_SCHEMA · keep_alive=-1 · timeout=3600s · 재시도 backoff 1.5/5/15s.
+- watchdog: root crontab 분당 실행, busy 마커(ai_control/agent 라벨 모두 확인됨) 시 deep-check skip — 추론 중 오재시작 위험 해소 확인.
+
+### 동시성 5중 조율 (전부 실측 검증)
+1. Ollama NUM_PARALLEL=1 (서버 직렬화)
+2. `llm_call_lock` fcntl flock (ai_control/agent/chat 3주체 공유; /tmp 락, protected_regular 이슈 해결됨 → [[project-llm-lock-tmp-protected-regular]])
+3. busy 마커 + `is_llm_busy` — agent가 제어에 양보, watchdog skip
+4. 제어 중재(arbitration): agent 우선·스케줄 30분 failover·10분 throttle·진행중 개입취소 (`control_arbitration_state/config` DB, `src/control/control_arbitration.py`)
+5. 채팅 게이트(`src/ai/chat_llm_gate.py`): admin/user 2티어 1슬롯, busy 시 즉시 ack, 대체 시 취소 안내 (query_handler_simple 2진입점 + llm_transport lock 편입)
+
+### DB (PostgreSQL 16.14)
+- 10.2GB. sensor 27.8M / relay 33.8M 행, dead tuple 0, autovacuum 정상.
+- 수집: 호기당 ~196건/10분(≈3초 주기), 3개 호기 균등, 최신성 OK. 커넥션 36/100.
+- 제어 read 는 (farm_id,hous_id,recd_dttm) PK 인덱스 0.2~0.6ms.
+
+### 프롬프트 (item 10)
+- system 6,786자 — control_prompt_m 테이블(DB) 관리, prompt_registry updt_dttm 비교 invalidate(실시간 정책 준수). 절대룰(히터↔배수 상호배타, 30℃ 금지, hysteresis+5℃, 열냉가습기 개념) 명문화.
+- user 4,900~5,050자 — 센서값 + 최적조건 + 옵션B 사전평가(임계 비교 명시 — gemma3 수치비교 약점 보완, 우수) + M1 이력 + M5 알고리즘참조 + M6 자기결정 5건 + M7 재배사비교 + 트렌드.
+- 총 ~11.8k자 ≈ 4~6k 토큰 « 16384 — 여유 ~3배. 파싱실패 3h 0건.
+- 결손: RAG 블록 상시 0건(A4/A5), 대기정체 403(A6), 수온 None 표기(A3).
+
+## 재기동 절차 (참조)
+- 스케줄러: `sudo ./agriAiCore restart 4` (hang 정상 — 백그라운드 실행 후 ps lstart 로 확인)
+- FastAPI: `sudo ./agriAiCore restart 5` (port 8002)
+- agent: `sudo systemctl restart agent_pending_worker agent_monitor agent_event_listener`
+- sudo 는 SUDO_ASKPASS 스크립트 방식 사용(대화형 프롬프트 회피)

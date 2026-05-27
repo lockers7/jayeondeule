@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════════════
-# 밸브-팬 인터록 모듈 (rev6 · 2026-04-27).
+# 밸브-팬 인터록 모듈.
 # AI/알고리즘/수동 모든 모드의 set_relay_value 가 통과해야 하는 단일 게이트.
 # 위험 전이 5종(팬 OFF→ON 2개, 밸브 ON→OFF 3개) 만 검사하며 그 외는 본질 안전.
 #
@@ -8,7 +8,7 @@
 # Rule 3: 흡입밸브 OFF → 흡입팬 OFF OR (순환밸브 ON AND 배출팬 ON)
 # Rule 4: 배출밸브 OFF → 배출팬 OFF OR (순환밸브 ON AND 흡입팬 ON)
 # Rule 5: 순환밸브 OFF → (흡입팬 OFF OR 흡입밸브 ON) AND (배출팬 OFF OR 배출밸브 ON)
-#         (rev6 복원: Rule 1/2 invariant 보존 — 각 ON 팬은 자기 측 비순환 밸브 ON 필수)
+#         (Rule 1/2 invariant 보존 — 각 ON 팬은 자기 측 비순환 밸브 ON 필수)
 # --->
 # record_valve_transitions: 릴레이 쓰기 직후 OFF→ON 전이 시각 latch 갱신
 # get_valve_dwell_sec: 특정 밸브가 ON 상태로 머문 시간(초)
@@ -36,6 +36,17 @@ VALVE_FAN_INTERLOCK_SEC = int(os.environ.get("VALVE_FAN_INTERLOCK_SEC", "10"))
 
 # ══════════════════════════════════════════════════════════════════════════
 # 팬 → 선행 밸브 매핑 (둘 중 하나가 임계 이상 ON 이면 팬 ON 허용)
+#
+# ⛔⛔ 절대 제거 금지 — 사용자(농장주) 명시 지시 ⛔⛔
+#   "운용모드에 관계없이 제어 마지막 부분에 아래 2개의 비상제어 코드가
+#    반드시 있어야 한다:
+#      · 흡입팬 ON 은 반드시 흡입밸브 ON 혹은 순환밸브 ON 이어야 함
+#      · 배출팬 ON 은 반드시 배출밸브 ON 혹은 순환밸브 ON 이어야 함"
+#   밸브가 닫힌 채 팬이 돌면 모터 소손(물리 파손). 이 매핑과 아래
+#   evaluate_interlock (전이 게이트 + 최종 불변식 강제) 은 그 지시의 구현이며,
+#   어떤 리팩토링/최적화에서도 삭제·우회(skip 플래그 추가 포함) 금지.
+#   호출 위치: relay_manager.set_relay_value — 모든 제어 경로(LLM/agent/스케줄/
+#   수동/비상가드)의 최종 관문.
 # ══════════════════════════════════════════════════════════════════════════
 FAN_VALVE_GATE = {
     'intake_fan_flag':  ('air_intake_valve_flag',  'air_circulation_valve_flag'),
@@ -212,12 +223,12 @@ def evaluate_interlock(farm_id, house_id, current: Optional[Dict], target: Dict,
             'remaining_sec': remain, 'reason': reason,
         })
 
-    # ───── OFF 인터록 (rev6 · 2026-04-27): 차단 + 사유 안내 ─────
+    # ───── OFF 인터록: 차단 + 사유 안내 ─────
     # 밸브가 닫힌 상태에서 팬이 가동되면 모터 손상 위험.
     # Rule 3: 흡입밸브 OFF — 흡입팬 OFF OR (순환밸브 ON AND 배출팬 ON)
     # Rule 4: 배출밸브 OFF — 배출팬 OFF OR (순환밸브 ON AND 흡입팬 ON)
     # Rule 5: 순환밸브 OFF — (흡입팬 OFF OR 흡입밸브 ON) AND (배출팬 OFF OR 배출밸브 ON)
-    #         rev6: Rule 1/2 invariant 보존 — OFF 후 각 ON 팬에 자기 측 비순환 밸브 ON
+    #         Rule 1/2 invariant 보존 — OFF 후 각 ON 팬에 자기 측 비순환 밸브 ON
     for valve_flag, dependent_fans in VALVE_DEPENDENT_FANS.items():
         v_pin = _flag_to_pin(house_id, valve_flag)
         if not v_pin or v_pin not in corrected:
@@ -254,7 +265,7 @@ def evaluate_interlock(farm_id, house_id, current: Optional[Dict], target: Dict,
             if circ_on and opp_on:
                 continue   # 순환밸브 ON + 반대측 팬 ON → 순환경로 살아있음 → OFF 허용
 
-        # 순환밸브 예외 (rev6 · 2026-04-27) — Rule 1/2 invariant 보존 AND 식:
+        # 순환밸브 예외 — Rule 1/2 invariant 보존 AND 식:
         # 통과 = (흡입팬 OFF OR 흡입밸브 ON) AND (배출팬 OFF OR 배출밸브 ON)
         # 순환밸브 OFF 후 ON 인 팬마다 자기 측 비순환 밸브가 ON 이어야 ON 조건
         # 만족 — 한 쪽이라도 dead end 면 차단.
@@ -305,6 +316,38 @@ def evaluate_interlock(farm_id, house_id, current: Optional[Dict], target: Dict,
             'blocking_fans': list(unsafe_fans),
             'reason': reason,
         })
+
+    # ══════════════════════════════════════════════════════════════════════
+    # ⛔ 절대 불변식 최종 강제 — 절대 제거 금지 (사용자 명시 지시) ⛔
+    #   "흡입팬 ON 은 반드시 흡입밸브 ON 혹은 순환밸브 ON /
+    #    배출팬 ON 은 반드시 배출밸브 ON 혹은 순환밸브 ON"
+    #   위의 전이 게이트(OFF→ON / ON→OFF)는 '변경 순간' 만 검사하므로, 이미
+    #   위반 상태로 존재하는 경우(외부 요인·부팅 직후·과거 잔존 등)는 걸러지지
+    #   않는다. 본 블록은 최종 결과(corrected)를 무조건 검사해 "밸브가 모두
+    #   OFF 인데 팬이 ON" 이면 팬을 강제 OFF — 어떤 경로로도 이 불변식을
+    #   위반한 채 릴레이가 기록될 수 없게 하는 최후 안전망이다(모터 소손 방지).
+    # ══════════════════════════════════════════════════════════════════════
+    for fan_flag, gate_valves in FAN_VALVE_GATE.items():
+        fan_pin = _flag_to_pin(house_id, fan_flag)
+        if not fan_pin or not bool(corrected.get(fan_pin, False)):
+            continue   # 팬 OFF 면 불변식 자동 충족
+        any_valve_on = False
+        for v in gate_valves:
+            v_pin = _flag_to_pin(house_id, v)
+            if v_pin and bool(corrected.get(v_pin, False)):
+                any_valve_on = True
+                break
+        if not any_valve_on:
+            corrected[fan_pin] = False
+            fan_label = SEMANTIC_LABELS.get(fan_flag, fan_flag)
+            valve_labels = '/'.join(SEMANTIC_LABELS.get(v, v) for v in gate_valves)
+            violations.append({
+                'flag': fan_flag,
+                'action': 'invariant_forced_off',
+                'remaining_sec': 0,
+                'reason': (f"[절대불변식] {fan_label} 강제 OFF — 선행 밸브({valve_labels}) "
+                           f"가 모두 OFF 상태 (모터 소손 방지, 상시 강제)"),
+            })
 
     return corrected, violations
 

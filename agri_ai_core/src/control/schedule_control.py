@@ -7,6 +7,7 @@
 # should_execute_interval: should execute interval
 # should_execute_weekdays: should execute weekdays
 # is_time_in_range: is time in range
+# compute_schedule_target: 조명/관수 현재 목표 ON/OFF/None (순수 판정, AI 재구성 재사용)
 # _handle_schedule_control: handle schedule control
 # control_lighting_schedule: control lighting schedule
 # control_irrigation_schedule: control irrigation schedule
@@ -25,7 +26,7 @@ from agri_ai_core.src.control.control_common import get_pin_map, RELAY_COUNT
 from agri_ai_core.src.control.control_common import (
     sort_houses as _sort_houses,
 )
-# [2026-04-28 rev2] 임계값은 ai_thresholds.get_thresholds() 동적 — 하드코딩 금지
+# 임계값은 ai_thresholds.get_thresholds() 동적 — 하드코딩 금지
 from agri_ai_core.src.control.ai_thresholds import (
     get_thresholds as _get_thresholds, get_global_default as _get_default_ts,
 )
@@ -36,7 +37,7 @@ _WEEKDAY_NAMES = {1: '월', 2: '화', 3: '수', 4: '목', 5: '금', 6: '토', 7:
 
 
 # ────────────────────────────────────────────────────────────────────
-# [2026-04-28 rev2] 센서 현황 문자열 — 임계값은 ts(DB 동적) 재배사별 셋팅 우선.
+# 센서 현황 문자열 — 임계값은 ts(DB 동적) 재배사별 셋팅 우선.
 # 정상 범위 이탈 시 "<low(최저값)" / ">high(최고값)" 표시.
 # ────────────────────────────────────────────────────────────────────
 def _format_sensor_status(sensor, farm_id=None, house_id=None):
@@ -115,6 +116,44 @@ def is_time_in_range(current_time, start_time, finish_time):
     # 자정을 넘어가는 경우 (예: 23:00 ~ 01:00)
     else:
         return current_time >= start_time or current_time <= finish_time
+
+
+# ────────────────────────────────────────────────────────────────────
+# 조명/관수의 현재 목표 상태만 계산하는 순수 판정 (부작용 없음).
+# 반환: True(스케줄 시간대 내 → ON) / False(스케줄 있고 시간대 밖 → OFF) /
+#       None(스케줄 없음 → 호출자가 현재 상태 유지). AI 전체 재구성에서 재사용.
+# ────────────────────────────────────────────────────────────────────
+def compute_schedule_target(farm_id, house_id, setting_type):
+    try:
+        settings = read_light_irrigation_settings(farm_id, house_id, setting_type)
+        if not settings:
+            return None
+        has_any = any(s.get('strt_time') and s.get('fnsh_time') for s in settings)
+        if not has_any:
+            return None
+        now = datetime.now()
+        ct, cd = now.time(), now.date()
+        for s in settings:
+            st, ft = s.get('strt_time'), s.get('fnsh_time')
+            if not (st and ft):
+                continue
+            if not is_time_in_range(ct, st, ft):
+                continue
+            et = s.get('excs_type', 'daily')
+            if et == 'daily':
+                ok = True
+            elif et == 'interval':
+                ok = should_execute_interval(s.get('excs_strt_date'), s.get('excs_itvl'), cd)
+            elif et == 'weekdays':
+                ok = should_execute_weekdays(s.get('excs_wkdy'), cd)
+            else:
+                ok = False
+            if ok:
+                return True
+        return False  # 스케줄 있으나 현재 시간대 밖 → OFF
+    except Exception as e:
+        logger.debug(f"[스케줄목표] {setting_type} 계산 실패(현재상태 유지): {e}")
+        return None
 
 
 # ═══════════════════════════════

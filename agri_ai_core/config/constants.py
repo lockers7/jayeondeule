@@ -15,7 +15,7 @@ EMBEDDING_MODEL_NAME = "bge-m3"
 
 # 스케줄링 설정
 STATS_INTERVAL_MINUTES = 10
-AI_CONTROL_LOOP_DELAY_SEC = 60    # AI 순환 제어: 재배사 간 대기 시간(초). [변경12 · 2026-04-30] 10→60: ollama 큐 점유율 완화로 사용자 채팅이 끼어들 여유 확보. 환경 변화는 분 단위라 충분.
+AI_CONTROL_LOOP_DELAY_SEC = 60    # AI 순환 제어: 재배사 간 대기 시간(초). ollama 큐 점유율 완화로 사용자 채팅이 끼어들 여유 확보 (환경 변화는 분 단위라 충분).
 TRAINING_SCHEDULE_TIME = ["09:00", "21:00"]
 NUM_PREDICT = 8192   # LLM 응답 최대 토큰 (A4 ~5장, RAG 요약/삭제/릴레이 제어 충분)
 NUM_PREDICT_REWRITE = 2048
@@ -58,8 +58,8 @@ def get_ollama_url() -> str:
 
 # ────────────────────────────────────────────────────────────────────
 # LLM 모델명 반환 — .env 파일 직접 read > 환경변수 > 설정 > 기본값.
-# [변경9 · 2026-04-30] FastAPI change_model API 가 .env 만 수정하면 Scheduler
-# 등 다른 프로세스도 다음 호출 시 자동으로 새 모델명을 반영하도록 .env 직접 read.
+# FastAPI change_model API 가 .env 만 수정하면 Scheduler 등 다른 프로세스도
+# 다음 호출 시 자동으로 새 모델명을 반영하도록 .env 직접 read.
 # mtime 기반 캐시로 IO 부담 최소화 — 파일 수정 시에만 재파싱.
 # ────────────────────────────────────────────────────────────────────
 _MODEL_NAME_CACHE = {'value': None, 'mtime': 0.0}

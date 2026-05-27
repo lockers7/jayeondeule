@@ -322,22 +322,26 @@ class ConversationStore:
             doc_id = hashlib.md5(f"{session_id}_{time.time()}".encode()).hexdigest()[:16]
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            upsert_documents_with_embedding(
-                collection_name=collection_name,
-                ids=[f"conv_summary_{doc_id}"],
-                documents=[summary],
-                embeddings=[embedding],
-                metadatas=[{
+            # ⛔ 시그니처는 (collection_name, docs) 다. ChromaDB 원시 API 형태
+            #    (ids=/documents=/embeddings=/metadatas=) 로 부르면 TypeError 가 나고,
+            #    아래 except 가 그것을 삼켜 2026-03-01~07-17 4.5개월간 대화 요약이
+            #    한 건도 저장되지 않았다(임베딩만 계산하고 버림). 형태를 바꾸지 말 것.
+            upsert_documents_with_embedding(collection_name, [{
+                "doc_id": f"conv_summary_{doc_id}",
+                "text": summary,
+                "embedding": embedding,
+                "metadata": {
                     "session_id": session_id,
                     "data_kind": "conversation_summary",
                     "record_datetime": now_str,
                     "summary_length": len(summary),
-                }],
-            )
-            logger.debug(f"[대화저장소] 대화 요약 VectorDB 저장 완료: {doc_id}")
+                },
+            }])
+            logger.info(f"[대화저장소] 대화 요약 VectorDB 저장 완료: {doc_id}")
 
         except Exception as e:
-            logger.debug(f"[대화저장소] 대화 요약 VectorDB 저장 실패: {e}")
+            # ⛔ debug 로 낮추지 말 것 — 그 한 줄이 위 4.5개월을 숨겼다.
+            logger.warning(f"[대화저장소] 대화 요약 VectorDB 저장 실패: {e}")
 
     # ────────────────────────────────────────────────────────────────
     # 메모리 폴백 add — TTL 청소 후 turns 에 append, 초과분 trim.

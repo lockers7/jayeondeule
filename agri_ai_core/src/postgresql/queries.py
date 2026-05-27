@@ -17,7 +17,7 @@ GET_FARM_NAME = """SELECT DISTINCT farm_id, farm_name
                    WHERE farm_id != 0 AND (farm_id = %s OR %s IS NULL)
                    ORDER BY farm_name ASC;"""
 
-GET_HOUSE_NAME = """SELECT DISTINCT farm_id, hous_id, hous_name, mnul_ctrl_flag, ctrl_type, crop_lvel
+GET_HOUSE_NAME = """SELECT DISTINCT farm_id, hous_id, hous_name, mnul_ctrl_flag, ctrl_type, crop_lvel, dlte_yn
                     FROM FARMHOUSE_M_INFO
                     WHERE (farm_id = %s OR %s IS NULL)
                       AND (hous_id = %s OR %s IS NULL)
@@ -91,7 +91,7 @@ GET_FARM_INFO_LIST = """SELECT FMI.farm_id                         AS 농장코�
                              , FMI.farm_name                       AS 농장명
                              , farm_domi                           AS 도메인
                              , open_date                           AS 영업시작일
-                             , clse_date                           AS 영업종료일
+                             , close_date                          AS 영업종료일
                              , tel_no                              AS 농장전화번호
                              , FMI.hp_no                           AS 비상연락번호
                              , fax_no                              AS 팩스번호
@@ -120,7 +120,7 @@ GET_FARM_INFO_LIST = """SELECT FMI.farm_id                         AS 농장코�
                                                   FROM SENSOR_M_SETTING
                                                  WHERE farm_id = SMS.farm_id
                                                    AND hous_id = SMS.hous_id)
-                         GROUP BY FMI.farm_id, FMI.farm_name, farm_domi, open_date, clse_date,
+                         GROUP BY FMI.farm_id, FMI.farm_name, farm_domi, open_date, close_date,
                                   tel_no, FMI.hp_no, fax_no, mail, CM1.code_name, addr,
                                   main_prdt, FMI.rmks, user_name, UMI.hp_no;"""
 
@@ -263,7 +263,7 @@ GET_LIGHT_IRRIGATION = """SELECT strt_time
                            ORDER BY strt_time"""
 
 # ═══════════════════════════════════════════════
-# 통합 스케줄 설정 (SCHEDULE_M_SETTING) — Phase 1
+# 통합 스케줄 설정 (SCHEDULE_M_SETTING)
 # ═══════════════════════════════════════════════
 GET_ALL_SCHEDULE_SETTINGS = """SELECT task_name
                                     , enabled
@@ -282,8 +282,7 @@ GET_SCHEDULE_MAX_UPDT = """SELECT MAX(updt_dttm) AS max_updt
                              FROM SCHEDULE_M_SETTING"""
 
 # ═══════════════════════════════════════════════════════════
-# 센서 임계값 변경 감지용 (Phase 3-a) — SENSOR_M_SETTING
-# updt_dttm 컬럼은 migration 002 에서 추가됨.
+# 센서 임계값 변경 감지용 — SENSOR_M_SETTING
 # ═══════════════════════════════════════════════════════════
 GET_SENSOR_SETTING_MAX_UPDT = """SELECT MAX(updt_dttm) AS max_updt
                                    FROM SENSOR_M_SETTING
@@ -291,7 +290,7 @@ GET_SENSOR_SETTING_MAX_UPDT = """SELECT MAX(updt_dttm) AS max_updt
                                     AND hous_id = %s"""
 
 # ═══════════════════════════════════════════════════════
-# 프롬프트/도구 변경 감지 (Phase 3-b)
+# 프롬프트/도구 변경 감지
 # ═══════════════════════════════════════════════════════
 GET_PROMPT_BLOCK_UPDT = """SELECT updt_dttm
                              FROM prompt_block_m
@@ -392,9 +391,9 @@ SELECT role, content FROM (
 ) sub ORDER BY created_at ASC
 """
 
-# ════════════════════════════════════════════════════════════
-# AI 학습 상태 관리 (기존 ChromaDB job_status_collection 대체)
-# ════════════════════════════════════════════════════════════
+# ══════════════════
+# AI 학습 상태 관리
+# ══════════════════
 CREATE_AI_LEARNING_STATUS_TABLE = """
 CREATE TABLE IF NOT EXISTS ai_learning_status (
     id              SERIAL PRIMARY KEY,
@@ -414,9 +413,9 @@ GET_AI_LEARNING_STATUS = """
 SELECT status_value, updated_at FROM ai_learning_status WHERE status_key = %s
 """
 
-# ═════════════════════════════════════════════════════════════════════
-# AI 학습 패턴 관리 (기존 ChromaDB self_learning/pattern_learning 대체)
-# ═════════════════════════════════════════════════════════════════════
+# ══════════════════
+# AI 학습 패턴 관리
+# ══════════════════
 CREATE_AI_LEARNING_PATTERN_TABLE = """
 CREATE TABLE IF NOT EXISTS ai_learning_pattern (
     id              SERIAL PRIMARY KEY,
@@ -526,7 +525,7 @@ GET_UNLEARNED_CROPS_DATA = """SELECT FMI.farm_id                                
                               LIMIT %s;"""
 
 # ══════════════════════════════════════════════
-# 생육 RAG용 쿼리 — 생육 기반 인과 관계 RAG 전환
+# 생육 RAG용 쿼리 — 생육 기반 인과 관계 RAG
 # ══════════════════════════════════════════════
 
 # FARMHOUSE_L_CROPS 테이블에 생육 세분화 컬럼 추가 (IF NOT EXISTS이므로 중복 실행 안전)
@@ -689,9 +688,8 @@ GET_ACTIVE_FARM_HOUSES_WITH_CROP = """SELECT DISTINCT FMI.farm_id
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# [2026-04-28] AI 환경제어 LLM — 1년 전 시점 컨텍스트 조회용 SQL.
+# AI 환경제어 LLM — 1년 전 시점 컨텍스트 조회용 SQL.
 # 호출자: agri_ai_core.src.control.ai_history_context._fetch_year_ago_baseline.
-# 기능 추가만 — 기존 SQL 의 컬럼/시그니처는 변경하지 않음.
 # ════════════════════════════════════════════════════════════════════════════
 
 # 특정 시점 기준 ±N일 범위의 최적조건 셋팅값(SENSOR_M_SETTING) 1건 — 기준일에 가장
@@ -746,7 +744,7 @@ GET_GROWTH_INPUT_AT_DATE = """SELECT TO_CHAR(HLC.recd_dttm, 'YYYY-MM-DD HH24:MI:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# [2026-04-28] AI 자기결정 이력 — ai_decision_log 테이블
+# AI 자기결정 이력 — ai_decision_log 테이블
 # 호출자: agri_ai_core.src.control.ai_decision_log
 # 테이블 자동 생성 DDL 도 동봉 (없으면 모듈이 생성).
 # ════════════════════════════════════════════════════════════════════════════
@@ -762,11 +760,14 @@ CREATE TABLE IF NOT EXISTS ai_decision_log (
     circulation     VARCHAR(16),
     water_heater    BOOLEAN,
     fog_occurs      BOOLEAN,
+    drainage_motor  BOOLEAN,
     reason          VARCHAR(256),
     sensor_snapshot JSONB,
     feedback        VARCHAR(8),
     feedback_at     TIMESTAMP
 );
+ALTER TABLE ai_decision_log
+    ADD COLUMN IF NOT EXISTS drainage_motor BOOLEAN;
 CREATE INDEX IF NOT EXISTS idx_ai_decision_log_house_time
     ON ai_decision_log (farm_id, house_id, decided_at DESC);
 """
@@ -774,22 +775,24 @@ CREATE INDEX IF NOT EXISTS idx_ai_decision_log_house_time
 INSERT_AI_DECISION_LOG = """
 INSERT INTO ai_decision_log
     (decided_at, farm_id, house_id, growth_stage, action, circulation,
-     water_heater, fog_occurs, reason, sensor_snapshot)
+     water_heater, fog_occurs, drainage_motor, reason, sensor_snapshot)
 VALUES
-    (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+    (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
 RETURNING id;
 """
 
 GET_RECENT_AI_DECISIONS = """
 SELECT TO_CHAR(decided_at, 'YYYY-MM-DD HH24:MI:SS') AS decided_at,
-       action, circulation, water_heater, fog_occurs, reason, feedback
+       action, circulation, water_heater, fog_occurs, drainage_motor, reason, feedback
   FROM ai_decision_log
- WHERE farm_id = %s AND hous_id_match
-"""  # 사용 안함 — 아래 호환 SQL 사용
+ WHERE farm_id = %s AND house_id = %s
+ ORDER BY decided_at DESC
+ LIMIT %s
+"""  # 사용 안함 — 아래 호환 SQL(GET_RECENT_AI_DECISIONS_SQL) 사용
 
 GET_RECENT_AI_DECISIONS_SQL = """
 SELECT TO_CHAR(decided_at, 'YYYY-MM-DD HH24:MI:SS') AS decided_at,
-       action, circulation, water_heater, fog_occurs, reason, feedback
+       action, circulation, water_heater, fog_occurs, drainage_motor, reason, feedback
   FROM ai_decision_log
  WHERE farm_id = %s AND house_id = %s
  ORDER BY decided_at DESC
@@ -803,7 +806,147 @@ UPDATE ai_decision_log
 """
 
 # ════════════════════════════════════════════════════════════════════════════
-# [2026-04-28] M7 재배사간 시점 비교 — 동일 농장 다른 재배사의 최신 센서/릴레이
+# 관리자 강제 지시(admin directive) — 사용자(농장주/관리자)가 명시
+#   지시한 장치 상태를 해제 시까지 강제 유지. 우선순위: 인터록(물리보호) >
+#   관리자지시 > 비상가드 > LLM. 채팅 "OFF 유지" 류 지속 요청의 공식 이행 수단.
+# ════════════════════════════════════════════════════════════════════════════
+CREATE_ADMIN_DIRECTIVE_TABLE = """
+CREATE TABLE IF NOT EXISTS admin_device_directive (
+    farm_id      INTEGER      NOT NULL,
+    house_id     INTEGER      NOT NULL,
+    semantic     VARCHAR(40)  NOT NULL,
+    forced_value BOOLEAN      NOT NULL,
+    note         VARCHAR(200),
+    created_by   VARCHAR(40),
+    created_at   TIMESTAMP    NOT NULL DEFAULT NOW(),
+    released_at  TIMESTAMP,
+    PRIMARY KEY (farm_id, house_id, semantic)
+);
+"""
+
+GET_ACTIVE_ADMIN_DIRECTIVES = """
+SELECT semantic, forced_value, note, created_by,
+       to_char(created_at, 'MM-DD HH24:MI') AS created_at
+  FROM admin_device_directive
+ WHERE farm_id = %s AND house_id = %s AND released_at IS NULL;
+"""
+
+UPSERT_ADMIN_DIRECTIVE = """
+INSERT INTO admin_device_directive
+    (farm_id, house_id, semantic, forced_value, note, created_by, created_at, released_at)
+VALUES (%s, %s, %s, %s, %s, %s, NOW(), NULL)
+ON CONFLICT (farm_id, house_id, semantic) DO UPDATE SET
+    forced_value = EXCLUDED.forced_value,
+    note = EXCLUDED.note,
+    created_by = EXCLUDED.created_by,
+    created_at = NOW(),
+    released_at = NULL;
+"""
+
+RELEASE_ADMIN_DIRECTIVE = """
+UPDATE admin_device_directive
+   SET released_at = NOW()
+ WHERE farm_id = %s AND house_id = %s AND semantic = %s AND released_at IS NULL;
+"""
+
+# ════════════════════════════════════════════════════════════════════════════
+# 농장별 지역정보 — 기상 격자좌표(kma_nx/ny)·생활기상지수 지점코드(kma_area_no)
+#   지역정보는 농장 속성이므로 env 전역값이 아닌 farm_m_info 에서 실시간 read.
+#   농장 추가 시 코드 변경 없이 등록 데이터만으로 확장.
+# ════════════════════════════════════════════════════════════════════════════
+GET_FARM_GEO = """SELECT farm_name, kma_area_no, kma_nx, kma_ny
+                    FROM farm_m_info
+                   WHERE farm_id = %s AND dlte_yn = 'N'"""
+
+# ════════════════════════════════════════════════════════════════════════════
+# 제어 중재(arbitration) — agent 우선 · 스케줄 30분 failover
+#   control_arbitration_state : 재배사별 agent/스케줄 제어 시작·종료 시각 저장
+#   control_arbitration_config: 30분(유예)·10분(스케줄 주기) 실시간 조정 파라미터
+# ════════════════════════════════════════════════════════════════════════════
+CREATE_CONTROL_ARBITRATION_TABLE = """
+CREATE TABLE IF NOT EXISTS control_arbitration_state (
+    farm_id                     INTEGER NOT NULL,
+    house_id                    INTEGER NOT NULL,
+    last_agent_ctrl_stt_dttm    TIMESTAMP,
+    last_agent_ctrl_end_dttm    TIMESTAMP,
+    last_sched_ctrl_stt_dttm    TIMESTAMP,
+    last_sched_ctrl_end_dttm    TIMESTAMP,
+    active_controller           VARCHAR(16) NOT NULL DEFAULT 'none',
+    updt_dttm                   TIMESTAMP NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (farm_id, house_id)
+);
+CREATE TABLE IF NOT EXISTS control_arbitration_config (
+    id                          INTEGER PRIMARY KEY DEFAULT 1,
+    agent_idle_failover_min     INTEGER NOT NULL DEFAULT 30,
+    sched_failover_interval_min INTEGER NOT NULL DEFAULT 10,
+    updt_dttm                   TIMESTAMP NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_arb_config_singleton CHECK (id = 1)
+);
+INSERT INTO control_arbitration_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+"""
+
+# agent 제어 시작 stamp (set_relay 큐 적재 시)
+UPSERT_ARB_AGENT_START = """
+INSERT INTO control_arbitration_state
+    (farm_id, house_id, last_agent_ctrl_stt_dttm, updt_dttm)
+VALUES (%s, %s, NOW(), NOW())
+ON CONFLICT (farm_id, house_id) DO UPDATE SET
+    last_agent_ctrl_stt_dttm = NOW(),
+    updt_dttm = NOW();
+"""
+
+# agent 제어 종료 stamp (set_relay 실제 실행 완료 시) — idle 판정 기준
+UPSERT_ARB_AGENT_END = """
+INSERT INTO control_arbitration_state
+    (farm_id, house_id, last_agent_ctrl_end_dttm, active_controller, updt_dttm)
+VALUES (%s, %s, NOW(), 'agent', NOW())
+ON CONFLICT (farm_id, house_id) DO UPDATE SET
+    last_agent_ctrl_end_dttm = NOW(),
+    active_controller = 'agent',
+    updt_dttm = NOW();
+"""
+
+# 스케줄 제어 시작 stamp (게이트 통과 시) — 10분 throttle 기준
+UPSERT_ARB_SCHED_START = """
+INSERT INTO control_arbitration_state
+    (farm_id, house_id, last_sched_ctrl_stt_dttm, active_controller, updt_dttm)
+VALUES (%s, %s, NOW(), 'schedule', NOW())
+ON CONFLICT (farm_id, house_id) DO UPDATE SET
+    last_sched_ctrl_stt_dttm = NOW(),
+    active_controller = 'schedule',
+    updt_dttm = NOW();
+"""
+
+# 스케줄 제어 종료 stamp (사이클 완료 시)
+UPSERT_ARB_SCHED_END = """
+INSERT INTO control_arbitration_state
+    (farm_id, house_id, last_sched_ctrl_end_dttm, updt_dttm)
+VALUES (%s, %s, NOW(), NOW())
+ON CONFLICT (farm_id, house_id) DO UPDATE SET
+    last_sched_ctrl_end_dttm = NOW(),
+    updt_dttm = NOW();
+"""
+
+# 중재 상태 조회 — 서버시각 기준 경과초를 함께 계산(클라이언트 시계 편차 회피)
+GET_ARBITRATION_STATE = """
+SELECT farm_id, house_id,
+       last_agent_ctrl_stt_dttm, last_agent_ctrl_end_dttm,
+       last_sched_ctrl_stt_dttm, last_sched_ctrl_end_dttm,
+       active_controller,
+       EXTRACT(EPOCH FROM (NOW() - last_agent_ctrl_end_dttm)) AS agent_idle_sec,
+       EXTRACT(EPOCH FROM (NOW() - last_sched_ctrl_stt_dttm)) AS sched_since_stt_sec
+  FROM control_arbitration_state
+ WHERE farm_id = %s AND house_id = %s;
+"""
+
+GET_ARBITRATION_CONFIG = """
+SELECT agent_idle_failover_min, sched_failover_interval_min
+  FROM control_arbitration_config
+ WHERE id = 1;
+"""
+
+# ════════════════════════════════════════════════════════════════════════════
+# M7 재배사간 시점 비교 — 동일 농장 다른 재배사의 최신 센서/릴레이
 # ════════════════════════════════════════════════════════════════════════════
 GET_PEER_HOUSES_LATEST_SENSOR = """
 SELECT s.farm_id, s.hous_id,
@@ -838,7 +981,7 @@ SELECT r.farm_id, r.hous_id,
 """
 
 # ════════════════════════════════════════════════════════════════════════════
-# [2026-04-28] M9 이상사건 직전 환경 — 병해 발생 직전 24h 센서 평균
+# M9 이상사건 직전 환경 — 병해 발생 직전 24h 센서 평균
 # 입력: farm_id, house_id, lookback_days(기본 60)
 # ════════════════════════════════════════════════════════════════════════════
 GET_RECENT_ANOMALY_EVENTS = """
@@ -864,7 +1007,7 @@ SELECT ROUND(AVG(indr_tprt_valu)::numeric, 2) AS avg_indoor_temp,
 """
 
 # ════════════════════════════════════════════════════════════════════════════
-# [2026-04-28] M13 수확 결과 상관 — 1등급률 ≥ 0.6 시기의 환경 평균
+# M13 수확 결과 상관 — 1등급률 ≥ 0.6 시기의 환경 평균
 # 같은 재배사·생육단계 기준
 # ════════════════════════════════════════════════════════════════════════════
 GET_HIGH_QUALITY_PERIODS = """
@@ -884,7 +1027,7 @@ SELECT TO_CHAR(HLC.recd_dttm, 'YYYY-MM-DD') AS period_date,
 """
 
 # ════════════════════════════════════════════════════════════════════════════
-# [2026-04-28] M16 다년치 동월 평균 — 같은 월(현재 월) 의 연도별 환경 평균
+# M16 다년치 동월 평균 — 같은 월(현재 월) 의 연도별 환경 평균
 # ════════════════════════════════════════════════════════════════════════════
 GET_MONTHLY_SEASONALITY = """
 SELECT EXTRACT(YEAR FROM recd_dttm)::int           AS yr,
@@ -902,11 +1045,11 @@ SELECT EXTRACT(YEAR FROM recd_dttm)::int           AS yr,
 """
 
 # ════════════════════════════════════════════════════════════════════════════
-# [2026-04-28] M17 전력 사용량 — 릴레이 가동시간 추정 (실측 인프라 미장착)
+# M17 전력 사용량 — 릴레이 가동시간 추정 (실측 인프라 미장착)
 # 최근 24h 동안 각 릴레이의 ON 비율을 기반으로 추정 사용 시간(시간 단위)
 # ════════════════════════════════════════════════════════════════════════════
 # ════════════════════════════════════════════════════════════════════════════
-# [2026-04-28] 최근 시계열 N분 간격 K건 — LLM raw 시계열 컨텍스트
+# 최근 시계열 N분 간격 K건 — LLM raw 시계열 컨텍스트
 # vals: farm_id, house_id, bucket_seconds, lookback_minutes, sample_count
 # ════════════════════════════════════════════════════════════════════════════
 GET_RECENT_TIMESERIES_SAMPLES = """
@@ -957,9 +1100,9 @@ SELECT COUNT(*)                                                                 
 
 
 # ════════════════════════════════════════════════════════════════════
-# [프롬프트 자동화 · Phase 1] context 외부화용 신규 테이블 DDL
+# [프롬프트 자동화] context 외부화용 테이블 DDL
 #
-# 분리 원칙 (사용자 지침 2026-05-03):
+# 분리 원칙:
 #   · 가능한 ChromaDB(벡터 학습 데이터) 로 관리 → 학습 누적·자체 고도화
 #   · 사용자가 직접 관리해야 할 정확 데이터만 PostgreSQL
 #
@@ -998,4 +1141,32 @@ CREATE TABLE IF NOT EXISTS prompt_block_m (
     rgst_dttm       TIMESTAMP NOT NULL DEFAULT NOW(),
     updt_dttm       TIMESTAMP NOT NULL DEFAULT NOW()
 );
+"""
+
+CREATE_CONTROL_PROMPT_M_TABLE = """
+CREATE TABLE IF NOT EXISTS control_prompt_m (
+    block_id        VARCHAR(64) PRIMARY KEY,
+    section_key     VARCHAR(32)  NOT NULL,
+    growth_stage    VARCHAR(16),
+    sort_order      INT          NOT NULL DEFAULT 0,
+    category        VARCHAR(32)  NOT NULL,
+    name            VARCHAR(128) NOT NULL,
+    body_text       TEXT         NOT NULL,
+    placeholders    JSONB,
+    active_yn       CHAR(1)      NOT NULL DEFAULT 'Y',
+    description     VARCHAR(512),
+    rgst_dttm       TIMESTAMP    NOT NULL DEFAULT NOW(),
+    updt_dttm       TIMESTAMP    NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ctrl_prompt_section
+    ON control_prompt_m (section_key, growth_stage, active_yn, sort_order);
+"""
+
+GET_CONTROL_PROMPT_UPDT = """SELECT updt_dttm FROM control_prompt_m WHERE block_id = %s"""
+
+GET_ALL_CONTROL_PROMPTS = """
+SELECT block_id, section_key, growth_stage, sort_order, category, name,
+       body_text, placeholders, active_yn, description, updt_dttm
+FROM control_prompt_m
+ORDER BY category, sort_order, block_id
 """

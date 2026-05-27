@@ -1,6 +1,6 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # AI 환경제어 — RAG 컨텍스트 모듈 (M2)
-# [2026-04-28 신규] growth_rag_processor 가 매일 적재하는 farm_knowledge 컬렉션에서
+# growth_rag_processor 가 매일 적재하는 farm_knowledge 컬렉션에서
 # 현재 상황(센서/생육단계)과 유사한 과거 운영 사례를 1~2건 검색해 LLM 에게 제공.
 #
 # 호출 룰:
@@ -22,8 +22,7 @@ logger = setup_logger(__name__)
 _RAG_TOP_K = 2
 _RAG_DOC_PREVIEW_CHARS = 220
 
-# [Phase 3-c · 2026-05-09] TTL 캐시 폐기.
-# 사용자 지침: "비용 무시. 모든 데이터 실시간." → 매 호출마다 임베딩 + 검색.
+# TTL 캐시 금지 (실시간 데이터 정책) — 매 호출마다 임베딩 + 검색.
 # farm_knowledge 컬렉션의 새 row 추가/삭제 즉시 반영.
 
 
@@ -52,7 +51,7 @@ def _build_query_text(sensor: Dict[str, Any], growth_stage: str) -> str:
 def query_similar_periods(farm_id, house_id, sensor: Dict[str, Any],
                           growth_stage: str = "생육기",
                           top_k: int = _RAG_TOP_K) -> List[Dict[str, Any]]:
-    # [Phase 3-c · 2026-05-09] 캐시 폐기 — 매 호출 임베딩 + chroma 검색.
+    # 캐시 없음 — 매 호출 임베딩 + chroma 검색 (실시간 데이터 정책).
     try:
         from agri_ai_core.src.ai.embedder import embed_text
         from agri_ai_core.src.chroma.collections import farm_knowledge_collection
@@ -91,12 +90,15 @@ def query_similar_periods(farm_id, house_id, sensor: Dict[str, Any],
         if not result:
             return []
 
-        docs_outer = result.get("documents") or []
-        metas_outer = result.get("metadatas") or []
-        dists_outer = result.get("distances") or []
-        docs = docs_outer[0] if docs_outer else []
-        metas = metas_outer[0] if metas_outer else []
-        dists = dists_outer[0] if dists_outer else []
+        # ⚠ query_documents 는 이미 [[...]]→[...] 평탄화해 반환 — 추가 [0] 벗기기 금지
+        #   (이중 평탄화 시 KeyError(0) 발생, ai_doc_rag 와 동일).
+        # 중첩/평탄 양쪽 형태를 모두 수용한다.
+        def _rows(field):
+            v = result.get(field) or []
+            return v[0] if (isinstance(v, list) and v and isinstance(v[0], list)) else v
+        docs = _rows("documents")
+        metas = _rows("metadatas")
+        dists = _rows("distances")
 
         out = []
         for i, doc in enumerate(docs):
@@ -116,7 +118,9 @@ def query_similar_periods(farm_id, house_id, sensor: Dict[str, Any],
             logger.info(f"[AI-RAG] 검색 결과 0건 farm={farm_id} house={house_id}")
         return out
     except Exception as e:
-        logger.warning(f"[AI-RAG] 유사 시기 검색 실패 farm={farm_id} house={house_id}: {e}")
+        # 근본원인 추적을 위해 traceback 포함 로깅.
+        logger.warning(f"[AI-RAG] 유사 시기 검색 실패 farm={farm_id} house={house_id}: {e!r}",
+                       exc_info=True)
         return []
 
 

@@ -21,8 +21,17 @@
 # rag_perform                : POST /api/v1/rag/perform           — 첨부파일 RAG 처리 (스트리밍 업로드)
 # rag_save                   : POST /api/v1/rag/save              — 대화내역 RAG 저장
 # get_conversation_history   : GET  /api/v1/conversation/history  — 세션 최근 Q&A 쌍 조회
+# kakao_auth_url             : GET  /api/v1/admin/kakao/auth-url  — 카카오 연동 인증 URL 발급
+# kakao_callback             : GET  /api/v1/admin/kakao/callback  — 인증 code → 토큰 저장
+# kakao_status               : GET  /api/v1/admin/kakao/status    — 연동 상태 조회
+# kakao_test                 : POST /api/v1/admin/kakao/test      — 테스트 메시지 발송
 # get_available_models       : GET  /api/v1/admin/models          — Ollama 설치 모델 목록
 # change_model               : POST /api/v1/admin/models          — .env MODEL_NAME 변경 (즉시 적용)
+# list_control_prompts       : GET  /api/v1/admin/control-prompts        — LLM 제어 프롬프트 전체 조회
+# get_control_prompt         : GET  /api/v1/admin/control-prompts/{id}   — 단건 조회
+# update_control_prompt      : PUT  /api/v1/admin/control-prompts/{id}   — 단건 갱신
+# create_control_prompt      : POST /api/v1/admin/control-prompts        — 신규 등록
+# delete_control_prompt      : DELETE /api/v1/admin/control-prompts/{id} — 단건 삭제
 # lotto_recommend            : POST /api/v1/lotto/recommend       — 로또 추천 번호 생성
 # lotto_algorithm            : GET  /api/v1/lotto/algorithm       — 추천 알고리즘 설명
 # lotto_analyze_batch        : POST /api/v1/lotto/analyze-batch   — 미분석 회차 LLM 일괄 분석
@@ -31,6 +40,7 @@
 import json
 import os
 import time
+from datetime import datetime          # ⛔ alerts SSE(:453) 가 쓴다 — 지우면 스트림 즉사
 from typing import Optional
 from contextlib import asynccontextmanager
 import uuid
@@ -48,7 +58,6 @@ from agri_ai_core.api.models import (
 )
 from agri_ai_core.api.voice_router import voice_router
 from agri_ai_core.api.rpi_router import rpi_router
-# [2026-04-28] AI 결정 피드백 API (M15)
 from agri_ai_core.api.ai_feedback_router import ai_feedback_router
 
 logger = setup_logger(__name__)
@@ -215,7 +224,7 @@ class JsonLoggingMiddleware(BaseHTTPMiddleware):
 
 # ────────────────────────────────────────────────────────────────────
 # FastAPI lifespan — 시작 시 DB·ChromaDB·스케줄러·LLM 초기화, alert_bus
-# 이벤트 루프 바인딩, Wave 7 Agent monitor Job 영속 복원. 종료 시 정리.
+# 이벤트 루프 바인딩, Agent monitor Job 영속 복원. 종료 시 정리.
 # ────────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -225,12 +234,12 @@ async def lifespan(app: FastAPI):
     logger.info("[REST API] 시작 (Host=%s, Port=%s, API Key=%s)", api_host, api_port, api_key_set)
 
     # 애플리케이션 초기화 (DB, ChromaDB, 스케줄러, LLM 등)
-    # [2026-05-04] G1+G4 — API 프로세스는 AI 루프 + cron 잡 모두 비활성.
+    # API 프로세스는 AI 루프 + cron 잡 모두 비활성 —
     #   Scheduler 단독 가동으로 Ollama 큐 동시 호출 경합 차단.
     from agri_ai_core.startup import initialize_app, shutdown_app
     initialize_app(start_ai_loop=False, register_jobs=False)
 
-    # [Phase 3] 알림 버스에 이벤트 루프 바인딩 (sync 스레드 → SSE 브리지)
+    # 알림 버스에 이벤트 루프 바인딩 (sync 스레드 → SSE 브리지)
     try:
         import asyncio as _asyncio
         from agri_ai_core.src.ai import alert_bus as _alert_bus
@@ -238,7 +247,7 @@ async def lifespan(app: FastAPI):
     except Exception as _e:
         logger.warning("[alert_bus] 이벤트 루프 바인딩 실패: %s", _e)
 
-    # [Wave 7] Agent 모니터링 Job 영속 복원 — 서비스 재시작 후 active Job 재등록
+    # Agent 모니터링 Job 영속 복원 — 서비스 재시작 후 active Job 재등록
     try:
         from agri_ai_core.src.ai.tools_agent import restore_active_jobs as _restore_agent_jobs
         _restored = _restore_agent_jobs()
@@ -246,6 +255,15 @@ async def lifespan(app: FastAPI):
             logger.info("[Agent] 재시작 후 monitor Job %d건 복원", _restored)
     except Exception as _e:
         logger.warning("[Agent] monitor Job 복원 실패: %s", _e)
+
+    # 시스템 자기지식 자율 초기화 — 비었으면 시드, 있으면 감사(스키마 드리프트 자동 갱신).
+    # 백그라운드(임베딩 지연이 기동을 막지 않도록) · best-effort.
+    try:
+        import threading as _threading
+        from agri_ai_core.src.ai.system_knowledge import ensure_system_knowledge as _ensure_sk
+        _threading.Thread(target=_ensure_sk, daemon=True).start()
+    except Exception as _e:
+        logger.warning("[시스템지식] 기동 초기화 스레드 실패: %s", _e)
 
     yield
 
@@ -263,8 +281,8 @@ app = FastAPI(
 
 app.include_router(voice_router)
 app.include_router(rpi_router)
-app.include_router(ai_feedback_router)  # [2026-04-28]
-# [2026-05-25 Phase 4 W] AI Agent 관리 — history/pending/trigger/subscriptions/alerts
+app.include_router(ai_feedback_router)
+# AI Agent 관리 — history/pending/trigger/subscriptions/alerts
 from agri_ai_core.api.agent_router import agent_router
 app.include_router(agent_router)
 app.add_middleware(JsonLoggingMiddleware)
@@ -388,7 +406,7 @@ async def health_check():
 
 
 # ════════════════════════════════════════════════════════════════════
-# [Phase 3] Proactive 알림 — SSE 스트림 + 최근 알림 조회
+# Proactive 알림 — SSE 스트림 + 최근 알림 조회
 # ════════════════════════════════════════════════════════════════════
 # ────────────────────────────────────────────────────────────────────
 # 최근 알림 목록 — 신규 구독자가 놓친 이벤트 확인용.
@@ -401,7 +419,7 @@ async def alerts_recent(limit: int = 50, level: Optional[str] = None):
 
 
 # ────────────────────────────────────────────────────────────────────
-# 알림 수동 발행 — 운영/디버그용. 주로 Phase 3 통합 테스트에 사용.
+# 알림 수동 발행 — 운영/디버그용.
 # body: {level, category, farm_id, house_id, title, message, data?}
 # ────────────────────────────────────────────────────────────────────
 @app.post("/api/v1/alerts/publish")
@@ -422,7 +440,7 @@ async def alerts_publish(request: Request):
 
 # ────────────────────────────────────────────────────────────────────
 # SSE 스트림 — AI 순환 루프 이상 감지 이벤트를 실시간 전송.
-# [Wave 10] Last-Event-ID 헤더 지원 (재연결 시 놓친 이벤트 복원), 각
+# Last-Event-ID 헤더 지원 (재연결 시 놓친 이벤트 복원), 각
 # 이벤트에 id: 필드 첨부 (SSE 표준 자동 재연결).
 # ────────────────────────────────────────────────────────────────────
 @app.get("/api/v1/alerts/stream")
@@ -444,7 +462,7 @@ async def alerts_stream(request: Request):
             # 초기 메시지
             yield f"event: connected\ndata: {_json.dumps({'timestamp': datetime.now().isoformat()})}\n\n"
 
-            # [Wave 10] 재연결 시 Last-Event-ID 이후 이벤트 즉시 복원
+            # 재연결 시 Last-Event-ID 이후 이벤트 즉시 복원
             if last_event_id:
                 replay = alert_bus.get_events_since(last_event_id, max_items=50)
                 for evt in replay:
@@ -480,7 +498,7 @@ async def alerts_stats():
 
 
 # ────────────────────────────────────────────────────────────────────
-# [Wave 11] PostgreSQL 커넥션 풀 실시간 상태 (min/max/in_use/idle).
+# PostgreSQL 커넥션 풀 실시간 상태 (min/max/in_use/idle).
 # ────────────────────────────────────────────────────────────────────
 @app.get("/api/v1/system/pg_pool")
 async def pg_pool_stats():
@@ -521,7 +539,7 @@ async def get_stats(_=Depends(verify_api_key)):
 async def query_llm(request: QueryRequest, _=Depends(verify_api_key)):
     from agri_ai_core.src.ai.query_handler_simple import query_llm_simple
     from agri_ai_core.src.ai.llm_client import clean_llm_response
-    # [2026-04-28] LLM 대화 단계 로그 — AI/ALGO 와 동일 포맷
+    # LLM 대화 단계 로그 — AI/ALGO 와 동일 포맷
     from agri_ai_core.src.control.ai_step_logger import AiStepLogger
 
     start = time.time()
@@ -575,7 +593,7 @@ async def query_llm(request: QueryRequest, _=Depends(verify_api_key)):
             sources = result_data.get("sources") or None
             tools_used = result_data.get("tools_used") or None
             response_type = result_data.get("response_type")
-            tool_calls_detail = result_data.get("tool_calls_detail") or None  # [E1]
+            tool_calls_detail = result_data.get("tool_calls_detail") or None
         else:
             response_text = clean_llm_response(str(result_data or ""))
             sources = None
@@ -625,7 +643,7 @@ async def query_llm(request: QueryRequest, _=Depends(verify_api_key)):
             sources=sources,
             tools_used=tools_used,
             response_type=response_type,
-            tool_calls_detail=tool_calls_detail,  # [E1] 도구 호출 감사 로그
+            tool_calls_detail=tool_calls_detail,  # 도구 호출 감사 로그
         )
     except Exception as e:
         logger.error(f"API 질의 오류: {e}")
@@ -822,6 +840,192 @@ async def rag_save(request: RagSaveRequest, _=Depends(verify_api_key)):
         )
 
 
+# ══════════════════════════════════════════════════════════════════
+# 주식 자동매매 API — 수치는 PostgreSQL trading_*, 판단·분석·학습은 전용 VectorDB
+#   (농장관리와 분리). 프론트 '주식자동매매' 화면이 사용.
+# ══════════════════════════════════════════════════════════════════
+@app.get("/api/v1/trading/candidates")
+async def trading_candidates(scan_date: str = None, status: str = None, _=Depends(verify_api_key)):
+    from agri_ai_core.src.ai import trading_store as ts
+    return {"success": True, "candidates": ts.list_candidates(scan_date, status)}
+
+
+@app.get("/api/v1/trading/performance")
+async def trading_performance(days: int = 30, _=Depends(verify_api_key)):
+    from agri_ai_core.src.ai import trading_store as ts
+    return {"success": True, "performance": ts.list_performance(days)}
+
+
+@app.get("/api/v1/trading/prompt")
+async def trading_get_prompt(_=Depends(verify_api_key)):
+    from agri_ai_core.src.ai import trading_store as ts
+    return {"success": True, "prompt": ts.get_user_prompt()}
+
+
+@app.post("/api/v1/trading/prompt")
+async def trading_set_prompt(request: Request, _=Depends(verify_api_key)):
+    from agri_ai_core.src.ai import trading_store as ts
+    body = await request.json()
+    return ts.set_user_prompt(body.get("prompt", ""))
+
+
+@app.get("/api/v1/trading/userdata")
+async def trading_get_userdata(_=Depends(verify_api_key)):
+    from agri_ai_core.src.ai import trading_store as ts
+    return {"success": True, "userdata": ts.get_user_data()}
+
+
+@app.post("/api/v1/trading/userdata")
+async def trading_set_userdata(request: Request, _=Depends(verify_api_key)):
+    from agri_ai_core.src.ai import trading_store as ts
+    body = await request.json()
+    return ts.set_user_data(body.get("data", {}))
+
+
+@app.get("/api/v1/trading/analysis")
+async def trading_analysis(query: str = "매매 판단 분석", category: str = None, _=Depends(verify_api_key)):
+    from agri_ai_core.src.ai import trading_store as ts
+    items = ts.list_trading_knowledge(category=category, limit=50) if category else ts.recall_trading_knowledge(query)
+    return {"success": True, "analysis": items}
+
+
+@app.get("/api/v1/trading/learning")
+async def trading_learning(_=Depends(verify_api_key)):
+    from agri_ai_core.src.ai import trading_store as ts
+    return {"success": True, "learning": ts.list_learning()}
+
+
+@app.get("/api/v1/trading/portfolio")
+async def trading_portfolio(scan_date: str = None, status: str = None, _=Depends(verify_api_key)):
+    # 선정 후보의 섹터·이벤트유형 집중도(리스크 관점). status 미지정 시 전체.
+    from agri_ai_core.src.ai import trading_store as ts
+    cands = ts.list_candidates(scan_date, status)
+    return {"success": True, "concentration": ts.portfolio_concentration(cands),
+            "count": len(cands)}
+
+
+@app.get("/api/v1/trading/factor-weights")
+async def trading_get_factor_weights(_=Depends(verify_api_key)):
+    from agri_ai_core.src.ai import trading_store as ts
+    return {"success": True, "weights": ts.get_factor_weights(),
+            "labels": ts.FACTOR_LABELS}
+
+
+@app.post("/api/v1/trading/factor-weights")
+async def trading_set_factor_weights(request: Request, _=Depends(verify_api_key)):
+    from agri_ai_core.src.ai import trading_store as ts
+    body = await request.json()
+    return ts.set_factor_weights(body.get("weights", {}))
+
+
+@app.post("/api/v1/trading/learn")
+async def trading_learn(request: Request, _=Depends(verify_api_key)):
+    from agri_ai_core.src.ai import trading_store as ts
+    body = await request.json()
+    return ts.save_daily_learning(body.get("summary", ""))
+
+
+@app.post("/api/v1/trading/run")
+async def trading_run(request: Request, _=Depends(verify_api_key)):
+    # 로컬 AI Agent(ReAct)로 마감스캔→종목선정→후보저장 실행. 사용자 프롬프트를 지시에 결합.
+    import asyncio
+    from agri_ai_core.src.ai import trading_store as ts
+    from agri_ai_core.src.control.ai_monitor_agent import run_agent
+    user_prompt = ts.get_user_prompt()
+    learning_ctx = ts.build_learning_context(query="매매 종목 선정 이벤트 판단")   # 자가개선: 과거 학습 주입
+    control_ctx = ts.build_control_context()   # Phase2 관리자 컨트롤(전략·제외·리스크) 주입
+    trend_ctx = ts.build_trend_context()   # Phase3 최신 매매 방법론 주입(전통 TA 배제)
+    task = ("장 마감 후 국내주식 자동매매 스캔이다. 오늘 공시(주요사항보고 등) 이벤트를 scan_stock_events 로 "
+            "스캔해 호재 종목 중심으로 내일 매매 후보 3~7종목을 선정하고, 각 종목 매수가·목표가·손절가·"
+            "기대수익률·확신도를 산정해 save_trade_candidate 로 저장한 뒤 request_trade_approval 로 승인요청하라. "
+            "⛔실제 주문 금지."
+            + (f"\n[사용자 전략 프롬프트] {user_prompt}" if user_prompt else "")
+            + (f"\n{learning_ctx}" if learning_ctx else "")
+            + (f"\n{control_ctx}" if control_ctx else "")
+            + (f"\n{trend_ctx}" if trend_ctx else ""))
+    try:
+        res = await asyncio.to_thread(run_agent, task=task, farm_id=1, trigger_type="user", persist_db=False)
+        candidates = ts.list_candidates()
+        # 자가개선: 실행 결과를 학습 데이터로 자동 저장 → 다음 실행이 회상해 개선
+        await asyncio.to_thread(ts.auto_learn_from_run, candidates, res.get("final"))
+        return {"success": bool(res.get("success")), "final": res.get("final") or res.get("reason"),
+                "steps": len(res.get("steps", [])), "candidates": candidates,
+                "learning_injected": bool(learning_ctx)}
+    except Exception as e:
+        api_logger.error("[trading/run] %s", e)
+        return {"success": False, "message": str(e)}
+
+
+@app.post("/api/v1/trading/learn-performance")
+async def trading_learn_performance(_=Depends(verify_api_key)):
+    # 자가개선: 매매 실적을 집계해 인사이트 학습(다음 선정 개선)
+    from agri_ai_core.src.ai import trading_store as ts
+    return ts.learn_from_performance()
+
+
+# ── Phase 2: 다양한 관리자 컨트롤 (전략·제외·승인 — AI 주입) ──
+@app.get("/api/v1/trading/strategies")
+async def trading_strategies(_=Depends(verify_api_key)):
+    from agri_ai_core.src.ai import trading_store as ts
+    return {"success": True, "strategies": ts.list_strategies(), "active": ts.get_active_strategy()}
+
+
+@app.post("/api/v1/trading/strategies")
+async def trading_save_strategy(request: Request, _=Depends(verify_api_key)):
+    from agri_ai_core.src.ai import trading_store as ts
+    b = await request.json()
+    return ts.save_strategy(b.get("name", ""), b.get("prompt_text", b.get("prompt", "")))
+
+
+@app.post("/api/v1/trading/strategy/activate")
+async def trading_activate_strategy(request: Request, _=Depends(verify_api_key)):
+    from agri_ai_core.src.ai import trading_store as ts
+    b = await request.json()
+    return ts.activate_strategy(b.get("name", ""))
+
+
+@app.post("/api/v1/trading/candidate/status")
+async def trading_candidate_status(request: Request, _=Depends(verify_api_key)):
+    from agri_ai_core.src.ai import trading_store as ts
+    b = await request.json()
+    return ts.set_candidate_status(b.get("scan_date"), b.get("stock_code", ""), b.get("status", "proposed"))
+
+
+@app.get("/api/v1/trading/exclusions")
+async def trading_get_exclusions(_=Depends(verify_api_key)):
+    from agri_ai_core.src.ai import trading_store as ts
+    return {"success": True, "exclusions": ts.get_exclusions()}
+
+
+@app.post("/api/v1/trading/exclusions")
+async def trading_set_exclusions(request: Request, _=Depends(verify_api_key)):
+    from agri_ai_core.src.ai import trading_store as ts
+    b = await request.json()
+    return ts.set_exclusions(b.get("exclusions", []))
+
+
+@app.get("/api/v1/trading/control-context")
+async def trading_control_context(_=Depends(verify_api_key)):
+    from agri_ai_core.src.ai import trading_store as ts
+    return {"success": True, "context": ts.build_control_context()}
+
+# ── Phase 3: 최신 매매 방법론(트렌드) — RAG 회상, 전통 TA 배제 ──
+@app.get("/api/v1/trading/trends")
+async def trading_trends(_=Depends(verify_api_key)):
+    from agri_ai_core.src.ai import trading_store as ts
+    return {"success": True, "methodology": ts.list_trading_knowledge(category="방법론", limit=50),
+            "trend_context": ts.build_trend_context()}
+
+
+@app.post("/api/v1/trading/seed-trends")
+async def trading_seed_trends(request: Request, _=Depends(verify_api_key)):
+    from agri_ai_core.src.ai.trading_trend_seed import seed_trading_trends
+    try:
+        b = await request.json()
+    except Exception:
+        b = {}
+    return seed_trading_trends(force=bool(b.get("force")))
+
 # ══════════════════
 # 대화 이력 조회 API
 # ══════════════════
@@ -851,6 +1055,41 @@ async def get_conversation_history(session_id: str, limit: int = 10, _=Depends(v
 # Ollama 설치 모델 목록 + 현재 선택된 모델 반환 (관리자 전용).
 # 임베딩 모델(bge/nomic/embed) 은 응답에서 제외.
 # ────────────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════
+# 카카오 '나에게 보내기' 알림 연동
+# 관리자 1회 인증(auth-url 클릭 → 동의 → callback) 후 Agent/비상 알림 실시간 푸시.
+# ════════════════════════════════════════════════════════════════════
+@app.get("/api/v1/admin/kakao/auth-url")
+async def kakao_auth_url(_=Depends(verify_api_key)):
+    from agri_ai_core.src.ai.kakao_notify import build_auth_url
+    return build_auth_url()
+
+
+@app.get("/api/v1/admin/kakao/callback")
+async def kakao_callback(code: str = None, error: str = None):
+    from fastapi.responses import HTMLResponse
+    from agri_ai_core.src.ai.kakao_notify import exchange_code
+    if error or not code:
+        return HTMLResponse(f"<h3>카카오 인증 실패: {error or 'code 없음'}</h3>", status_code=400)
+    r = exchange_code(code)
+    if r.get("success"):
+        return HTMLResponse("<h3>✅ 카카오 '나에게 보내기' 연동 완료 — 이 창을 닫으셔도 됩니다.</h3>")
+    return HTMLResponse(f"<h3>연동 실패: {r.get('error')}</h3>", status_code=500)
+
+
+@app.get("/api/v1/admin/kakao/status")
+async def kakao_status(_=Depends(verify_api_key)):
+    from agri_ai_core.src.ai.kakao_notify import get_status
+    return get_status()
+
+
+@app.post("/api/v1/admin/kakao/test")
+async def kakao_test(_=Depends(verify_api_key)):
+    from agri_ai_core.src.ai.kakao_notify import send_to_me
+    from datetime import datetime as _dt
+    return send_to_me(f"🌱 자연들에 농장 알림 테스트 — {_dt.now().strftime('%m/%d %H:%M:%S')} 연동 정상")
+
+
 @app.get("/api/v1/admin/models")
 async def get_available_models(_=Depends(verify_api_key)):
     import httpx
@@ -1215,7 +1454,7 @@ async def force_change_sudo_password(request: Request, _=Depends(verify_api_key)
 
 
 # ════════════════════════════════════════════════════════════
-# [프롬프트 자동화 · Phase 4] 관리 API — prompt_block / tool_definition 편집
+# [프롬프트 자동화] 관리 API — prompt_block / tool_definition 편집
 # ════════════════════════════════════════════════════════════
 
 # ────────────────────────────────────────────────────────────────────
@@ -1677,7 +1916,7 @@ async def toggle_tool_active(tool_id: str, request: Request, _=Depends(verify_ap
 
 
 # ────────────────────────────────────────────────────────────────────
-# [프롬프트 자동화 · Phase 5] 룰 후보 조회 — 최근 N일 ai_decision_log
+# [프롬프트 자동화] 룰 후보 조회 — 최근 N일 ai_decision_log
 # 정상 결정(action='change') 빈번 패턴을 사용자 학습 가능한 룰 텍스트로
 # 합성하여 반환. 농장주가 검토 후 승인 API 로 ChromaDB 등록.
 # query: farm_id (필수), house_id, days(=7), min_freq(=10), top_k(=20)
@@ -1709,7 +1948,7 @@ async def list_rule_candidates(
 
 
 # ────────────────────────────────────────────────────────────────────
-# [프롬프트 자동화 · Phase 5] 룰 후보 승인 — ChromaDB domain_rule 등록.
+# [프롬프트 자동화] 룰 후보 승인 — ChromaDB domain_rule 등록.
 # body: { title, content, category(선택), rule_id(선택),
 #         farm_id(선택), house_id(선택) }
 # 등록 후 prompt_registry 캐시 무효화 → 다음 LLM 호출부터 즉시 반영.
@@ -1741,6 +1980,271 @@ async def approve_rule_candidate(request: Request, _=Depends(verify_api_key)):
         raise
     except Exception as e:
         raise HTTPException(500, f"룰 승인 처리 실패: {e}")
+
+
+# ════════════════════════════════════════════════════════════
+# LLM 제어 프롬프트 관리 API — control_prompt_m CRUD
+# ════════════════════════════════════════════════════════════
+
+# ────────────────────────────────────────────────────────────────────
+# control_prompt_m 전체 행 조회 (관리자 편집 화면용).
+# category / growth_stage 쿼리 파라미터로 필터 가능.
+# ────────────────────────────────────────────────────────────────────
+@app.get("/api/v1/admin/control-prompts")
+async def list_control_prompts(
+    category: Optional[str] = None,
+    growth_stage: Optional[str] = None,
+    _=Depends(verify_api_key),
+):
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+        conn = db._getconn()
+        if conn is None:
+            raise HTTPException(500, "DB 연결 실패")
+        try:
+            conditions = []
+            vals = []
+            if category:
+                conditions.append("category = %s")
+                vals.append(category)
+            if growth_stage:
+                conditions.append("growth_stage = %s")
+                vals.append(growth_stage)
+            where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""SELECT block_id, section_key, growth_stage, sort_order,
+                               category, name, body_text, placeholders,
+                               active_yn, description, updt_dttm
+                        FROM control_prompt_m {where}
+                        ORDER BY category, sort_order, block_id""",
+                    vals,
+                )
+                rows = cur.fetchall()
+                return {
+                    "success": True,
+                    "prompts": [
+                        {
+                            "block_id": r[0], "section_key": r[1],
+                            "growth_stage": r[2], "sort_order": r[3],
+                            "category": r[4], "name": r[5],
+                            "body_text": r[6], "placeholders": r[7],
+                            "active_yn": r[8], "description": r[9],
+                            "updt_dttm": r[10].isoformat() if r[10] else None,
+                        }
+                        for r in rows
+                    ],
+                }
+        finally:
+            try: db._putconn(conn)
+            except Exception: pass
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"조회 실패: {e}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# control_prompt_m 단건 조회.
+# ────────────────────────────────────────────────────────────────────
+@app.get("/api/v1/admin/control-prompts/{block_id}")
+async def get_control_prompt(block_id: str, _=Depends(verify_api_key)):
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+        conn = db._getconn()
+        if conn is None:
+            raise HTTPException(500, "DB 연결 실패")
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT block_id, section_key, growth_stage, sort_order,
+                              category, name, body_text, placeholders,
+                              active_yn, description, updt_dttm
+                       FROM control_prompt_m WHERE block_id=%s""",
+                    (block_id,),
+                )
+                r = cur.fetchone()
+        finally:
+            try: db._putconn(conn)
+            except Exception: pass
+        if not r:
+            raise HTTPException(404, f"block_id='{block_id}' 미존재")
+        return {
+            "success": True,
+            "prompt": {
+                "block_id": r[0], "section_key": r[1],
+                "growth_stage": r[2], "sort_order": r[3],
+                "category": r[4], "name": r[5],
+                "body_text": r[6], "placeholders": r[7],
+                "active_yn": r[8], "description": r[9],
+                "updt_dttm": r[10].isoformat() if r[10] else None,
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"조회 실패: {e}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# control_prompt_m 단건 갱신 — 부분 필드 업데이트.
+# 갱신 후 prompt_registry _CTRL_BLOCK_CACHE 즉시 무효화.
+# ────────────────────────────────────────────────────────────────────
+@app.put("/api/v1/admin/control-prompts/{block_id}")
+async def update_control_prompt(block_id: str, request: Request, _=Depends(verify_api_key)):
+    import json as _json
+    body = await request.json()
+
+    updatable = {
+        "body_text":    body.get("body_text"),
+        "name":         body.get("name"),
+        "section_key":  body.get("section_key"),
+        "growth_stage": body.get("growth_stage"),
+        "sort_order":   body.get("sort_order"),
+        "category":     body.get("category"),
+        "placeholders": body.get("placeholders"),
+        "description":  body.get("description"),
+        "active_yn":    body.get("active_yn"),
+    }
+    fields = {k: v for k, v in updatable.items() if v is not None}
+    if not fields:
+        raise HTTPException(400, "갱신할 필드가 하나도 없습니다.")
+    if "active_yn" in fields and fields["active_yn"] not in ("Y", "N"):
+        raise HTTPException(400, "active_yn 은 'Y' 또는 'N' 이어야 합니다.")
+    if "placeholders" in fields and not isinstance(fields["placeholders"], str):
+        fields["placeholders"] = _json.dumps(fields["placeholders"], ensure_ascii=False)
+
+    set_clause = ", ".join(f"{k}=%s" for k in fields) + ", updt_dttm=NOW()"
+    values = list(fields.values()) + [block_id]
+
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+        conn = db._getconn()
+        if conn is None:
+            raise HTTPException(500, "DB 연결 실패")
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE control_prompt_m SET {set_clause} WHERE block_id=%s",
+                    values,
+                )
+                affected = cur.rowcount
+            conn.commit()
+        finally:
+            try: db._putconn(conn)
+            except Exception: pass
+        if affected == 0:
+            raise HTTPException(404, f"block_id='{block_id}' 미존재")
+        try:
+            from agri_ai_core.src.prompt_registry import clear_cache
+            clear_cache()
+        except Exception:
+            pass
+        api_logger.info(f"[admin/control-prompts] 갱신: {block_id} 필드={list(fields.keys())}")
+        return {"success": True, "block_id": block_id, "updated_fields": list(fields.keys())}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"갱신 실패: {e}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# control_prompt_m 신규 등록.
+# body: { block_id, section_key, category, name, body_text,
+#         growth_stage?, sort_order?, placeholders?, description?, active_yn? }
+# ────────────────────────────────────────────────────────────────────
+@app.post("/api/v1/admin/control-prompts")
+async def create_control_prompt(request: Request, _=Depends(verify_api_key)):
+    import json as _json
+    body = await request.json()
+    block_id    = (body.get("block_id") or "").strip()
+    section_key = (body.get("section_key") or "").strip()
+    category    = (body.get("category") or "").strip()
+    name        = (body.get("name") or "").strip()
+    body_text   = body.get("body_text") or ""
+    growth_stage  = body.get("growth_stage")
+    sort_order    = int(body.get("sort_order", 0))
+    placeholders  = body.get("placeholders")
+    description   = body.get("description") or ""
+    active_yn     = body.get("active_yn", "Y")
+
+    for field, val in [("block_id", block_id), ("section_key", section_key),
+                       ("category", category), ("name", name)]:
+        if not val:
+            raise HTTPException(400, f"{field} 는 필수입니다.")
+    if active_yn not in ("Y", "N"):
+        raise HTTPException(400, "active_yn 은 'Y' 또는 'N' 이어야 합니다.")
+    placeholders_json = (
+        placeholders if isinstance(placeholders, str)
+        else _json.dumps(placeholders or {}, ensure_ascii=False)
+    )
+
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+        conn = db._getconn()
+        if conn is None:
+            raise HTTPException(500, "DB 연결 실패")
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM control_prompt_m WHERE block_id=%s", (block_id,))
+                if cur.fetchone():
+                    raise HTTPException(409, f"block_id='{block_id}' 이미 존재합니다.")
+                cur.execute(
+                    """INSERT INTO control_prompt_m
+                       (block_id, section_key, growth_stage, sort_order,
+                        category, name, body_text, placeholders, description, active_yn)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)""",
+                    (block_id, section_key, growth_stage, sort_order,
+                     category, name, body_text, placeholders_json, description, active_yn),
+                )
+            conn.commit()
+        finally:
+            try: db._putconn(conn)
+            except Exception: pass
+        try:
+            from agri_ai_core.src.prompt_registry import clear_cache
+            clear_cache()
+        except Exception:
+            pass
+        api_logger.info(f"[admin/control-prompts] 신규: {block_id}")
+        return {"success": True, "block_id": block_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"등록 실패: {e}")
+
+
+# ────────────────────────────────────────────────────────────────────
+# control_prompt_m 단건 삭제.
+# ────────────────────────────────────────────────────────────────────
+@app.delete("/api/v1/admin/control-prompts/{block_id}")
+async def delete_control_prompt(block_id: str, _=Depends(verify_api_key)):
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+        conn = db._getconn()
+        if conn is None:
+            raise HTTPException(500, "DB 연결 실패")
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM control_prompt_m WHERE block_id=%s", (block_id,))
+                affected = cur.rowcount
+            conn.commit()
+        finally:
+            try: db._putconn(conn)
+            except Exception: pass
+        if affected == 0:
+            raise HTTPException(404, f"block_id='{block_id}' 미존재")
+        try:
+            from agri_ai_core.src.prompt_registry import clear_cache
+            clear_cache()
+        except Exception:
+            pass
+        api_logger.info(f"[admin/control-prompts] 삭제: {block_id}")
+        return {"success": True, "block_id": block_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"삭제 실패: {e}")
 
 
 # ════════════════════════════════════════════════════════════

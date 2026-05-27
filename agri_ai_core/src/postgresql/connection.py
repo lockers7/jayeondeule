@@ -1,16 +1,20 @@
 # ════════════════════════════════════════════════════════════════════
-# PostgreSQL 연결 관리 — 커넥션 풀 싱글톤, MCP/direct 듀얼 경로,
-# 세션 컨텍스트 매니저. 환경변수 USE_MCP_POSTGRES 로 MCP 우선 사용 토글.
+# PostgreSQL 연결 관리 — 커넥션 풀 싱글톤 + 세션 컨텍스트 매니저.
+#
+# MCP postgres 듀얼 경로는 2026-07-16 제거됐다. 사유(실측):
+#   - MCP postgres 는 read-only 트랜잭션 전용이라 INSERT/UPDATE 가 원천 불가
+#     ("cannot execute UPDATE in a read-only transaction") — 쓰기는 100% 실패 후
+#     direct 로 폴백했다. 즉 얻는 것 없이 왕복만 낭비.
+#   - 호출마다 npx 프로세스를 새로 띄워 쿼리당 10.67s (direct psycopg2 0.012s, 875배).
+#     릴레이 유지 쓰기가 5초 주기이므로 켜는 순간 제어 루프가 붕괴한다.
+#   - LLM 의 DB 관리는 MCP 가 아니라 전용 도구(db_read_query/db_write_query/
+#     db_list_tables/db_describe_table)가 담당하며 그쪽이 기능·속도 모두 우월하다.
+#   따라서 "켜면 시스템이 무너지는 스위치"를 남기지 않기 위해 경로째 제거한다.
 # --->
-# set_mcp_query_fn       : 상위 계층의 MCP postgres 실행기 주입 (의존성 역전)
-# DatabaseHandler        : 싱글톤 DB 핸들러 (MCP/direct 듀얼 경로)
+# DatabaseHandler        : 싱글톤 DB 핸들러 (direct psycopg2)
 #   __new__              : 싱글톤 인스턴스 보장
-#   __init__             : 1회 한정 초기화 (호스트/포트/풀/MCP 옵션)
+#   __init__             : 1회 한정 초기화 (호스트/포트/풀)
 #   _safe_positive_int   : 환경변수 양의 정수 파싱 (실패 시 default)
-#   _to_sql_literal      : 파라미터 값을 SQL 리터럴로 변환 (MCP 경로용)
-#   _bind_sql            : %s 자리표시자 → SQL 리터럴 치환
-#   _execute_mcp_query   : MCP 실행기로 쿼리 실행 + 복구 감지
-#   _log_mcp_fallback    : MCP 실패 시 direct fallback 로그 (1회 경고)
 #   _ensure_pool         : ThreadedConnectionPool 지연 초기화
 #   get_pool_stats       : 현재 풀 사용 상태 스냅샷 (관측성)
 #   _getconn / _putconn  : 풀에서 커넥션 획득/반환
@@ -43,22 +47,6 @@ from agri_ai_core.src.utils.validators import is_true
 
 logger = setup_logger(__name__)
 
-# MCP postgres 실행기(옵션). 상위 계층(startup.py 등)에서 주입한다.
-# None이면 USE_MCP_POSTGRES=true여도 MCP 경로가 비활성화되고 direct DB만 사용.
-# 시그니처: (sql: str, timeout: int) -> dict({"success": bool, "rows": list, "error": str})
-_mcp_query_fn = None
-
-
-# ────────────────────────────────────────────────────────────────────
-# 상위 계층이 MCP postgres 실행기를 주입 (의존성 역전).
-# 이 훅이 없으면 MCP 경로는 비활성 — postgresql 패키지가 AI 계층을 역참조
-# 하지 않도록 함.
-# ────────────────────────────────────────────────────────────────────
-def set_mcp_query_fn(fn) -> None:
-    global _mcp_query_fn
-    _mcp_query_fn = fn
-
-
 class DatabaseHandler:
 
     _instance = None
@@ -76,7 +64,7 @@ class DatabaseHandler:
         return cls._instance
 
     # ────────────────────────────────────────────────────────────────
-    # 1회 한정 초기화 — 호스트/포트/풀/MCP 옵션 로드.
+    # 1회 한정 초기화 — 호스트/포트/풀 로드.
     # ────────────────────────────────────────────────────────────────
     def __init__(self):
         if self._initialized:
@@ -93,13 +81,6 @@ class DatabaseHandler:
         self._initialized = True
         self.logger = setup_logger(__name__)
 
-        # MCP postgres는 명시적으로 켠 경우에만 사용한다.
-        self.use_mcp_postgres = is_true(os.getenv("USE_MCP_POSTGRES", "false"))
-        self.mcp_timeout_seconds = self._safe_positive_int(
-            os.getenv("MCP_POSTGRES_TIMEOUT_SECONDS", "8"),
-            default=8,
-        )
-        self._mcp_fallback_logged = False
 
     # ────────────────────────────────────────────────────────────────
     # 환경변수 양의 정수 파싱 — 0 이하/비정수면 default.
@@ -112,77 +93,6 @@ class DatabaseHandler:
         except Exception:
             return default
 
-    _PLACEHOLDER_PATTERN = re.compile(r"%[sd]")
-
-    # ────────────────────────────────────────────────────────────────
-    # 파라미터 값을 SQL 리터럴 문자열로 변환 (MCP 경로 prepared 미지원 대응).
-    # ────────────────────────────────────────────────────────────────
-    @staticmethod
-    def _to_sql_literal(value: Any) -> str:
-        if value is None:
-            return "NULL"
-        if isinstance(value, bool):
-            return "TRUE" if value else "FALSE"
-        if isinstance(value, (int, float)):
-            return str(value)
-        if isinstance(value, (datetime, date)):
-            return f"'{value.strftime('%Y-%m-%d %H:%M:%S')}'"
-        text = str(value).replace("'", "''")
-        return f"'{text}'"
-
-    # ────────────────────────────────────────────────────────────────
-    # %s/%d 자리표시자를 _to_sql_literal 결과로 치환한 SQL 문자열 생성.
-    # ────────────────────────────────────────────────────────────────
-    def _bind_sql(self, query: str, vals: Optional[Tuple[Any, ...]] = None) -> str:
-        if not vals:
-            return query
-
-        values = list(vals)
-        idx = 0
-
-        # ────────────────────────────────────────────────────────────
-        # 정규식 매치 1건 → 다음 vals 항목의 SQL 리터럴로 치환.
-        # ────────────────────────────────────────────────────────────
-        def _replace(_: re.Match) -> str:
-            nonlocal idx
-            if idx >= len(values):
-                return _.group(0)
-            literal = self._to_sql_literal(values[idx])
-            idx += 1
-            return literal
-
-        return self._PLACEHOLDER_PATTERN.sub(_replace, query)
-
-    # ────────────────────────────────────────────────────────────────
-    # MCP 실행기로 쿼리 전송. 성공 시 rows 반환, 실패 시 RuntimeError.
-    # 복구 감지 시 fallback 플래그 해제 + 복구 로그.
-    # ────────────────────────────────────────────────────────────────
-    def _execute_mcp_query(self, query: str, vals: Optional[Tuple[Any, ...]] = None) -> list:
-        if _mcp_query_fn is None:
-            raise RuntimeError("MCP postgres 실행기가 주입되지 않음 (set_mcp_query_fn 미호출)")
-        sql = self._bind_sql(query, vals)
-        result = _mcp_query_fn(sql, timeout=self.mcp_timeout_seconds)
-        if not result.get("success"):
-            raise RuntimeError(str(result.get("error") or "MCP postgres query failed"))
-
-        if self._mcp_fallback_logged:
-            self.logger.info("MCP postgres 복구 감지 - direct DB fallback 해제")
-            self._mcp_fallback_logged = False
-
-        rows = result.get("rows", [])
-        if isinstance(rows, list):
-            return rows
-        return []
-
-    # ────────────────────────────────────────────────────────────────
-    # MCP 실패 시 direct DB fallback 로그 — 첫 실패는 warning, 이후 debug.
-    # ────────────────────────────────────────────────────────────────
-    def _log_mcp_fallback(self, err: Exception) -> None:
-        if not self._mcp_fallback_logged:
-            self.logger.warning(f"MCP postgres 실행 실패 -> direct DB fallback: {err}")
-            self._mcp_fallback_logged = True
-        else:
-            self.logger.debug(f"MCP postgres 실패 지속 -> direct DB fallback 유지: {err}")
 
     # ────────────────────────────────────────────────────────────────
     # ThreadedConnectionPool 지연 초기화 (스레드 안전, double-checked).
@@ -200,7 +110,6 @@ class DatabaseHandler:
             if self._pool is not None:
                 return True
             try:
-                # [Wave 11] min/max 커넥션 수를 환경변수로 노출 — 운영 환경 튜닝
                 minconn = self._safe_positive_int(os.getenv("PGDB_POOL_MIN"), default=1)
                 maxconn = self._safe_positive_int(os.getenv("PGDB_POOL_MAX"), default=5)
                 if minconn > maxconn:
@@ -223,7 +132,7 @@ class DatabaseHandler:
                 return False
 
     # ────────────────────────────────────────────────────────────────
-    # [Wave 11] 현재 풀 사용 상태 스냅샷 (관측성).
+    # 현재 풀 사용 상태 스냅샷 (관측성).
     # ThreadedConnectionPool 내부 자료구조를 best-effort 로 추출 — 공식
     # API 가 없어 _used / _pool 속성을 직접 읽음. 실패해도 기본 metadata 반환.
     # ────────────────────────────────────────────────────────────────
@@ -278,11 +187,9 @@ class DatabaseHandler:
                     pass
 
     # ────────────────────────────────────────────────────────────────
-    # 풀 초기화 트리거. MCP 우선 모드에서는 소켓 연결 선행하지 않음.
+    # 풀 초기화 트리거.
     # ────────────────────────────────────────────────────────────────
     def connect(self):
-        if self.use_mcp_postgres:
-            return True
         return self._ensure_pool()
 
     # ────────────────────────────────────────────────────────────────
@@ -340,60 +247,28 @@ class DatabaseHandler:
             self._putconn(conn)
 
     # ────────────────────────────────────────────────────────────────
-    # INSERT/UPDATE/DELETE 등 commit 쿼리 실행. MCP 우선 → direct fallback.
+    # INSERT/UPDATE/DELETE 등 commit 쿼리 실행.
     # ────────────────────────────────────────────────────────────────
     def execute_query(self, query, vals=None):
         self.logger.debug(f"[SQL-EXECUTE] 실행할 쿼리: \n{query} \n파라미터: \n{vals}\n")
-
-        if self.use_mcp_postgres:
-            try:
-                self._execute_mcp_query(query, vals)
-                return True
-            except Exception as mcp_err:
-                self._log_mcp_fallback(mcp_err)
 
         return self._run_direct("execute_query", query, vals, False, commit=True)
 
     # ────────────────────────────────────────────────────────────────
     # SELECT 전체 행 조회. as_dict=True 면 RealDictCursor 로 dict list 반환.
-    # MCP 우선 → direct fallback.
+    # direct psycopg2 실행.
     # ────────────────────────────────────────────────────────────────
     def fetch_all(self, query: str, vals: Optional[Tuple[Any, ...]] = None, as_dict: bool = False):
         self.logger.debug(f"[SQL-FETCH_ALL] 실행할 쿼리: \n{query} \n파라미터: \n{vals}\n")
-
-        if self.use_mcp_postgres:
-            try:
-                rows = self._execute_mcp_query(query, vals)
-                if as_dict:
-                    if rows and not isinstance(rows[0], dict):
-                        return [{"value": row} for row in rows]
-                    return rows
-                if rows and isinstance(rows[0], dict):
-                    return [tuple(row.values()) for row in rows]
-                return rows
-            except Exception as mcp_err:
-                self._log_mcp_fallback(mcp_err)
 
         return self._run_direct("fetch_all", query, vals, [],
                                 cursor_factory=RealDictCursor if as_dict else None, fetch_mode="all")
 
     # ────────────────────────────────────────────────────────────────
-    # SELECT 단일 행 조회 (RealDictCursor). MCP 우선 → direct fallback.
+    # SELECT 단일 행 조회 (RealDictCursor). direct psycopg2 실행.
     # ────────────────────────────────────────────────────────────────
     def fetch_one(self, query, vals=None):
         self.logger.debug(f"[SQL-FETCH_ONE] 실행할 쿼리: \n{query} \n파라미터: \n{vals}\n")
-
-        if self.use_mcp_postgres:
-            try:
-                rows = self._execute_mcp_query(query, vals)
-                if not rows:
-                    return None
-                first_row = rows[0]
-                if isinstance(first_row, dict):
-                    return first_row
-                return {"value": first_row}
-            except Exception as mcp_err:
-                self._log_mcp_fallback(mcp_err)
 
         return self._run_direct("fetch_one", query, vals, None,
                                 cursor_factory=RealDictCursor, fetch_mode="one")

@@ -1,11 +1,12 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # 데이터 조회/삭제 도구 — VectorDB 검색, 농장 실시간 데이터 조회, 학습 데이터 삭제.
-# tools_executor.py에서 분리된 L5 계층 모듈.
+# L5 계층 모듈 (tools_executor.py 와 동급).
 # --->
 # _build_chroma_where_conditions: 검색 대상 farm_id/house_id 조합을 where 조건 리스트로 변환
 # delete_farm_knowledge: 학습 데이터 삭제 (파일명/전체, 권한별)
 # search_farm_knowledge: ChromaDB VectorDB 검색 + Reranker
 # get_farm_realtime_data: 센서/릴레이/임계값/AI판단 실시간 조회
+# get_weather_forecast: 농장 소재지 기상청 단기예보 (farm_m_info kma_nx/ny 격자)
 # ══════════════════════════════════════════════════════════════════════════════
 import os
 import re
@@ -85,7 +86,7 @@ def delete_farm_knowledge(file_name: str, farm_id: str = None, auth_farm_id: str
     t_start = time.time()
     logger.info(f"[학습삭제] 시작 file_name={file_name} farm_id={farm_id} auth_farm_id={auth_farm_id}")
     try:
-        from agri_ai_core.src.chroma.collections import document_collection, farm_knowledge_collection
+        from agri_ai_core.src.chroma.collections import document_collection, farm_knowledge_collection, web_knowledge_collection
         from agri_ai_core.src.chroma.operations import get_documents, delete_document
 
         if not file_name:
@@ -107,7 +108,7 @@ def delete_farm_knowledge(file_name: str, farm_id: str = None, auth_farm_id: str
             if not _file_names:
                 return {"success": False, "error": "file_name이 필요합니다."}
 
-        collections = [document_collection(), farm_knowledge_collection()]
+        collections = [document_collection(), farm_knowledge_collection(), web_knowledge_collection()]
         total_deleted = 0
         deleted_files = []
         failed_files = []
@@ -289,7 +290,7 @@ def search_farm_knowledge(
                     "where": where,
                     "max_distance": _parse_positive_float(os.getenv("SOURCE_VECTOR_MAX_DISTANCE", "24.0"), 24.0),
                 })
-            # [FIX] farm_id/house_id 필터가 있을 때 필터 없는 폴백도 추가
+            # farm_id/house_id 필터가 있을 때 필터 없는 폴백도 추가
             if source_where_candidates and source_where_candidates != [None]:
                 collection_plans.append({
                     "label": "farm_knowledge",
@@ -588,24 +589,26 @@ def get_farm_realtime_data(house_id: str = None, farm_id: str = None, data_type:
                 "house_id": house_id
             }
 
-        # 시스템 농장(farm_id=0)은 센서/릴레이 없음 → 첫 번째 실제 농장으로 자동 대체
+        # 시스템 농장(farm_id=0)은 센서/릴레이 없음 → GET_ONE_FARM으로 첫 번째 실제 농장 대체
         if target_farm_id == "0":
             try:
-                from agri_ai_core.src.postgresql.queries import GET_LIST_FARM
+                from agri_ai_core.src.postgresql.queries import GET_ONE_FARM
                 with db_session() as database:
-                    farms = database.fetch_all(GET_LIST_FARM)
-                    real_farm = next((f for f in (farms or []) if str(f.get("farm_id", "0")) != "0"), None)
-                    if real_farm:
-                        target_farm_id = str(real_farm["farm_id"])
-                        logger.info(f"[PostgreSQL조회] farm_id=0 → 실제 농장 자동 대체: farm_id={target_farm_id}")
-                    else:
-                        return {
-                            "success": False,
-                            "error": "시스템 농장(farm_id=0)은 센서 데이터가 없고, 등록된 실제 농장도 없어요.",
-                            "house_id": house_id, "farm_id": "0"
-                        }
+                    real_farm = database.fetch_one(GET_ONE_FARM)
+                if real_farm and real_farm.get("farm_id") is not None:
+                    target_farm_id = str(real_farm["farm_id"])
+                    # 명시적 유효 재배사 ID(숫자)는 유지 — None/"0"/"all" 만 초기화
+                    if not house_id or house_id in ("0", "all"):
+                        house_id = None
+                    logger.info(f"[PostgreSQL조회] farm_id=0(시스템농장) → 실제 농장 자동 대체: farm_id={target_farm_id}, house_id={house_id or '(자동조회)'}")
+                else:
+                    return {
+                        "success": False,
+                        "error": "시스템 농장(farm_id=0)은 센서 데이터가 없고, 등록된 실제 농장도 없어요.",
+                        "house_id": house_id, "farm_id": "0"
+                    }
             except Exception as e:
-                logger.warning(f"[PostgreSQL조회] 실제 농장 조회 실패: {e}")
+                logger.warning(f"[PostgreSQL조회] 시스템 농장 → 실제 농장 대체 실패: {e}")
                 return {
                     "success": False,
                     "error": "시스템 농장(farm_id=0)은 센서 데이터가 없어요. 실제 농장을 선택해 주세요.",
@@ -657,7 +660,7 @@ def get_farm_realtime_data(house_id: str = None, farm_id: str = None, data_type:
             relay_keys = list((relay or {}).keys())[:8]
             logger.info(f"[PostgreSQL조회] 릴레이데이터 ({relay_elapsed:.1f}s) keys={relay_keys}")
 
-            # 릴레이 시멘틱 매핑 정보 추가 (LLM이 각 릴레이의 실제 기능을 알 수 있도록)
+            # 릴레이 시멘틱 매핑 — LLM 혼동 방지 위해 "현재 적용 상태" 라벨 명시
             if relay:
                 from agri_ai_core.src.control.control_common import reverse_pin_map, SEMANTIC_LABELS
                 rev_map = reverse_pin_map(target_house_id)
@@ -673,26 +676,98 @@ def get_farm_realtime_data(house_id: str = None, farm_id: str = None, data_type:
                                 "name": label,
                             }
                 result["relay_mapping"] = relay_mapping
+                result["relay_mapping_meta"] = {
+                    "label": "현재 실제 적용된 릴레이 상태 (read-only snapshot)",
+                    "source": "sensor_l_relay 최신 row",
+                }
 
-        # 환경 제어 임계값 + AI 판단 포함
+        # 환경 제어 임계값 + AI 판단 포함 — 재배사별 DB(SENSOR_M_SETTING) 실시간 값
         if data_type in ["sensor", "all"]:
-            from agri_ai_core.src.control.control_common import (
-                TEMP_LOW, TEMP_HIGH, TEMP_CRITICAL_LOW, TEMP_CRITICAL_HIGH,
-                HUMIDITY_LOW, HUMIDITY_HIGH, HUMIDITY_CRITICAL_LOW, HUMIDITY_CRITICAL_HIGH,
-                CO2_LOW, CO2_HIGH, CO2_CRITICAL_HIGH,
-                WATER_TEMP_LOW, WATER_TEMP_HIGH, WATER_TEMP_CRITICAL_LOW, WATER_TEMP_CRITICAL_HIGH,
-            )
+            from agri_ai_core.src.control.ai_thresholds import get_thresholds as _get_ts
+            _t = _get_ts(farm_id, house_id)
             result["environment_thresholds"] = {
-                "indoor_temperature": {"low": TEMP_LOW, "high": TEMP_HIGH, "critical_low": TEMP_CRITICAL_LOW, "critical_high": TEMP_CRITICAL_HIGH, "unit": "°C"},
-                "indoor_humidity": {"low": HUMIDITY_LOW, "high": HUMIDITY_HIGH, "critical_low": HUMIDITY_CRITICAL_LOW, "critical_high": HUMIDITY_CRITICAL_HIGH, "unit": "%"},
-                "co2": {"low": CO2_LOW, "high": CO2_HIGH, "critical_high": CO2_CRITICAL_HIGH, "unit": "ppm"},
-                "water_temperature": {"low": WATER_TEMP_LOW, "high": WATER_TEMP_HIGH, "critical_low": WATER_TEMP_CRITICAL_LOW, "critical_high": WATER_TEMP_CRITICAL_HIGH, "unit": "°C"},
+                "indoor_temperature": {"low": _t.temp_low, "high": _t.temp_high, "critical_low": _t.temp_critical_low, "critical_high": _t.temp_critical_high, "unit": "°C"},
+                "indoor_humidity": {"low": _t.humidity_low, "high": _t.humidity_high, "critical_low": _t.humidity_critical_low, "critical_high": _t.humidity_critical_high, "unit": "%"},
+                "co2": {"low": _t.co2_low, "high": _t.co2_high, "critical_high": _t.co2_critical_high, "unit": "ppm"},
+                "water_temperature": {"low": _t.water_temp_low, "high": _t.water_temp_high, "critical_low": _t.water_temp_critical_low, "critical_high": _t.water_temp_critical_high, "unit": "°C"},
             }
+            # 센서 범위상태 — 값 vs 임계 대조의 "객관적 사실"을 실어 LLM 산술 오판 방지.
+            #   relay_mapping 과 동형(데이터 보강). 판단·조치는 여전히 LLM 자율.
+            #   ⛔ 제어 결정 아님 — 상태 라벨(정상/상한초과/하한미달/위험)만 기술.
             try:
-                from agri_ai_core.src.control.manual_control import get_ai_environment_judgment
-                ai_judgment = get_ai_environment_judgment(target_farm_id, target_house_id)
-                if ai_judgment:
-                    result["ai_environment_judgment"] = ai_judgment
+                _sensor = result.get("sensor") or {}
+                _ts = result["environment_thresholds"]
+                _pairs = [("indoor_temperature", "실내온도"), ("indoor_humidity", "실내습도"),
+                          ("co2", "CO2"), ("water_temperature", "수온")]
+                _status = {}
+                _out = []
+                for _key, _ko in _pairs:
+                    _v = _sensor.get(_key)
+                    _thr = _ts.get(_key) or {}
+                    if _v is None:
+                        continue
+                    try:
+                        _fv = float(_v)
+                    except (TypeError, ValueError):
+                        continue
+                    _lo, _hi = _thr.get("low"), _thr.get("high")
+                    _clo, _chi = _thr.get("critical_low"), _thr.get("critical_high")
+                    _unit = _thr.get("unit", "")
+                    if _chi is not None and _fv >= float(_chi):
+                        _label = "위험-상한초과"
+                    elif _clo is not None and _fv <= float(_clo):
+                        _label = "위험-하한미달"
+                    elif _hi is not None and _fv > float(_hi):
+                        _label = "상한초과"
+                    elif _lo is not None and _fv < float(_lo):
+                        _label = "하한미달"
+                    else:
+                        _label = "정상범위"
+                    _rng = (f"{_thr.get('low')}~{_thr.get('high')}{_unit}"
+                            if _lo is not None or _hi is not None else "-")
+                    _status[_key] = {"name": _ko, "value": _fv, "unit": _unit,
+                                     "range": _rng, "status": _label}
+                    if _label != "정상범위":
+                        _out.append(f"{_ko} {_fv}{_unit}({_label}, 적정 {_rng})")
+                if _status:
+                    result["sensor_range_status"] = _status
+                    result["sensor_range_meta"] = {
+                        "label": "센서값 vs 적정임계 객관 대조 (정상범위 밖이면 status 로 명시)",
+                        "out_of_range": _out or ["모든 항목 정상범위"],
+                    }
+            except Exception as _e:
+                logger.info(f"[PostgreSQL조회] 센서 범위상태 계산 실패(무해): {_e}")
+
+            # AI/알고리즘 모드 분리 — AI 모드 호기에 알고리즘 64케이스 결과가
+            # 권장으로 노출되면 농장주 채팅 답변이 현재상태(relay_mapping) 와 모순되므로
+            # AI 모드 호기에는 algorithm_judgment 차단, 알고리즘 모드는 라벨 명시 후 유지.
+            try:
+                ctrl_type = "algorithm"
+                with db_session() as database:
+                    row = database.fetch_one(
+                        query="SELECT ctrl_type FROM farmhouse_m_info "
+                              "WHERE farm_id=%s AND hous_id=%s",
+                        vals=(target_farm_id, target_house_id),
+                    )
+                    if row and row.get("ctrl_type"):
+                        ctrl_type = str(row.get("ctrl_type"))
+                result["control_mode"] = ctrl_type
+
+                if ctrl_type != "ai":
+                    from agri_ai_core.src.control.manual_control import get_ai_environment_judgment
+                    ai_judgment = get_ai_environment_judgment(target_farm_id, target_house_id)
+                    if ai_judgment:
+                        # 기존 키 (llm_response.py 후방호환) + 명료한 신규 키 둘 다 채움
+                        result["ai_environment_judgment"] = ai_judgment
+                        result["algorithm_proposed_next_cycle"] = ai_judgment
+                        result["algorithm_proposed_meta"] = {
+                            "label": "알고리즘 모드 64케이스 제안값 (아직 미적용)",
+                            "warning": "현재 적용 상태는 relay_mapping 을 참조. 이 값과 혼동 금지.",
+                        }
+                else:
+                    result["algorithm_proposed_skipped"] = (
+                        "AI 모드 호기 — 알고리즘 제안값 노출 차단 (현재 상태는 relay_mapping 참조)"
+                    )
             except Exception as e:
                 logger.info(f"[PostgreSQL조회] AI 환경 판단 조회 실패: {e}")
 
@@ -722,13 +797,132 @@ def get_farm_realtime_data(house_id: str = None, farm_id: str = None, data_type:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# [Phase 1-3] get_system_status — LLM이 자신의 시스템을 파악할 수 있는 종합 조회
+# get_system_status — LLM이 자신의 시스템을 파악할 수 있는 종합 조회
 # ══════════════════════════════════════════════════════════════════════════════
+# ────────────────────────────────────────────────────────────────────
+# 재배사의 실제 최신 센서 수신 시각 — sensor_l_recording 실데이터.
+# farmhouse_m_info.last_get_dttm 은 갱신되지 않는 죽은 컬럼이라 쓰지 않는다.
+# ────────────────────────────────────────────────────────────────────
+def _last_sensor_time(db, farm_id, house_id):
+    try:
+        row = db.fetch_one(
+            query=("SELECT max(recd_dttm) t FROM sensor_l_recording "
+                   "WHERE farm_id=%s AND hous_id=%s"),
+            vals=(farm_id, house_id))
+        t = (row or {}).get("t")
+        return t.isoformat() if t else None
+    except Exception:
+        return None
+
+
+# ────────────────────────────────────────────────────────────────────
+# 현재 카메라 프레임을 촬영·판독해 반환 (LLM 채팅용).
+#   capture_image(4소스 자동) → analyze_heuristics(색상/곰팡이 휴리스틱)
+#   → analyze_vision_llm(gemma3 멀티모달 판독) 을 get_camera_context 가 일괄 수행.
+#   ⛔ 제어 모듈(ai_camera_vision)은 지연 import — 채팅 경로에 결합하지 않는다.
+#   촬영 실패(원격 보드 미응답) 시 환각 없이 정직하게 실패 사유를 반환한다.
+# ────────────────────────────────────────────────────────────────────
+def get_camera_view(farm_id: str = None, house_id: str = None) -> Dict[str, Any]:
+    from agri_ai_core.src.ai.tools_utils import normalize_id as _normalize_id
+    from agri_ai_core.src.ai.tools_auth import require_non_zero_house
+
+    tf = _normalize_id(farm_id) or "1"
+    th = _normalize_id(house_id)
+    zero_err = require_non_zero_house(th)   # None/0/'all' 거부 — 카메라는 특정 재배사 필요
+    if zero_err:
+        return zero_err
+    try:
+        from agri_ai_core.src.control.ai_camera_vision import (
+            get_camera_context, format_camera_block,
+        )
+        ctx = get_camera_context(int(tf), int(th))
+        if not ctx:
+            return {"success": False, "farm_id": tf, "house_id": th, "captured": False,
+                    "message": "카메라 촬영 실패 — 카메라(원격 보드) 미응답. "
+                               "5199 원격 보드가 셋업 검증 중이면 정상적으로 내려가 "
+                               "있을 수 있습니다. 보드 상태를 확인해 주세요."}
+        # 웹 접근 가능한 스냅샷 URL — nginx /camera/{farm}/{house}/ 프록시(→ RPi 스트리머).
+        # 채팅창에 실제 영상 표시용(answer_generator 가 답변에 확정 첨부).
+        image_url = f"/camera/{tf}/{th}/snapshot"
+        return {"success": True, "farm_id": tf, "house_id": th, "captured": True,
+                "image_url": image_url,
+                "heuristics": ctx.get("heuristics"),
+                "vision": ctx.get("vision_text") or "(비전 모델 미설정 — 휴리스틱만)",
+                "summary": format_camera_block(ctx)}
+    except Exception as e:
+        logger.error(f"[get_camera_view] 오류 farm={tf} house={th}: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# 현재 릴레이의 semantic ON/OFF 라벨 리스트 — LLM 이 raw SQL 없이 릴레이 상태를
+# 모드와 함께 한 번에 받도록 get_system_status 각 재배사에 포함(릴레이 SQL 오작성 방지).
+def _house_relay_state(farm_id, house_id):
+    try:
+        from agri_ai_core.src.postgresql.reader import read_latest_relay_info
+        from agri_ai_core.src.control.control_common import reverse_pin_map, SEMANTIC_LABELS
+        relay = read_latest_relay_info(farm_id, house_id) or {}
+        rev = reverse_pin_map(house_id)
+        on, off = [], []
+        for pin_key, value in relay.items():
+            if not (pin_key.startswith("relay_") and pin_key.endswith("_flag")):
+                continue
+            sem = rev.get(pin_key)
+            if not sem:
+                continue
+            (on if bool(value) else off).append(SEMANTIC_LABELS.get(sem, sem))
+        return on, off
+    except Exception as e:
+        logger.warning(f"[get_system_status] 릴레이 상태 조회 실패 farm={farm_id} house={house_id}: {e}")
+        return [], []
+
+
+# 최근 AI 제어 결정(사유 포함) — LLM 이 ai_decision_log 를 raw SQL(잘못된 컬럼 device_name 등)
+# 로 조회하다 실패하는 것을 방지. get_system_status 각 재배사에 최신 1건을 실어 준다.
+def _house_last_decision(farm_id, house_id):
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+        rows = db.fetch_all(
+            query=("SELECT to_char(decided_at,'MM-DD HH24:MI') t, action, circulation, reason "
+                   "FROM ai_decision_log WHERE farm_id=%s AND house_id=%s "
+                   "ORDER BY decided_at DESC LIMIT 1"),
+            vals=(int(farm_id), int(house_id)), as_dict=True) or []
+        if rows:
+            d = rows[0]
+            return {"time": d.get("t"), "action": d.get("action"),
+                    "circulation": d.get("circulation"), "reason": (d.get("reason") or "")[:250]}
+    except Exception as e:
+        logger.warning(f"[get_system_status] 최근결정 조회 실패 farm={farm_id} house={house_id}: {e}")
+    return None
+
+
 def get_system_status(farm_id: str = None) -> Dict[str, Any]:
     from agri_ai_core.src.postgresql.connection import db_session
     from agri_ai_core.src.ai.tools_utils import normalize_id as _normalize_id
+    from agri_ai_core.src.postgresql.reader import read_current_sensor_info
 
     target_farm = _normalize_id(farm_id) or "1"
+
+    # 세션 범위 룰: 시스템 농장(farm_id=0) 세션은 "전체 실농장" 대상이다.
+    # 농장 0 자체(개발용 재배사)는 농장주 응답에 노출하지 않는다.
+    if target_farm == "0":
+        try:
+            with db_session() as db:
+                frows = db.fetch_all(
+                    query="SELECT farm_id FROM farm_m_info WHERE farm_id > 0 ORDER BY farm_id",
+                    as_dict=True,
+                ) or []
+            farms_out = []
+            for fr in frows:
+                sub = get_system_status(str(fr["farm_id"]))
+                sub.pop("scheduler", None)   # 전역 항목은 농장별 반복 제외
+                farms_out.append(sub)
+            return {"success": True, "scope": "all_farms",
+                    "note": "시스템 세션 — 등록된 전체 농장의 요약",
+                    "farms": farms_out}
+        except Exception as e:
+            logger.error(f"[get_system_status] 전체 농장 순회 오류: {e}")
+            return {"success": False, "error": str(e)}
+
     result: Dict[str, Any] = {"success": True, "farm_id": target_farm}
 
     try:
@@ -761,46 +955,78 @@ def get_system_status(farm_id: str = None) -> Dict[str, Any]:
             houses = []
             for r in rows:
                 lvel = int(r.get("crop_lvel") or 0)
+                # 유효 운용방식 — 화면(운용방식)과 동일 3값. ⛔ 판정 규칙 주의:
+                # mnul_ctrl_flag=False 가 "수동(사용자 직접입력)" (필드명과 반대 의미,
+                # manual_control 판정과 동일). True 일 때만 ctrl_type 이 유효.
+                if not r.get("mnul_ctrl_flag"):
+                    _op_mode = "수동(사용자 직접입력)"
+                elif (r.get("ctrl_type") or "algorithm") == "ai":
+                    _op_mode = "AI"
+                else:
+                    _op_mode = "알고리즘"
+                _r_on, _r_off = _house_relay_state(target_farm, r["hous_id"])
+                # 센서 현재값 — get_farm_realtime_data 와 동일 소스(정합성).
+                #   ⛔ get_system_status 에 센서값이 없어 '센서+릴레이+사유' 질문이
+                #   센서 N/A 로 나오던 회귀 해결(2026-07-26). 재배사 종합 상태를 1도구로.
+                try:
+                    _sensor = read_current_sensor_info(target_farm, r["hous_id"]) or {}
+                except Exception:
+                    _sensor = {}
                 houses.append({
                     "house_id": str(r["hous_id"]),
                     "name": r.get("hous_name"),
+                    "operation_mode": _op_mode,
+                    "sensor": _sensor,
+                    "relay_on": _r_on,
+                    "relay_off": _r_off,
+                    "last_decision": _house_last_decision(target_farm, r["hous_id"]),
                     "ctrl_type": r.get("ctrl_type") or "algorithm",
                     "mnul_ctrl_flag": bool(r.get("mnul_ctrl_flag")),
                     "growth_stage": _STAGE_NAME.get(lvel, "미설정") if lvel else "미설정",
                     "growth_stage_code": lvel,
                     "crop_kind": r.get("crop_kind"),
                     "sensor_refresh_sec": r.get("snsr_rfrs_itvl"),
-                    "last_sensor_time": r["last_get_dttm"].isoformat() if r.get("last_get_dttm") else None,
+                    # ⛔ last_get_dttm 은 갱신 코드가 0건이라 2025-12-02 에 멈춘
+                    #   죽은 컬럼이다(2026-07-17 실측). 이 값을 주면 LLM 이
+                    #   "센서가 7개월째 안 들어온다"고 오보한다 → 실데이터 사용.
+                    "last_sensor_time": _last_sensor_time(db, target_farm, r["hous_id"]),
                 })
             result["houses"] = houses
 
-        # AI 순환 루프 상태 (manual_control._ai_loop_running 플래그 조회)
+        # ⛔ AI 순환 루프·스케줄러 가동 여부는 프로세스 경계를 넘어야 한다
+        #   (2026-07-17 실측 사고). 과거엔 manual_control._ai_loop_running 과
+        #   task_scheduler._scheduler 를 getattr 로 읽었는데, 이는 **스케줄러
+        #   프로세스의 메모리 변수**다. 이 도구는 FastAPI 프로세스에서 실행되므로
+        #   그 변수를 볼 수 없어 항상 running=false / jobs=[] 를 반환했고,
+        #   LLM 이 "AI 제어 루프가 실행 중이지 않다"고 농장주에게 거짓 보고했다.
+        #   → 프로세스 존재 여부(tools_service._health)로 실측한다.
         try:
+            from agri_ai_core.src.ai.tools_service import _health
             from agri_ai_core.src.control import manual_control as mc
-            ai_loop_running = bool(getattr(mc, "_ai_loop_running", False))
-            ai_delay = int(getattr(mc, "_AI_LOOP_DELAY_SEC", 10))
-            ai_houses = [h for h in houses if h["ctrl_type"] == "ai"]
+            running = _health(("proc", "agri_ai_core.scheduler"))
+            ai_houses = [h for h in houses if h["operation_mode"] == "AI"]
             result["ai_control_loop"] = {
-                "running": ai_loop_running,
-                "delay_sec_between_houses": ai_delay,
+                "running": running,
+                "delay_sec_between_houses": int(getattr(mc, "_AI_LOOP_DELAY_SEC", 10)),
                 "target_houses": [h["house_id"] for h in ai_houses],
-                "note": "ctrl_type='ai' 재배사만 순환 대상. 각 재배사 간 delay_sec_between_houses 초 대기.",
+                "note": ("ctrl_type='ai' 재배사만 순환 대상. running 은 스케줄러 "
+                         "프로세스 가동 여부(실측). 실제 제어 반영 여부는 "
+                         "last_sensor_time / ai_decision_log 로 확인."),
             }
         except Exception as _e:
             result["ai_control_loop"] = {"error": str(_e)}
 
-        # APScheduler 등록 Job 조회
+        # 스케줄러 — 위와 동일 사유로 프로세스 실측. Job 목록은 다른 프로세스의
+        # APScheduler 인스턴스라 조회 불가하므로 넘기지 않는다(빈 배열을 주면
+        # LLM 이 "등록된 작업이 없다"고 오보한다).
         try:
-            from agri_ai_core.src.control.task_scheduler import _scheduler as _sch
-            jobs = []
-            if _sch is not None:
-                for j in _sch.get_jobs():
-                    jobs.append({
-                        "id": j.id,
-                        "next_run": j.next_run_time.isoformat() if j.next_run_time else None,
-                        "trigger": str(j.trigger),
-                    })
-            result["scheduler"] = {"running": _sch.running if _sch else False, "jobs": jobs}
+            from agri_ai_core.src.ai.tools_service import _health
+            result["scheduler"] = {
+                "running": _health(("proc", "agri_ai_core.scheduler")),
+                "note": ("스케줄러 프로세스 가동 여부(실측). 등록 Job 목록은 별도 "
+                         "프로세스라 여기서 조회 불가 — 실제 동작 확인은 "
+                         "search_logs 또는 list_services 사용."),
+            }
         except Exception as _e:
             result["scheduler"] = {"error": str(_e)}
 
@@ -808,4 +1034,46 @@ def get_system_status(farm_id: str = None) -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f"[get_system_status] 오류: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# get_weather_forecast — 농장 소재지 기상청 단기예보
+#   farm_m_info 의 주소·KMA 격자(kma_nx/ny)로 내부 KMA 예보를 1초 내 반환.
+#   농장 추가시 코드 변경 없음.
+#   ai_weather_forecast 는 외부 API 수집 전용 인프라성 모듈(제어 로직 없음)이라
+#   제어/대화 모드 분리 룰의 예외(인프라성 import 허용)에 해당.
+# ═══════════════════════════════════════════════════════════════════════════════
+def get_weather_forecast(farm_id: str = None, house_id: str = None) -> Dict[str, Any]:
+    try:
+        from agri_ai_core.src.control.ai_weather_forecast import get_forecast, format_forecast_block
+        from agri_ai_core.src.postgresql.connection import db_session
+        from agri_ai_core.src.postgresql.queries import GET_ONE_FARM
+
+        fid = str(farm_id or "1").strip()
+        if fid == "0":
+            # 시스템 농장(0) → 첫 실제 농장 대체 (타 도구와 동일 규칙)
+            with db_session() as database:
+                real = database.fetch_one(GET_ONE_FARM)
+            if real and real.get("farm_id") is not None:
+                fid = str(real["farm_id"])
+
+        hid = str(house_id or "0").strip()
+        if not hid.isdigit():
+            hid = "0"
+
+        payload = get_forecast(int(fid), int(hid))
+        block = format_forecast_block(payload)
+        if not block or "온도" not in block:
+            return {"success": False,
+                    "error": "기상청 예보 조회 실패 — 잠시 후 재시도하거나 search_web 으로 대체하세요."}
+
+        with db_session() as database:
+            row = database.fetch_one(
+                "SELECT farm_name, addr FROM farm_m_info WHERE farm_id = %s", (fid,))
+        head = (f"[{row['farm_name']} 소재지 기상청 예보 — {row['addr']}]"
+                if row else f"[farm {fid} 기상청 예보]")
+        return {"success": True, "message": f"{head}\n{block}"}
+    except Exception as e:
+        logger.error(f"[날씨예보 도구] 조회 실패: {e}")
         return {"success": False, "error": str(e)}

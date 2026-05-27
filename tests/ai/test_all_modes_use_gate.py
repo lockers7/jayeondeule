@@ -76,7 +76,7 @@ def test_manual_path_blocks_unsafe_fan_on(monkeypatch, db_mock):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 2) AI/algo (raw_mode=True) — rev6 AND spec: 한쪽 dead end 면 순환밸브 OFF 차단
+# 2) AI/algo (raw_mode=True) — AND spec: 한쪽 dead end 면 순환밸브 OFF 차단
 # ══════════════════════════════════════════════════════════════════════════
 def test_raw_mode_path_blocks_circulation_off_when_one_side_dead_end(monkeypatch, db_mock):
     # 흡입측 풀가동 + 배출팬 ON + 배출밸브 OFF → 순환밸브 OFF 차단되어야
@@ -90,7 +90,7 @@ def test_raw_mode_path_blocks_circulation_off_when_one_side_dead_end(monkeypatch
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 3) AI 모드 — Rule 3 (rev5): 흡입밸브 OFF 시 순환밸브 ON + 배출팬 ON 둘 다 필요
+# 3) AI 모드 — Rule 3: 흡입밸브 OFF 시 순환밸브 ON + 배출팬 ON 둘 다 필요
 # ══════════════════════════════════════════════════════════════════════════
 def test_raw_mode_intake_valve_off_allowed_via_circ_and_exhaust_fan(monkeypatch, db_mock):
     current = _build(1, air_intake_valve_flag=True, intake_fan_flag=True,
@@ -104,7 +104,7 @@ def test_raw_mode_intake_valve_off_allowed_via_circ_and_exhaust_fan(monkeypatch,
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 4) 알고리즘 모드 — 외부순환 → 흡입순환 전이 시 게이트 통과 (Phase 1 새 로직)
+# 4) 알고리즘 모드 — 외부순환 → 흡입순환 전이 시 게이트 통과 (전이 Phase 1)
 #    current = 외부순환 (모든 valve ON 제외 circ, 모든 fan ON)
 #    Phase 1 target = (current AND new) — exhaust_fan 은 새 모드에서 OFF 라 Phase 1 에서 OFF
 #    → exhaust_valve OFF 가 같은 쓰기에서 통과

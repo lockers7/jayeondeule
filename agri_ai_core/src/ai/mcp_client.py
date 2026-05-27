@@ -12,6 +12,9 @@
 # _load_mcp_servers: load mcp servers
 # _jsonrpc: jsonrpc
 # _find_response: find response
+# _read_response: stdin 유지 read-loop 로 target id 응답 수신
+# _terminate: MCP 서버 프로세스 그룹 회수 (⛔ 누수 방지 — 모든 경로에서 필수 호출)
+# list_mcp_server_tools: MCP 서버 tools/list 조회 (게이트웨이용)
 # _extract_text_blocks: extract text blocks
 # _format_search_result: 검색 결과 항목을 표준 dict 형태로 생성
 # _check_error_with_dns_diag: 에러 텍스트에 DNS 관련 키워드가 있으면 DNS 진단을 1회 실행
@@ -25,14 +28,12 @@
 # mcp_fetch_json: mcp fetch json
 # mcp_http_request: mcp http request
 # _parse_markdown_table: parse markdown table
-# _pick_postgres_tool_name: pick postgres tool name
-# _call_postgres_tool: call postgres tool
-# postgres_query: postgres query
 # search_web: search web
 # get_current_weather: get current weather
 # ══════════════════════════════════════════════════════════════════════════════════════
 import json
 import os
+import signal
 import subprocess
 import time
 from datetime import datetime
@@ -49,7 +50,16 @@ logger = setup_logger(__name__)
 
 DEFAULT_PROTOCOL_VERSION = "2024-11-05"
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+# MCP 서버 종료 대기(초). stdin EOF 후 이 시간 내 미종료 시 프로세스 그룹 SIGKILL.
+_TERMINATE_GRACE_SEC = int(os.getenv("MCP_TERMINATE_GRACE_SEC", "3"))
 MCP_CONFIG_PATH = PROJECT_ROOT / ".vscode" / "mcp.json"
+
+# MCP 서버/도구명 — .vscode/mcp.json 의 등록명과 반드시 일치해야 한다.
+# env 로 덮을 수 있게 하여 설정 교체 시 코드 수정 불필요.
+_WEB_SEARCH_SERVER = (os.getenv("MCP_WEB_SEARCH_SERVER") or "searxng").strip()
+_WEB_SEARCH_TOOL = (os.getenv("MCP_WEB_SEARCH_TOOL") or "searxng_web_search").strip()
+# URL 본문 수집 — 설정상 web_url_read 를 가진 searxng 서버가 유일한 실동작 경로.
+_FETCH_SERVER = (os.getenv("MCP_FETCH_SERVER") or "searxng").strip()
 _MCP_SERVER_RUNTIME_UNAVAILABLE: Dict[str, Tuple[float, str]] = {}
 MCP_RUNTIME_DISABLE_SECONDS = max(1, int(os.getenv("MCP_RUNTIME_DISABLE_SECONDS", "60")))
 _SERVER_UNAVAILABLE_KEYWORDS = (
@@ -166,6 +176,10 @@ def _log_dns_diagnostics_once(min_interval_sec: int = 30) -> None:
 
 # ════════════════════════════════════════════
 # `.vscode/mcp.json`에서 MCP 서버 설정을 로드.
+# 최상위 키는 두 포맷이 공존한다 — VSCode 는 "servers", Claude Desktop/표준
+# 클라이언트는 "mcpServers". 우리 파일은 VSCode 소유라 "servers" 이므로 둘 다
+# 수용한다. (한쪽만 보면 파일은 읽히는데 서버가 0개가 되어 모든 MCP 호출이
+# "server not found" 로 조용히 폴백된다 — 2026-07-16 실측 확인.)
 # ════════════════════════════════════════════
 def _load_mcp_servers() -> Dict[str, Dict[str, Any]]:
     try:
@@ -173,8 +187,11 @@ def _load_mcp_servers() -> Dict[str, Dict[str, Any]]:
             logger.error(f"MCP 설정 파일이 없습니다: {MCP_CONFIG_PATH}")
             return {}
         raw = json.loads(MCP_CONFIG_PATH.read_text(encoding="utf-8"))
-        servers = raw.get("mcpServers", {})
+        servers = raw.get("mcpServers")
+        if not isinstance(servers, dict) or not servers:
+            servers = raw.get("servers")
         if not isinstance(servers, dict):
+            logger.error(f"MCP 설정에 servers/mcpServers 키가 없습니다: {MCP_CONFIG_PATH}")
             return {}
         return servers
     except Exception as e:
@@ -182,13 +199,14 @@ def _load_mcp_servers() -> Dict[str, Dict[str, Any]]:
         return {}
 
 
-# 순수 유틸 함수들은 mcp_utils.py로 분리됨 (하위 호환 alias 유지)
+# 순수 유틸 함수들은 mcp_utils.py 에 정의 (하위 호환 alias 유지)
 from agri_ai_core.src.ai.mcp_utils import (
     build_jsonrpc as _jsonrpc,
     find_response_line as _find_response,
     extract_text_blocks as _extract_text_blocks,
     format_search_result as _format_search_result,
     parse_markdown_table as _parse_markdown_table,
+    parse_searxng_results as _parse_searxng_results,
 )
 
 
@@ -208,6 +226,130 @@ def _try_parse_json(text: str) -> Optional[Any]:
     if not stripped:
         return None
     return safe_json_load(stripped)
+
+
+# ────────────────────────────────────────────────────────────────────
+# stdin 을 연 채로 stdout 을 줄 단위로 읽어 target_id 응답을 찾는다.
+# 서버가 초기화 로그·notification 을 먼저 흘려도 건너뛰고, 응답을 받으면
+# 즉시 반환한다(불필요한 대기 없음). 반환: (응답 dict|None, 읽은 stdout)
+# ────────────────────────────────────────────────────────────────────
+def _read_response(process, target_id: int, timeout: int, t_start: float):
+    buf = []
+    while True:
+        remain = timeout - (time.time() - t_start)
+        if remain <= 0:
+            raise subprocess.TimeoutExpired(cmd="mcp", timeout=timeout)
+        line = process.stdout.readline()
+        if not line:
+            break
+        buf.append(line)
+        try:
+            msg = json.loads(line.strip())
+        except Exception:
+            continue
+        if isinstance(msg, dict) and msg.get("id") == target_id:
+            return msg, "".join(buf)
+    return None, "".join(buf)
+
+
+# ────────────────────────────────────────────────────────────────────
+# mcp.json 의 서버별 env 블록을 os.environ 에 병합해 Popen 에 넘긴다.
+#   과거엔 env=os.environ.copy() 만 써서 mcp.json 의 env 가 무시됐고,
+#   searxng/naver 는 .env 에 같은 키가 우연히 있어야만 동작했다(2026-07-18 정비).
+#   ${VAR} VSCode 치환 문법도 os.environ 기준으로 확장한다.
+# ────────────────────────────────────────────────────────────────────
+def _server_env(server: Dict[str, Any]) -> Dict[str, str]:
+    env = os.environ.copy()
+    block = server.get("env") if isinstance(server, dict) else None
+    if isinstance(block, dict):
+        for k, v in block.items():
+            if v is None:
+                continue
+            env[str(k)] = os.path.expandvars(str(v))   # ${NAVER_CLIENT_ID} 등 확장
+    return env
+
+
+# ────────────────────────────────────────────────────────────────────
+# MCP 서버 프로세스 회수. ⛔ Popen 한 모든 경로(성공 포함)에서 반드시 호출.
+# npx 는 sh → npm exec → node 로 손자를 낳으므로 process.kill() 은
+# 직계(npx)만 죽이고 node 는 고아로 영생한다(2026-07-17 5,201개 누수 → OOM 실증).
+# stdin 을 닫아 EOF 로 자발 종료를 유도하고, 안 죽으면 프로세스 그룹째 SIGKILL.
+# ────────────────────────────────────────────────────────────────────
+def _terminate(process) -> None:
+    if process is None:
+        return
+    try:
+        if process.stdin and not process.stdin.closed:
+            process.stdin.close()
+    except Exception:
+        pass
+    try:
+        process.wait(timeout=_TERMINATE_GRACE_SEC)
+    except Exception:
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+    for stream in (process.stdout, process.stderr):
+        try:
+            if stream and not stream.closed:
+                stream.close()
+        except Exception:
+            pass
+    try:
+        process.wait(timeout=_TERMINATE_GRACE_SEC)
+    except Exception:
+        pass
+
+
+# ────────────────────────────────────────────────────────────────────
+# MCP 서버의 tools/list 조회 — 게이트웨이(LLM 도구 발견)용.
+# call_mcp_server_tool 과 통신 방식은 같고 method 만 다르다.
+# 반환: {"tools": [...]} 또는 {"error": "..."}
+# ────────────────────────────────────────────────────────────────────
+def list_mcp_server_tools(server_name: str, timeout: int = 45) -> Dict[str, Any]:
+    servers = _load_mcp_servers()
+    server = servers.get(server_name)
+    if not server:
+        return {"error": f"MCP server not found: {server_name}"}
+    command = server.get("command")
+    if not command:
+        return {"error": f"MCP server command missing: {server_name}"}
+
+    t_start = time.time()
+    process = None
+    try:
+        process = subprocess.Popen(
+            [command, *[str(a) for a in server.get("args", [])]],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, bufsize=1, cwd=str(PROJECT_ROOT), env=_server_env(server),
+            start_new_session=True,
+        )
+        init = _jsonrpc(1, "initialize", {
+            "protocolVersion": DEFAULT_PROTOCOL_VERSION, "capabilities": {},
+            "clientInfo": {"name": "agri-ai-core", "version": "1.0.0"}})
+        process.stdin.write(json.dumps(init, ensure_ascii=False) + "\n")
+        process.stdin.write(json.dumps(
+            {"jsonrpc": "2.0", "method": "notifications/initialized"}, ensure_ascii=False) + "\n")
+        process.stdin.write(json.dumps(
+            _jsonrpc(2, "tools/list", {}), ensure_ascii=False) + "\n")
+        process.stdin.flush()
+
+        response, _ = _read_response(process, 2, timeout, t_start)
+        if not response:
+            return {"error": f"tools/list 응답 없음: {server_name}"}
+        if "error" in response:
+            return {"error": _error_to_text(response["error"])}
+        return {"tools": response.get("result", {}).get("tools", [])}
+    except subprocess.TimeoutExpired:
+        return {"error": f"MCP timeout: {server_name}.tools/list ({timeout}s)"}
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        _terminate(process)
 
 
 def call_mcp_server_tool(
@@ -257,7 +399,8 @@ def call_mcp_server_tool(
             stderr=subprocess.PIPE,
             text=True,
             cwd=str(PROJECT_ROOT),
-            env=os.environ.copy(),
+            env=_server_env(server),
+            start_new_session=True,
         )
 
         if process.stdin is None:
@@ -278,17 +421,20 @@ def call_mcp_server_tool(
             {"name": tool_name, "arguments": arguments or {}},
         )
 
+        # stdin 을 열어둔 채 id=2 응답이 올 때까지 읽는다.
+        # communicate() 는 입력을 쓰고 stdin 을 즉시 닫는데, 일부 MCP 서버는
+        # EOF 를 받으면 큐에 남은 tools/call 을 처리하지 않고 종료한다
+        # (naver-search 실측: initialize 만 응답 → "Failed to parse" 오진).
+        # MCP 표준의 notifications/initialized 도 함께 보낸다.
         process.stdin.write(json.dumps(init_request, ensure_ascii=False) + "\n")
+        process.stdin.write(json.dumps(
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            ensure_ascii=False) + "\n")
         process.stdin.write(json.dumps(call_request, ensure_ascii=False) + "\n")
         process.stdin.flush()
 
-        stdout, stderr = process.communicate(timeout=timeout)
+        response, stdout = _read_response(process, 2, timeout, t_start)
 
-        if stderr:
-            # web-search는 "running on stdio"를 stderr로 출력하므로 debug 레벨로 처리
-            logger.debug(f"[MCP:{server_name}] stderr: {stderr.strip()}")
-
-        response = _find_response(stdout, 2)
         if not response:
             error_msg = "Failed to parse MCP tools/call response"
             if _should_mark_unavailable(error_msg):
@@ -309,11 +455,6 @@ def call_mcp_server_tool(
         return result_data
 
     except subprocess.TimeoutExpired:
-        if process:
-            try:
-                process.kill()
-            except Exception:
-                pass
         elapsed = time.time() - t_start
         error_msg = f"MCP timeout: {server_name}.{tool_name} ({timeout}s)"
         logger.warning(f"[MCP호출] 타임아웃 ({elapsed:.1f}s): {error_msg}")
@@ -326,10 +467,12 @@ def call_mcp_server_tool(
         if _should_mark_unavailable(error_msg):
             _mark_server_unavailable(server_name, error_msg)
         return {"error": error_msg}
+    finally:
+        _terminate(process)
 
 
-# HTTP/JSON 유틸은 src/utils/http_client.py로 이관됨 (하위 계층에서도 사용 가능)
-# 하위 호환 alias (기존 내부 호출 유지용).
+# HTTP/JSON 유틸은 src/utils/http_client.py 에 정의 (하위 계층에서도 사용 가능).
+# 하위 호환 alias 로 재노출.
 from agri_ai_core.src.utils.http_client import (
     coerce_json_and_text as _coerce_json_and_text,
     http_json_request as _direct_http_json_request,
@@ -395,8 +538,10 @@ def _parse_mcp_fetch_result(result: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _parse_fetch_tool_names() -> List[str]:
-    # fetch 서버 기본 도구 집합. request는 일부 구현체에서 미지원이라 기본에서 제외.
-    default_tools = "fetch"  # http_fetch는 일부 서버 미지원 — 불필요 시도 방지
+    # 설정에 실재하는 도구명이어야 한다. 과거 기본값 "fetch" 는 어느 등록 서버에도
+    # 없는 이름이었다 — @kazuph/mcp-fetch 는 imageFetch 만 제공. 현 설정에서 URL
+    # 본문을 읽을 수 있는 실제 도구는 searxng 의 web_url_read 뿐이다(2026-07-16 실측).
+    default_tools = "web_url_read"
     raw = os.getenv("MCP_FETCH_TOOL_NAMES", default_tools)
     candidates = [name.strip() for name in raw.split(",") if name and name.strip()]
 
@@ -491,7 +636,7 @@ def mcp_fetch_request(
     for tool_name in tool_names:
         tool_unknown = False
         for args in deduped_candidates:
-            result = call_mcp_server_tool("fetch", tool_name, args, timeout=timeout)
+            result = call_mcp_server_tool(_FETCH_SERVER, tool_name, args, timeout=timeout)
             if "error" in result:
                 error_text = _error_to_text(result.get("error"))
                 last_error = error_text
@@ -618,80 +763,6 @@ def mcp_http_request(
     return direct_status, None, direct_text
 
 
-_POSTGRES_TOOL_NAME = os.getenv("MCP_POSTGRES_TOOL_NAME", "query")
-
-
-def _pick_postgres_tool_name() -> str:
-    return _POSTGRES_TOOL_NAME
-
-
-def _call_postgres_tool(sql: str, timeout: int = 30) -> Dict[str, Any]:
-    tool_name = _pick_postgres_tool_name()
-    argument_candidates = [
-        {"sql": sql},
-        {"query": sql},
-    ]
-
-    last_error: Dict[str, Any] = {"error": "Unknown MCP postgres error"}
-    for args in argument_candidates:
-        result = call_mcp_server_tool("postgres", tool_name, args, timeout=timeout)
-        if "error" not in result:
-            return result
-        last_error = result
-        error_text = str(result.get("error", "")).lower()
-        # 서버 미설치/네트워크 단절 상황에서는 즉시 탈출하여 지연을 최소화
-        if any(keyword in error_text for keyword in ("timeout", "eai_again", "not found", "command")):
-            break
-
-    return last_error
-
-
-# ════════════════════════════════════════════════════════
-# MCP postgres 서버를 통해 SQL 실행 후 행 데이터를 정규화.
-# ════════════════════════════════════════════════════════
-def postgres_query(sql: str, timeout: int = 30) -> Dict[str, Any]:
-    if not sql or not isinstance(sql, str):
-        return {"success": False, "error": "SQL is required", "rows": []}
-
-    result = _call_postgres_tool(sql=sql, timeout=timeout)
-    if "error" in result:
-        return {"success": False, "error": result["error"], "rows": []}
-
-    if result.get("isError"):
-        error_text = "\n".join(_extract_text_blocks(result)) or "MCP postgres execution error"
-        return {"success": False, "error": error_text, "rows": []}
-
-    text_blocks = _extract_text_blocks(result)
-    if not text_blocks:
-        return {"success": True, "rows": [], "raw": result}
-
-    # 1) JSON 파싱 시도
-    for text in text_blocks:
-        parsed = _try_parse_json(text)
-
-        if isinstance(parsed, list):
-            if all(isinstance(item, dict) for item in parsed):
-                return {"success": True, "rows": parsed, "raw": result}
-            return {"success": True, "rows": [{"value": item} for item in parsed], "raw": result}
-
-        if isinstance(parsed, dict):
-            for key in ("rows", "result", "data"):
-                value = parsed.get(key)
-                if isinstance(value, list):
-                    if all(isinstance(item, dict) for item in value):
-                        return {"success": True, "rows": value, "raw": result}
-                    return {"success": True, "rows": [{"value": item} for item in value], "raw": result}
-            return {"success": True, "rows": [parsed], "raw": result}
-
-    # 2) Markdown table 파싱 시도
-    for text in text_blocks:
-        parsed_table = _parse_markdown_table(text)
-        if parsed_table:
-            return {"success": True, "rows": parsed_table, "raw": result}
-
-    # 3) 결과가 텍스트만 있는 경우(INSERT/UPDATE 등)
-    return {"success": True, "rows": [], "raw": result, "text": "\n".join(text_blocks)}
-
 
 # ═══════════════════════════════════
 # MCP web-search 서버를 통한 웹 검색.
@@ -703,10 +774,13 @@ def search_web(query: str, max_results: int = 5) -> Dict[str, Any]:
 
         t_start = time.time()
         logger.info(f"[MCP웹검색] 시작 query=\"{query[:100]}\" max_results={max_results}")
+        # 서버/도구명은 .vscode/mcp.json 의 실제 등록명과 일치해야 한다 —
+        # 과거 "web-search"/"search" 는 설정에 없는 이름이라 항상 not found 였다.
         result = call_mcp_server_tool(
-            server_name="web-search",
-            tool_name="search",
-            arguments={"query": query, "limit": max(1, min(int(max_results or 5), 10))},
+            server_name=_WEB_SEARCH_SERVER,
+            tool_name=_WEB_SEARCH_TOOL,
+            arguments={"query": query,
+                       "num_results": max(1, min(int(max_results or 5), 10))},
             timeout=30,
         )
 
@@ -736,8 +810,13 @@ def search_web(query: str, max_results: int = 5) -> Dict[str, Any]:
             elif isinstance(parsed, dict):
                 items = parsed.get("results", [])
             else:
-                # 비구조 텍스트면 fallback 1건으로 저장
-                formatted.append(_format_search_result(query, text[:700], "#"))
+                # mcp-searxng 는 JSON 이 아니라 Title/Description/URL 텍스트 블록을
+                # 반환한다 — 전용 파서로 항목 단위 분해. 실패 시에만 통짜 폴백.
+                sx = _parse_searxng_results(text)
+                if sx:
+                    formatted.extend(sx)
+                else:
+                    formatted.append(_format_search_result(query, text[:700], "#"))
                 continue
 
             for item in items:

@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════
-# 신규 도구 등록 일관성 커버리지 테스트 (Wave 8).
+# 신규 도구 등록 일관성 커버리지 테스트.
 #
 # LLM 제어 도구를 추가할 때 4곳을 모두 갱신해야 한다:
 #   1. tools_definition.py       — LLM 에 노출되는 JSONSchema
@@ -7,10 +7,7 @@
 #   3. pipeline/question_analyzer._VALID_TYPES / prompts ANALYZER_SYSTEM_PROMPT
 #   4. tools_utils.TOOL_DEFAULT_CONTEXT (권한/컨텍스트 자동 주입이 필요한 경우)
 #
-# 과거 실패 사례 (이 세션에서 발견):
-#   - Wave 1 A2: 관리 도구 4종이 (4) 누락 → 세션 farm_id 무시, 항상 '1'
-#   - Wave 1 B1/E2E T6: agent_monitor 유형이 _VALID_TYPES 누락 → fallback
-# 이 테스트는 그런 누락을 CI 단계에서 자동 감지한다.
+# 이 테스트는 위 등록 누락을 CI 단계에서 자동 감지한다.
 # ══════════════════════════════════════════════════════════════════════════
 import re
 from pathlib import Path

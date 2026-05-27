@@ -32,7 +32,7 @@ _subscribers: Set[asyncio.Queue] = set()
 _lock = threading.Lock()
 _loop_ref: Optional[asyncio.AbstractEventLoop] = None  # FastAPI 이벤트 루프 참조
 
-# [Wave 10] SSE 백프레셔/드롭 통계 — 관측성 목적
+# SSE 백프레셔/드롭 통계 — 관측성 목적
 _stats = {
     "published": 0,
     "dropped_queue_full": 0,   # 구독자 Queue 만석으로 drop 된 이벤트 수
@@ -40,7 +40,7 @@ _stats = {
 }
 _stats_lock = threading.Lock()
 
-# [E2] 영속 로깅 — alert_l_log 테이블 자동 생성 + DB 기록 (실패 시 조용히 삼켜
+# 영속 로깅 — alert_l_log 테이블 자동 생성 + DB 기록 (실패 시 조용히 삼켜
 # 메모리 버퍼 경로는 그대로 유지. 기존 프로세스 훼손 금지 원칙 준수).
 _PERSIST_ENABLED = os.getenv("ALERT_BUS_PERSIST", "1") not in ("0", "false", "False")
 _PERSIST_MIN_LEVEL = os.getenv("ALERT_BUS_PERSIST_MIN_LEVEL", "warning")  # info/warning/critical
@@ -96,8 +96,18 @@ def publish(
     with _stats_lock:
         _stats["published"] += 1
 
-    # [E2] 영속 DB 로깅 (warning 이상). 실패해도 기존 경로 영향 없음.
+    # 영속 DB 로깅 (warning 이상). 실패해도 기존 경로 영향 없음.
     _persist_event(evt)
+
+    # 비상급 이벤트 카카오 실시간 푸시 (warning 이상, best-effort no-op)
+    try:
+        _lv = (evt.get("level") or "info").lower()
+        if _LEVEL_ORDER.get(_lv, 0) >= _LEVEL_ORDER.get("warning", 1):
+            from agri_ai_core.src.ai.kakao_notify import push_alert
+            push_alert(_lv, evt.get("title") or evt.get("category") or "비상 알림",
+                       evt.get("message") or "")
+    except Exception:
+        pass
 
     # sync 스레드에서 호출된 경우 asyncio.Queue.put_nowait 는 별도 루프가 필요
     for q in subs:
@@ -135,7 +145,7 @@ def _safe_put(queue: asyncio.Queue, evt: Dict[str, Any]) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# [E2] 비상 알림 PostgreSQL 영속 로깅 (선택적)
+# 비상 알림 PostgreSQL 영속 로깅 (선택적)
 # alert_l_log 테이블 — 서비스 재시작 시에도 과거 critical/warning 이력 보존
 # ═══════════════════════════════════════════════════════════════════════════
 _CREATE_ALERT_TABLE_SQL = """
@@ -231,7 +241,7 @@ def subscribe(maxsize: int = 100) -> asyncio.Queue:
 
 
 # ────────────────────────────────────────────────────────────────────
-# [Wave 10] SSE 재연결 지원 — Last-Event-ID 이후 이벤트 복원.
+# SSE 재연결 지원 — Last-Event-ID 이후 이벤트 복원.
 # last_event_id 가 None 이거나 버퍼에서 못 찾으면 빈 리스트 반환.
 # SSE 클라이언트 재연결 시 Last-Event-ID 헤더 값을 그대로 넘겨 사용.
 # ────────────────────────────────────────────────────────────────────

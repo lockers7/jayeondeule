@@ -2,8 +2,8 @@
 # 제어 모듈 공통 상수, 매핑, 유틸리티.
 # manual_control, ai_control, relay_manager 등 제어 모듈이 공유하는
 # 상수·핀맵·로깅·포맷팅 함수를 제공한다.
-# [2026-04-27] 실내히터·히터밸브 전 시스템 미사용 — 모든 매핑/라벨/별칭/쿨다운
-# 인프라 제거. relay_9 / relay_15 는 다른 용도로 재배정될 예정.
+# 실내히터·히터밸브는 전 시스템 미사용(매핑/라벨/별칭 없음) — relay_9 / relay_15
+# 는 다른 용도로 재배정될 예정.
 # --->
 # resolve_device_alias: 장치명 또는 한글 별칭을 시멘틱 flag 이름으로 변환
 # set_llm_relay_lock / is_llm_relay_locked / clear_llm_relay_lock: LLM 잠금
@@ -22,8 +22,7 @@ RELAY_COUNT = 16
 
 # ════════════════════════════════════════════════════════════════════════════
 # ⚠ DEPRECATED — 환경 제어 임계값 (직접 사용 금지)
-# [2026-04-28 rev2] 사용자 지시: "센서값은 절대 하드코딩 금지. 테이블 컬럼 값만
-# 변경하면 되어야 한다."
+# 사용자 지시: "센서값은 절대 하드코딩 금지. 테이블 컬럼 값만 변경하면 되어야 한다."
 # 모든 임계값은 SENSOR_M_SETTING 테이블에서 조회되어야 하며, 호출자는
 #   from agri_ai_core.src.control.ai_thresholds import get_thresholds
 #   ts = get_thresholds(farm_id, house_id)
@@ -66,29 +65,20 @@ DAMPER_FAN_DELAY_SEC = 15
 # Semantic name → relay_*st_flag 핀 매핑
 # ══════════════════════════════════════
 # ══════════════════════════════════════════════════════════════════════════════
-# [변경2 · 2026-04-19] 1/3호 STANDARD — 웹 UI/현장 배선 기준으로 11↔14 교환
-#   원본: air_intake_valve_flag → relay_11, air_exhaust_valve_flag → relay_14
-#   변경 후: air_intake → relay_14, air_exhaust → relay_11
-# ──────────────────────────────────────────────────────────────────────────────
-# [변경4 · 2026-04-30] STANDARD 핀맵을 RELAY_FIELD_MAPPING (5-tuple) 에서 자동 생성.
-#   하드코딩 제거 — 매핑 테이블이 단일 진실 원천. 핀 변경 시 mappers.py 만 수정.
-# [2026-04-27] relay_9 (구 실내히터) / relay_15 (구 히터밸브) 매핑 제거 — 전 재배사
-# 에서 미연결, 다른 용도로 사용 예정. RELAY_FIELD_MAPPING 에서 제외되어 자동
-# 누락되므로 어떤 모드에서도 ON 불가.
+# 1/3호 STANDARD 핀맵 — RELAY_FIELD_MAPPING (5-tuple) 에서 자동 생성.
+#   매핑 테이블이 단일 진실 원천 — 핀 변경 시 mappers.py 만 수정.
+# relay_9 (구 실내히터) / relay_15 (구 히터밸브) 는 매핑 없음 — 전 재배사 미연결,
+# 다른 용도 예정. RELAY_FIELD_MAPPING 에서 제외되어 어떤 모드에서도 ON 불가.
 # ══════════════════════════════════════════════════════════════════════════════
 from agri_ai_core.config.mappers import standard_pin_map as _standard_pin_map
 
 RELAY_PIN_MAP_STANDARD = _standard_pin_map()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# [변경1 · 2026-04-19] 2호 전용 +1 shift — 웹 UI/DB 컬럼 번호와 장비 의미 일치화
-#   원본: air_circulation_valve_flag → relay_9st_flag, ..., indoor_heater_valve_flag → relay_14st_flag
-#   변경 후: 순환 valve 이후 모든 플래그가 +1 shift
-# ──────────────────────────────────────────────────────────────────────────────
-# [변경5 · 2026-04-30] E 핀맵을 RELAY_FIELD_MAPPING_E (5-tuple) 에서 자동 생성.
-#   하드코딩 제거 — 매핑 테이블이 단일 진실 원천. 핀 변경 시 mappers.py 만 수정.
-# [2026-04-27] relay_15 (구 히터밸브) 매핑 제거 — 전 재배사 미연결/타용도 예정.
-# RELAY_FIELD_MAPPING_E 에서 제외되어 자동 누락되므로 어떤 모드에서도 ON 불가.
+# 2호 전용 E 핀맵 — RELAY_FIELD_MAPPING_E (5-tuple) 에서 자동 생성.
+#   매핑 테이블이 단일 진실 원천 — 핀 변경 시 mappers.py 만 수정.
+# relay_15 (구 히터밸브) 는 매핑 없음 — 전 재배사 미연결/타용도 예정.
+# RELAY_FIELD_MAPPING_E 에서 제외되어 어떤 모드에서도 ON 불가.
 # ══════════════════════════════════════════════════════════════════════════════
 from agri_ai_core.config.mappers import (
     e_pin_map as _e_pin_map,
@@ -100,15 +90,14 @@ RELAY_PIN_MAP_E = _e_pin_map()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# [변경3] 웹 UI(RelayDashboard) 라벨 용어로 전 시스템 통일
-# [변경5 · 2026-04-30] mappers.semantic_labels() 자동 생성 — STANDARD/E 머지.
+# 웹 UI(RelayDashboard) 라벨 용어 (전 시스템 공통)
+# mappers.semantic_labels() 자동 생성 — STANDARD/E 머지.
 # ══════════════════════════════════════════════════════════════════════════════
 SEMANTIC_LABELS = _semantic_labels()
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 한글 별칭 → 시멘틱 flag 매핑 (Web UI 이름 기준)
-# [변경3] 전 시스템 용어 통일 — 웹 UI 표시 용어와 축약형만 유지.
-# [변경5 · 2026-04-30] mappers.device_aliases() 자동 생성 — STANDARD/E 매핑의
+# 한글 별칭 → 시멘틱 flag 매핑 (Web UI 이름 기준) — 웹 UI 표시 용어와 축약형만.
+# mappers.device_aliases() 자동 생성 — STANDARD/E 매핑 기반.
 # ──────────────────────────────────────────────────────────────────────────────
 DEVICE_ALIASES = _device_aliases()
 
@@ -126,13 +115,12 @@ def resolve_device_alias(name):
 
 # ════════════════════════════════════
 # 순환 모드 정의 (밸브 → 15초 후 → 팬)
-# [변경7 · 2026-04-30] 'effect' 메타 추가 — LLM 프롬프트 자동 생성 시 모드별 효과
-# 설명도 함께 노출 (mappers.circulation_modes_text 가 본 dict 를 SSOT 로 사용).
+# 'effect' 메타 — LLM 프롬프트 자동 생성 시 모드별 효과 설명 노출
+# (mappers.circulation_modes_text 가 본 dict 를 SSOT 로 사용).
 # ════════════════════════════════════
 CIRCULATION_MODES = {
     '순환정지': {
-        # [2026-05-04 사용자 정의] 모든 밸브 OFF — 밸브 열림 시 미약한 내외기
-        # 공기 누출까지 완전 차단. 이전 ON·ON·ON 은 공기구멍이 열려 있어 미세 흐름 발생.
+        # 모든 밸브 OFF — 밸브 열림 시 미약한 내외기 공기 누출까지 완전 차단.
         'dampers': {
             'air_circulation_valve_flag': False,
             'air_intake_valve_flag': False,
@@ -281,7 +269,7 @@ def sort_houses(houses):
 # 유틸리티 함수
 # ══════════════════
 # ────────────────────────────────────────────────────────────────────
-# [2026-04-28] 로그 식별자 형식: "0-99" (농장 0 · 재배사 99).
+# 로그 식별자 형식: "0-99" (농장 0 · 재배사 99).
 # 가독성·정렬·검색 편의 — order_label 이 있으면 그 앞에 붙는다.
 # ────────────────────────────────────────────────────────────────────
 def house_prefix(order_label="", farm_id=None, house_id=None):
@@ -311,8 +299,7 @@ def reverse_pin_map(house_id):
 # 미매핑 릴레이 강제 OFF — 핀맵에 등록되지 않은 relay_*st_flag 는 어떤 모드의
 # raw_mode 쓰기에도 절대 ON 으로 남지 않도록 보정. 핀맵에서 시멘틱이 제거된
 # 릴레이(예: relay_9, relay_15) 는 자동으로 이 필터에 의해 OFF 가 강제됨.
-# [2026-04-27] DISABLED_SEMANTIC_FLAGS / apply_disabled_devices 인프라 제거 —
-# 핀맵 자체에서 indoor_heater 매핑을 빼서 근본 차단 + 본 헬퍼로 raw_mode 보호.
+# 핀맵 자체에서 매핑을 빼서 근본 차단 + 본 헬퍼로 raw_mode 쓰기까지 보호.
 # ══════════════════════════════════════════════════════════════════════════
 # ────────────────────────────────────────────────────────────────────
 # 핀맵에 없는 relay_*st_flag 를 False 로 강제. 반환: 강제 OFF 된 핀 리스트.

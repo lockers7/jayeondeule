@@ -1,7 +1,7 @@
 # ══════════════════════════════════════════════════════════════════════════════
 # LLM Tool 실행기 (라우터) — LLM이 요청한 도구를 적절한 모듈로 dispatch.
 # 실제 구현은 tools_data.py(데이터), tools_control.py(제어),
-# tools_search.py(웹검색), opinet_tools.py(유가)에 분산되어 있다.
+# tools_search.py(웹검색) 등에 분산되어 있다.
 # --->
 # execute_tool: tool_name에 따라 적절한 함수로 dispatch 후 JSON 문자열 반환
 # ══════════════════════════════════════════════════════════════════════════════
@@ -18,6 +18,7 @@ from agri_ai_core.src.ai.tools_data import (
     delete_farm_knowledge,
     search_farm_knowledge,
     get_farm_realtime_data,
+    get_weather_forecast,
 )
 from agri_ai_core.src.ai.tools_control import (
     control_relay,
@@ -25,16 +26,27 @@ from agri_ai_core.src.ai.tools_control import (
     _control_relay_all_houses,
 )
 from agri_ai_core.src.ai.tools_search import search_web, fetch_url_content
-from agri_ai_core.src.ai.opinet_tools import search_gas_price
-# [Phase 1] 관리 도구 — 제어 모드/생육단계/순환모드/스케줄/임계값/시스템상태
+from agri_ai_core.src.ai.tools_external_api import call_external_api, manage_external_api
+from agri_ai_core.src.ai.chat_lessons import manage_analysis_lesson
+from agri_ai_core.src.ai.tools_source import source_list, source_search, source_read
+# 관리 도구 — 제어 모드/생육단계/순환모드/스케줄/임계값/시스템상태
+from agri_ai_core.src.ai.tools_db import (
+    db_list_tables,
+    db_describe_table,
+    db_read_query,
+    db_write_query,
+)
 from agri_ai_core.src.ai.tools_admin import (
+    manage_control_prompt,
+    set_admin_directive,
+    release_admin_directive,
     set_house_control_mode,
     set_growth_stage,
     set_circulation_mode,
     set_schedule,
     override_ai_thresholds,
 )
-# [Phase 4] Agent 모니터링 — schedule_monitor / list_monitors / cancel_monitor
+# Agent 모니터링 — schedule_monitor / list_monitors / cancel_monitor
 from agri_ai_core.src.ai.tools_agent import (
     schedule_monitor,
     list_monitors,
@@ -53,7 +65,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
 
     try:
         if tool_name == "save_domain_knowledge":
-            # [2026-05-01] 사용자 채팅 → 도메인 RAG 영속 저장 → 다음 AI 사이클 자동 참조
+            # 사용자 채팅 → 도메인 RAG 영속 저장 → 다음 AI 사이클 자동 참조
             from agri_ai_core.src.control.ai_doc_rag import save_domain_knowledge
             tags_raw = tool_args.get("tags")
             tags_list = None
@@ -66,6 +78,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
                 farm_id=tool_args.get("farm_id"),
                 house_id=tool_args.get("house_id"),
                 tags=tags_list,
+                auth_farm_id=tool_args.get("auth_farm_id"),
             )
 
         elif tool_name == "delete_farm_knowledge":
@@ -91,6 +104,49 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
                 house_id=tool_args.get("house_id"),
                 farm_id=tool_args.get("farm_id"),
                 data_type=tool_args.get("data_type", "all")
+            )
+
+        elif tool_name == "get_weather_forecast":
+            result = get_weather_forecast(
+                farm_id=tool_args.get("farm_id"),
+                house_id=tool_args.get("house_id"),
+            )
+
+        elif tool_name == "db_write_query":
+            result = db_write_query(
+                sql=tool_args.get("sql"),
+                reason=tool_args.get("reason", ""),
+                auth_farm_id=tool_args.get("auth_farm_id"),
+            )
+
+        elif tool_name == "source_list":
+            result = source_list(path=tool_args.get("path", "."),
+                                 pattern=tool_args.get("pattern"))
+
+        elif tool_name == "source_search":
+            result = source_search(query=tool_args.get("query"),
+                                   path=tool_args.get("path", "."),
+                                   max_results=tool_args.get("max_results"))
+
+        elif tool_name == "source_read":
+            result = source_read(file_path=tool_args.get("file_path"),
+                                 start_line=tool_args.get("start_line", 1),
+                                 end_line=tool_args.get("end_line"))
+
+        elif tool_name == "call_external_api":
+            result = call_external_api(
+                api_name=tool_args.get("api_name"),
+                params=tool_args.get("params"),
+            )
+
+        elif tool_name == "manage_external_api":
+            result = manage_external_api(
+                action=tool_args.get("action"),
+                api_name=tool_args.get("api_name"),
+                description=tool_args.get("description"),
+                url_template=tool_args.get("url_template"),
+                response_hint=tool_args.get("response_hint"),
+                auth_farm_id=tool_args.get("auth_farm_id"),
             )
 
         elif tool_name == "control_relay":
@@ -133,16 +189,71 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
                 url=tool_args.get("url", "")
             )
 
-        elif tool_name == "search_gas_price":
-            result = search_gas_price(
-                query_type=tool_args.get("query_type", "avg_national"),
-                sido=tool_args.get("sido"),
-                sigun=tool_args.get("sigun"),
-                prodcd=tool_args.get("prodcd", "B027"),
-                fuel_name=tool_args.get("fuel_name"),
+        elif tool_name == "db_list_tables":
+            result = db_list_tables()
+
+        elif tool_name == "db_describe_table":
+            result = db_describe_table(table_name=tool_args.get("table_name"))
+
+        elif tool_name == "db_read_query":
+            # LLM 이 인자 키를 'sql' 대신 'query'/'sql_query' 로 주는 경우도 허용(견고화)
+            _sql = (tool_args.get("sql") or tool_args.get("query")
+                    or tool_args.get("sql_query") or tool_args.get("statement"))
+            result = db_read_query(sql=_sql,
+                                   limit=tool_args.get("limit", 50),
+                                   auth_farm_id=tool_args.get("auth_farm_id"))
+
+        elif tool_name == "manage_analysis_lesson":
+            result = manage_analysis_lesson(
+                action=tool_args.get("action"),
+                lesson_text=tool_args.get("lesson_text"),
+                lesson_id=tool_args.get("lesson_id"),
+                auth_farm_id=tool_args.get("auth_farm_id"),
             )
 
-        # ─────── [Phase 1 신규 관리 도구] ───────
+        elif tool_name == "set_trading_strategy":
+            from agri_ai_core.src.ai.trading_store import set_trading_strategy
+            result = set_trading_strategy(
+                strategy=tool_args.get("strategy"),
+                name=tool_args.get("name"),
+            )
+
+        elif tool_name == "manage_system_knowledge":
+            from agri_ai_core.src.ai.system_knowledge import manage_system_knowledge
+            result = manage_system_knowledge(
+                action=tool_args.get("action"),
+                text=tool_args.get("text"),
+                category=tool_args.get("category", "general"),
+                knowledge_id=tool_args.get("knowledge_id"),
+                auth_farm_id=tool_args.get("auth_farm_id"),
+            )
+
+        elif tool_name == "manage_control_prompt":
+            result = manage_control_prompt(
+                action=tool_args.get("action"),
+                block_id=tool_args.get("block_id"),
+                body_text=tool_args.get("body_text"),
+                auth_farm_id=tool_args.get("auth_farm_id"),
+            )
+
+        elif tool_name == "set_admin_directive":
+            result = set_admin_directive(
+                house_id=tool_args.get("house_id"),
+                device_name=tool_args.get("device_name"),
+                state=tool_args.get("state"),
+                note=tool_args.get("note", ""),
+                farm_id=tool_args.get("farm_id"),
+                auth_farm_id=tool_args.get("auth_farm_id"),
+            )
+
+        elif tool_name == "release_admin_directive":
+            result = release_admin_directive(
+                house_id=tool_args.get("house_id"),
+                device_name=tool_args.get("device_name"),
+                farm_id=tool_args.get("farm_id"),
+                auth_farm_id=tool_args.get("auth_farm_id"),
+            )
+
         elif tool_name == "set_house_control_mode":
             result = set_house_control_mode(
                 house_id=tool_args.get("house_id"),
@@ -183,9 +294,12 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
 
         elif tool_name == "override_ai_thresholds":
             result = override_ai_thresholds(
-                action=tool_args.get("action", "get"),
+                action=tool_args.get("action"),
                 key=tool_args.get("key"),
                 value=tool_args.get("value"),
+                farm_id=tool_args.get("farm_id"),
+                house_id=tool_args.get("house_id"),
+                auth_farm_id=tool_args.get("auth_farm_id"),
             )
 
         elif tool_name == "get_system_status":
@@ -194,7 +308,14 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
                 farm_id=tool_args.get("farm_id"),
             )
 
-        # ─────── [Phase 4 Agent 모니터링] ───────
+        elif tool_name == "get_camera_view":
+            from agri_ai_core.src.ai.tools_data import get_camera_view
+            result = get_camera_view(
+                farm_id=tool_args.get("farm_id"),
+                house_id=tool_args.get("house_id"),
+            )
+
+        # ─────── Agent 모니터링 ───────
         elif tool_name == "schedule_monitor":
             result = schedule_monitor(
                 intent=tool_args.get("intent") or tool_args.get("purpose") or "모니터링",
@@ -212,7 +333,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
         elif tool_name == "cancel_monitor":
             result = cancel_monitor(job_id=tool_args.get("job_id"))
 
-        # ─────── [B 단계 · 2026-05-25] 반복 agent 구독 ───────
+        # ─────── 반복 agent 구독 ───────
         elif tool_name == "agent_subscribe":
             from agri_ai_core.src.ai.tools_agent_sub import agent_subscribe
             result = agent_subscribe(
@@ -231,6 +352,152 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
                 include_default=bool(tool_args.get("include_default", False)),
             )
 
+        elif tool_name == "set_alert_interval":
+            from agri_ai_core.src.ai.tools_agent_sub import set_alert_interval
+            result = set_alert_interval(
+                interval_min=tool_args.get("interval_min"),
+                farm_id=tool_args.get("farm_id"),
+                subscription_id=tool_args.get("subscription_id"),
+                auth_farm_id=tool_args.get("auth_farm_id"),
+            )
+
+        elif tool_name == "edit_source":
+            from agri_ai_core.src.ai.tools_source_edit import edit_source
+            result = edit_source(path=tool_args.get("path"),
+                                 content=tool_args.get("content"),
+                                 reason=tool_args.get("reason", ""),
+                                 test_target=tool_args.get("test_target") or "tests/")
+
+        elif tool_name == "revert_source":
+            from agri_ai_core.src.ai.tools_source_edit import revert_source
+            result = revert_source(audit_id=tool_args.get("audit_id"),
+                                   reason=tool_args.get("reason", ""))
+
+        elif tool_name == "list_source_edits":
+            from agri_ai_core.src.ai.tools_source_edit import list_source_edits
+            result = list_source_edits(limit=tool_args.get("limit") or 10)
+
+        elif tool_name == "get_server_resources":
+            from agri_ai_core.src.ai.tools_resources import get_server_resources
+            result = get_server_resources()
+
+        elif tool_name == "restart_service":
+            from agri_ai_core.src.ai.tools_service import restart_service
+            result = restart_service(service_no=tool_args.get("service_no"),
+                                     reason=tool_args.get("reason", ""))
+
+        elif tool_name == "service_status":
+            from agri_ai_core.src.ai.tools_service import service_status
+            result = service_status(service_no=tool_args.get("service_no"))
+
+        elif tool_name == "list_services":
+            from agri_ai_core.src.ai.tools_service import list_services
+            result = list_services()
+
+        elif tool_name == "write_script":
+            from agri_ai_core.src.ai.tools_script import write_script
+            result = write_script(script=tool_args.get("script"),
+                                  content=tool_args.get("content"),
+                                  reason=tool_args.get("reason", ""))
+
+        elif tool_name == "run_script":
+            from agri_ai_core.src.ai.tools_script import run_script
+            result = run_script(script=tool_args.get("script"),
+                                args=tool_args.get("args"),
+                                timeout=tool_args.get("timeout") or 60,
+                                reason=tool_args.get("reason", ""))
+
+        elif tool_name == "list_scripts":
+            from agri_ai_core.src.ai.tools_script import list_scripts
+            result = list_scripts()
+
+        elif tool_name == "read_script":
+            from agri_ai_core.src.ai.tools_script import read_script
+            result = read_script(script=tool_args.get("script"))
+
+        elif tool_name == "mcp_call":
+            from agri_ai_core.src.ai.tools_mcp_gateway import mcp_call
+            # LLM 이 MCP 도구 인자(query 등)를 args 로 감싸지 않고 최상위로 평탄하게
+            # 넘기면 조용히 누락되던 것을 관용 — 잉여 키를 args 에 자동 병합.
+            _mcp_args = tool_args.get("args")
+            _mcp_args = dict(_mcp_args) if isinstance(_mcp_args, dict) else {}
+            for _k, _v in tool_args.items():
+                if _k not in ("server", "tool", "args", "timeout"):
+                    _mcp_args.setdefault(_k, _v)
+            result = mcp_call(
+                server=tool_args.get("server"),
+                tool=tool_args.get("tool"),
+                args=_mcp_args,
+                timeout=tool_args.get("timeout") or 45,
+            )
+
+        elif tool_name == "mcp_list_tools":
+            from agri_ai_core.src.ai.tools_mcp_gateway import mcp_list_tools
+            result = mcp_list_tools(server=tool_args.get("server"))
+
+        elif tool_name == "manage_mcp_server":
+            from agri_ai_core.src.ai.tools_mcp_registry import manage_mcp_server
+            result = manage_mcp_server(
+                action=tool_args.get("action"),
+                name=tool_args.get("name"),
+                command=tool_args.get("command"),
+                args=tool_args.get("args"),
+                env=tool_args.get("env"),
+                url=tool_args.get("url"),
+                transport=tool_args.get("transport"),
+                auth_farm_id=tool_args.get("auth_farm_id"),
+            )
+
+        elif tool_name == "remote_status":
+            from agri_ai_core.src.ai.tools_remote import remote_status
+            result = remote_status(host=tool_args.get("host"), timeout=tool_args.get("timeout") or 25)
+
+        elif tool_name == "remote_run":
+            from agri_ai_core.src.ai.tools_remote import remote_run
+            result = remote_run(host=tool_args.get("host"), command=tool_args.get("command"),
+                                timeout=tool_args.get("timeout") or 20)
+
+        elif tool_name == "compare_remote_sources":
+            from agri_ai_core.src.ai.tools_remote import compare_remote_sources
+            result = compare_remote_sources(
+                host_a=tool_args.get("host_a"), host_b=tool_args.get("host_b"),
+                path=tool_args.get("path") or "~/FarmUnits",
+                pattern=tool_args.get("pattern") or "*.py",
+                show_diff=bool(tool_args.get("show_diff")))
+
+        elif tool_name == "manage_remote_host":
+            from agri_ai_core.src.ai.tools_remote import manage_remote_host
+            result = manage_remote_host(
+                action=tool_args.get("action"), name=tool_args.get("name"),
+                host_spec=tool_args.get("host_spec"), identity_path=tool_args.get("identity_path"),
+                description=tool_args.get("description"), auth_farm_id=tool_args.get("auth_farm_id"))
+
+        elif tool_name == "approve_remote_command":
+            from agri_ai_core.src.ai.tools_remote import approve_remote_command
+            result = approve_remote_command(request_id=tool_args.get("request_id"),
+                                            auth_farm_id=tool_args.get("auth_farm_id"))
+
+        elif tool_name == "search_logs":
+            from agri_ai_core.src.ai.tools_logs import search_logs
+            result = search_logs(
+                query=tool_args.get("query"),
+                level=tool_args.get("level"),
+                date=tool_args.get("date"),
+                log_type=tool_args.get("log_type"),
+                max_results=tool_args.get("max_results") or 50,
+            )
+
+        elif tool_name == "list_log_files":
+            from agri_ai_core.src.ai.tools_logs import list_log_files
+            result = list_log_files()
+
+        elif tool_name == "set_alert_level":
+            from agri_ai_core.src.ai.tools_agent_sub import set_alert_level
+            result = set_alert_level(
+                level=tool_args.get("level"),
+                auth_farm_id=tool_args.get("auth_farm_id"),
+            )
+
         elif tool_name == "cancel_agent_subscription":
             from agri_ai_core.src.ai.tools_agent_sub import cancel_agent_subscription
             result = cancel_agent_subscription(
@@ -247,7 +514,7 @@ def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> str:
                 mark_read=bool(tool_args.get("mark_read", True)),
             )
 
-        # ─────── [A 단계 · 2026-05-25] Agent 즉시 1회 분석 ───────
+        # ─────── Agent 즉시 1회 분석 ───────
         elif tool_name == "agent_one_shot":
             from agri_ai_core.src.control.ai_monitor_agent import run_agent
             task = (tool_args.get("task") or "농장 모니터링").strip()

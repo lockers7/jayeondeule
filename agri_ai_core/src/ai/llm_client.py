@@ -97,7 +97,6 @@ _TOOL_DISPLAY_NAMES = {
     "search_web": "웹 검색",
     "fetch_url_content": "웹페이지 내용 수집",
     "control_relay": "장치 제어",
-    "search_gas_price": "유가 정보 조회",
 }
 
 
@@ -122,11 +121,6 @@ def _build_tool_detail_message(tool_name: str, tool_args: dict) -> str:
     elif tool_name == "fetch_url_content":
         url = tool_args.get("url", "")[:40]
         return f"{url}"
-    elif tool_name == "search_gas_price":
-        qt = tool_args.get("query_type", "")
-        sido = tool_args.get("sido", "")
-        label = {"avg_national": "전국 평균", "avg_sido": "시도별", "avg_sigun": "시군구별", "low_price": "최저가"}.get(qt, qt)
-        return f"{sido} {label} 유가 (Opinet)" if sido else f"{label} 유가 (Opinet)"
     elif tool_name == "control_relay":
         device = tool_args.get("device_flag", "")
         action = tool_args.get("action", "")
@@ -154,10 +148,10 @@ def _report_progress(progress_queue: Optional[ThreadQueue], message: str, phase:
     except Exception:
         pass  # 큐 오류 시 무시 (진행 상태 누락은 치명적이지 않음)
 
-# 워밍업은 llm_warmup.py로 분리됨
+# 워밍업 함수는 llm_warmup.py 에 정의
 from agri_ai_core.src.ai.llm_warmup import _perform_llm_warmup, initialize_background_warmup
 
-# 응답 후처리는 llm_response_processing.py로 분리됨
+# 응답 후처리 함수는 llm_response_processing.py 에 정의
 from agri_ai_core.src.ai.llm_response_processing import (
     _emit_question_log_once, _determine_response_type, _build_structured_result,
     _filter_greeting_turns, _is_conversational_query, _build_farm_info_text,
@@ -165,11 +159,7 @@ from agri_ai_core.src.ai.llm_response_processing import (
 )
 
 
-# ═════════════════════
-# 워밍업 관련 전역 변수
-# ═════════════════════
-
-# 전송 계층은 llm_transport.py로 분리됨 (하위 호환 alias)
+# 전송 계층 함수는 llm_transport.py 에 정의 (하위 호환 alias)
 from agri_ai_core.src.ai.llm_transport import (
     _get_model_gpu_ratio, _get_free_vram_mib, _get_model_ctx_options,
     _use_mcp_fetch, _use_ollama_package, _use_direct_ollama_http,
@@ -191,7 +181,7 @@ from agri_ai_core.src.ai.llm_transport import (
 
 
 
-# 순수 메시지 유틸은 llm_message_utils.py로 분리됨 (하위 호환 alias 유지)
+# 순수 메시지 유틸은 llm_message_utils.py 에 정의 (하위 호환 alias 유지)
 from agri_ai_core.src.ai.llm_message_utils import (
     serialize_for_log as _serialize_for_log,
     extract_message_content as _extract_message_content,
@@ -201,11 +191,6 @@ from agri_ai_core.src.ai.llm_message_utils import (
     extract_tool_calls as _extract_tool_calls,
     coerce_numeric_id as _coerce_numeric_id,
 )
-
-
-
-# _extract_tool_name, _extract_tool_arguments, _coerce_numeric_id은 llm_message_utils로 이동됨
-# (상단 import에서 alias로 재노출)
 
 
 
@@ -299,30 +284,17 @@ def _normalize_tool_arguments(
             )
             house_id = default_house_id
 
-        # data_type: 'relay'/'sensor' 단독 요청 시 AI분석·알고리즘 추천값 없어 모델이 hallucination
-        # → 항상 'all'로 강제하여 완전한 데이터(센서+릴레이+AI권장) 반환
-        data_type = "all"
+        # data_type: LLM 명시값 존중 (판단 위임), 미지정·무효 시에만 'all' 기본값
+        data_type = str(_pick("data_type") or "all").strip().lower()
+        if data_type not in ("sensor", "relay", "all"):
+            data_type = "all"
 
         return {
             "house_id": house_id,
             "farm_id": farm_id,
             "data_type": data_type,
         }
-    if tool_name == "search_gas_price":
-        return {
-            "query_type": _pick("query_type", "avg_national"),
-            "sido": _pick("sido"),
-            "sigun": _pick("sigun"),
-            "prodcd": _pick("prodcd", "B027"),
-            "fuel_name": _pick("fuel_name"),
-        }
     return args
-
-
-# ═════════════════════════════════════════
-# Ollama에서 사용 가능한 모델 목록 가져오기
-
-
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -433,7 +405,7 @@ def get_llm_response_with_tools(
 
 # (get_llm_response_with_tools 파라미터 블록 계속)
 ) -> Dict[str, Any]:
-    # [DEPRECATED 경고 · D1] 이 Tool Use 반복 루프는 3단계 파이프라인(pipeline/runner.py)의
+    # [DEPRECATED 경고] 이 Tool Use 반복 루프는 3단계 파이프라인(pipeline/runner.py)의
     # fallback 용으로만 유지된다. 신규 기능은 3단계 파이프라인에 추가하고, 이 경로는 향후
     # 단일화(제거)될 예정이다. 호출 시 경로를 로깅해 의존성 파악 및 조기 경보를 돕는다.
     logger.warning(
@@ -449,7 +421,15 @@ def get_llm_response_with_tools(
 
         # 농장명이 있으면 농장 시스템 프롬프트, 없으면 일반 프롬프트
         if farm_name:
-            farm_info = _build_farm_info_text()
+            _session_fid = None
+            try:
+                for _v in (default_tool_args or {}).values():
+                    if _v.get("farm_id"):
+                        _session_fid = _v["farm_id"]
+                        break
+            except Exception:
+                _session_fid = None
+            farm_info = _build_farm_info_text(_session_fid)
             system_prompt = get_system_prompt_with_tools(farm_name, farm_info, speech_style=speech_style or "male")
         else:
             system_prompt = (

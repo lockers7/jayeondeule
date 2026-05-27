@@ -1,0 +1,96 @@
+ssh로 jayeondule@jayeodeule.iptime.org 에 5101, 5102, 5103, 5199 포트로 접속하되 접속 정보는 Wkdusemfdp1@ 이다
+(sudo 비밀번호 변경은 반드시 /api/v1/admin/sudo-password API 만 사용 — 시스템 passwd 직접 변경 금지, DB 동기화 깨짐)
+
+추가 패키지 설치 없이 그대로 사용 가능합니다. 카메라 모듈 장착 후 sudo systemctl restart camera_stream 만 실행하면 됩니다.
+
+[통합 서비스 관리 — sudo ./agriAiCore {start|stop|restart|status} [번호]]   ※ 2026-07-04 현행
+    0. ALL / 00. APP(4~9)
+    1. Ollama(11434)  2. PostgreSQL(5432)  3. ChromaDB(8000)
+    4. Scheduler(환경제어)  5. FastAPI(8002)  6. SearXNG(8888)
+    7. Web Backend(9090)  8. Shop Backend(9091)  9. Nginx(80)
+   10~12. Web/Shop/ALL Build   13. RPi Camera(8095)  14. Camera Archive
+   15. ChromaFlow GUI(127.0.0.1:5000)  16. Agent Monitor  17. Agent Worker
+   ※ Scheduler restart 는 hang 처럼 보여도 신규 프로세스는 기동됨 — ps -eo pid,lstart,cmd | grep scheduler 로 확인
+
+[systemd 기반 통합 관리]
+   ├── postgresql.service            (DB)
+   ├── ollama.service                (LLM 엔진 — override.conf: NUM_PARALLEL=1 · KEEP_ALIVE=-1 · CONTEXT_LENGTH=16384)
+   ├── chromadb.service              (벡터 DB)
+   ├── agriAiCore.service            (Scheduler + REST API — 레거시 unit, 현행은 ./agriAiCore CLI 권장)
+   ├── agent_monitor.service         (Agent ReAct 데몬 = agent_scheduler.py, 구독 폴링)
+   ├── agent_pending_worker.service  (Agent 쓰기 큐 → 실제 릴레이 반영)
+   ├── agent_event_listener.service  (DB LISTEN/NOTIFY 이벤트 즉시 트리거)
+   ├── shop_goheung.service          (고흥뜰에 쇼핑몰 백엔드 — port 9092, nginx 5200, DB goheung_shop 스키마)
+   └── MCP (VSCode 내 자동 실행 — 단 USE_MCP_POSTGRES/FETCH=false 로 운영상 직결 경로 사용 중)
+
+[root crontab]
+   * * * * *   setup/ollama_watchdog.sh    (분당 — LLM busy 마커 감지 시 deep-check skip, 3연속 실패 시 ollama 재시작)
+   */30 * * * * setup/hdd_backup_sync.sh
+   3 3 * * *   setup/os_backup_sync.sh
+
+[ChromaDB]   ※ v2 API (v1 은 deprecated)
+# 상태 확인 (heartbeat)
+curl http://localhost:8000/api/v2/heartbeat
+# 컬렉션 목록 조회
+curl http://localhost:8000/api/v2/tenants/default_tenant/databases/default_database/collections
+
+[Streamlit]
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8501/
+
+[agriAiCore]
+systemctl status agriAiCore.service
+or
+systemctl is-active agriAiCore
+
+[GPU 사용 현황 (메모리, 프로세스, 온도)]
+nvidia-smi
+
+[Ollama 모델이 GPU/CPU 실행위치]
+ollama ps
+
+[GPU 하드웨어 확인]
+lspci | grep -i nvidia
+
+[드라이버 버전 확인]
+cat /proc/driver/nvidia/version
+
+[프론트엔드 (React + Vite)]
+cd /workspace/jayeondeule/web/frontend && npm run build
+백엔드 (Spring Boot + Maven)
+
+cd /workspace/jayeondeule/web/backend && ./mvnw package -DskipTests
+
+[서비스 재시작]
+# Spring Boot 재시작
+sudo systemctl restart jayeondeule_web.service
+
+# Nginx 재시작 (프론트엔드 변경 시)
+sudo systemctl restart nginx.service
+전체 한번에 (빌드 + 배포)
+
+------------------------------------------------------------------------------------------------
+# ssh key clear
+ssh-keygen -R "[jayeondeule.iptime.org]:5102"
+
+=========================================================================================================
+setup/python_packages_upgrade.sh check   주 1회
+setup/chromadb_upgrade.sh check          월 1회
+setup/ollama_upgrade.sh check            월 1회
+setup/postgresql_upgrade.sh check        분기 1회 (보안 패치)
+setup/nginx_upgrade.sh check             분기 1회 (보안 패치)
+setup/nodejs_upgrade.sh	                 Node.js
+setup/mcp_upgrade.sh check               격주 1회 (각 MCP 개별 가능)
+
+---------------------------------------------------------------------------------------------------------
+python_packages_upgrade.sh	 venv 의 모든 PyPI 패키지    venv pip check/upgrade/upgrade <pkg>/upgrade-all
+chromadb_upgrade.sh         ChromaDB   venv pip + systemd chromadb             데이터 자동 백업
+ollama_upgrade.sh           Ollama     install.sh + systemd ollama             모델 데이터 보존
+postgresql_upgrade.sh	    PostgreSQL	apt + systemd postgresql                패치만 (메이저는 수동 안내)
+nginx_upgrade.sh            Nginx      apt + systemd nginx           설정 보존 (--force-confold)
+nodejs_upgrade.sh	          Node.js    apt (NodeSource/distro/snap 자동 감지)  메이저는 setup_*.x 안내
+mcp_upgrade.sh	             (wrapper) —	아래 4개 일괄 호출
+mcp_postgres_upgrade.sh	    MCP @modelcontextprotocol/server-postgres          npx 캐시	
+mcp_filesystem_upgrade.sh   MCP @modelcontextprotocol/server-filesystem        npx 캐시	
+mcp_fetch_upgrade.sh        MCP @kazuph/mcp-fetch                              npx 캐시	
+mcp_web_search_upgrade.sh   pskill9/web-search                      git pull + npm install + build	
+---------------------------------------------------------------------------------------------------------

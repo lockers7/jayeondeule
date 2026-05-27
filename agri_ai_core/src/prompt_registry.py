@@ -1,15 +1,14 @@
 # ════════════════════════════════════════════════════════════════════
-# [프롬프트 자동화 · Phase 2] PromptRegistry — context 외부화 단일 read API.
-# [Phase 3-b · 2026-05-09] 캐시 invalidate 정책을 TTL → updt_dttm 비교로 전환.
-#                          web UI / 관리자 직접 UPDATE 즉시 반영. TTL 폐기.
+# PromptRegistry — context 외부화 단일 read API.
 #
-# 정책 (사용자 지침 2026-05-03):
+# 정책 (사용자 지침):
 #   · ChromaDB(prompt_chunk / domain_rule) — 학습 진화 (의미 검색)
 #   · PostgreSQL(tool_definition_m / prompt_block_m) — 사용자 직접 관리 (정확 일치)
 #
 # 동작 원칙:
 #   · 캐시 invalidate: prompt_block_m / tool_definition_m 의 updt_dttm 비교
-#     (BEFORE UPDATE 트리거가 NOW() 자동 갱신 — migration 003)
+#     (BEFORE UPDATE 트리거가 NOW() 자동 갱신 — migration 003). TTL 캐시 금지 —
+#     web UI / 관리자 직접 UPDATE 가 즉시 반영되어야 함.
 #   · DB/ChromaDB 비어있으면 빈 결과 반환 — 기존 코드 호출자에게 영향 0
 #   · 상위 모듈(control/ai/api) 에서 단방향 import. 상호 호출 금지.
 #
@@ -29,17 +28,19 @@ from agri_ai_core.logs import setup_logger
 
 logger = setup_logger(__name__)
 
-# [Phase 3-b] TTL 폐기. updt_dttm 비교 invalidate.
+# 캐시 invalidate 는 updt_dttm 비교 (TTL 캐시 금지).
 # _BLOCK_CACHE: block_id -> {'value': body|None, 'updt_dttm': datetime|None}
 # _TOOLS_CACHE: {'value': [rows], 'updt_dttm': datetime|None}
+# _CTRL_BLOCK_CACHE: control_prompt_m 전용 캐시 (같은 패턴)
 _LOCK = threading.Lock()
 _BLOCK_CACHE: Dict[str, Any] = {}
 _TOOLS_CACHE: Dict[str, Any] = {'value': None, 'updt_dttm': None}
+_CTRL_BLOCK_CACHE: Dict[str, Any] = {}
 
 
 # ────────────────────────────────────────────────────────────────────
 # prompt_block_m 의 정형 블록 본문 조회 + placeholder 치환.
-# [Phase 3-b] PROMPT_BLOCK_M.updt_dttm 비교로 캐시 invalidate.
+# PROMPT_BLOCK_M.updt_dttm 비교로 캐시 invalidate.
 # DB 미존재/비활성 시 None 반환 — 호출자가 fallback 결정.
 # placeholders 는 본문의 ${name} 패턴을 kwargs 로 치환.
 # ────────────────────────────────────────────────────────────────────
@@ -81,7 +82,7 @@ def get_block(block_id: str, **kwargs) -> Optional[str]:
 
 # ────────────────────────────────────────────────────────────────────
 # tool_definition_m 활성 도구 목록 조회 (priority 오름차순).
-# [Phase 3-b] TOOL_DEFINITION_M.max(updt_dttm) 비교로 캐시 invalidate.
+# TOOL_DEFINITION_M.max(updt_dttm) 비교로 캐시 invalidate.
 # 각 항목은 {tool_id, schema_json(dict), description, category, priority}.
 # ────────────────────────────────────────────────────────────────────
 def get_tools(active_only: bool = True) -> List[Dict[str, Any]]:
@@ -229,11 +230,72 @@ def clear_cache() -> None:
         _BLOCK_CACHE.clear()
         _TOOLS_CACHE['value'] = None
         _TOOLS_CACHE['updt_dttm'] = None
+        _CTRL_BLOCK_CACHE.clear()
+
+
+# ────────────────────────────────────────────────────────────────────
+# control_prompt_m 블록 본문 조회 + placeholder 치환.
+# updt_dttm 비교 캐시 invalidate (기존 get_block 동일 패턴).
+# DB 미존재/비활성 시 None 반환.
+# ────────────────────────────────────────────────────────────────────
+def get_control_block(block_id: str, **kwargs) -> Optional[str]:
+    if not block_id:
+        return None
+
+    current_updt = None
+    try:
+        from agri_ai_core.src.postgresql.reader import read_control_prompt_updt
+        current_updt = read_control_prompt_updt(block_id)
+    except Exception as ee:
+        logger.debug(f"[PromptRegistry] control block updt 조회 실패 (캐시 fallback): {ee}")
+
+    with _LOCK:
+        cached = _CTRL_BLOCK_CACHE.get(block_id)
+        if cached is not None and current_updt is not None and cached.get('updt_dttm') == current_updt:
+            body = cached['value']
+        else:
+            body = _load_control_block_from_db(block_id)
+            if body is None and cached is not None and cached.get('value') is not None:
+                body = cached['value']
+            else:
+                _CTRL_BLOCK_CACHE[block_id] = {'value': body, 'updt_dttm': current_updt}
+
+    if body is None:
+        return None
+    if not kwargs:
+        return body
+    out = body
+    for k, v in kwargs.items():
+        out = out.replace('${' + k + '}', str(v))
+    return out
 
 
 # ════════════════════════════════════════════════════════════════════
 # 내부 helper — DB / Chroma 직접 호출은 본 영역에 한정 (단방향)
 # ════════════════════════════════════════════════════════════════════
+
+
+def _load_control_block_from_db(block_id: str) -> Optional[str]:
+    try:
+        from agri_ai_core.src.postgresql.connection import db
+        conn = db._getconn()
+        if conn is None:
+            return None
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT body_text FROM control_prompt_m "
+                    "WHERE block_id=%s AND active_yn='Y' LIMIT 1",
+                    (block_id,),
+                )
+                row = cur.fetchone()
+                return row[0] if row else None
+        finally:
+            try: db._putconn(conn)
+            except Exception: pass
+    except Exception as e:
+        logger.warning(f"[PromptRegistry] _load_control_block_from_db({block_id}) 실패: {e}")
+        return None
 
 # ────────────────────────────────────────────────────────────────────
 # prompt_block_m 단건 조회. 활성(active_yn='Y') 행의 body_text 반환.

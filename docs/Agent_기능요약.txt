@@ -1,0 +1,50 @@
+1. Agent란 무엇인가
+ai_monitor_agent.py의 ReAct(Reasoning+Acting) 루프. LLM이 스스로 도구(get_all_house_status, get_thresholds, set_relay, send_user_alert 등)를 선택해 호출하며 다단계로 판단·실행합니다. 사람이 정해준 절차가 아니라 LLM이 매 단계 무엇을 할지 스스로 결정합니다.
+Agent 시스템 프롬프트는 control_prompt_m 테이블(CTRL_AGENT_SYSTEM)에서 DB 관리 — 웹 "LLM 제어관리" 메뉴에서 수정 즉시 반영(재기동 불필요).
+
+2. 트리거 — 구독(subscription) 1개만 가동
+id 내용 주기
+309 "농장 1 자율 환경 제어 사이클" — 각 호기 센서값을 임계값과 비교, 초과 호기는 set_relay로 직접 제어 + send_user_alert로 알림 10분
+(324 모니터링 구독은 사용자 지시로 비활성화 — 309 단독 운용 중)
+[2026-07-04] 309 task에 [효율 지침] 추가 — get_all_house_status 사이클당 1회 재사용·임계값 재조회 금지 → 사이클당 LLM 호출 12.8→3.8회(70%↓), LLM 가동률 88%→약 55%로 완화.
+
+3. 실행 흐름 (매 10분)
+
+agent_scheduler(agent_monitor 프로세스) 폴링
+  → 309 due 확인 → run_agent() 시작
+  → LLM 이 도구 호출 반복(get_all_house_status 1회 → 판단 → 필요시 set_relay)
+  → set_relay 는 즉시 실행 안 하고 agent_pending_actions 큐에 INSERT(30초 취소가능 유예)
+  → agent_pending_worker 프로세스가 폴링하며 실제 릴레이 반영 (+ 제어중재 agent_end stamp)
+  → 최종 보고(final) + agent_log 기록 + next_check_minutes(3~60분 자율 재스케줄) 예약
+
+4. 3개 상시 프로세스
+프로세스(systemd) 역할
+agent_monitor 구독 폴링·LLM ReAct 루프 실행(=agent_scheduler.py)
+agent_pending_worker 큐에 쌓인 set_relay 등을 실제 릴레이에 반영
+agent_event_listener DB 이벤트(LISTEN/NOTIFY) 즉시 반응 (hous_id=0 공통호기는 단절감지 제외)
+
+5. 안전장치 (전부 "폭주 차단 전용" — 정상 자율제어를 막지 않는 수준 유지가 원칙)
+daily_limit: 도구·호기 조합당 하루 호출 한도. set_relay 500회(사이클당 2~3콜 × 144사이클 정상사용량을 여유 있게 상회 — 2026-07-03 house1 습도위기 중 200/200 소진 사고로 상향), send_user_alert 100회, 그 외 기본 10회
+알림 중복억제(dedupe): 동일 내용 알림은 30분 내 재발송 억제 — LLM에 사유·행동지침 회신("새 정보가 있을 때만 갱신해 알려라")
+cooldown 60초: 동일 호기·도구 1분 내 재호출 차단 — 진동(on/off 반복) 방지
+비상(emergency): relay_manager 하드가드 — agent·중재와 무관하게 항상 최우선 안전 적용
+
+6. 제어(스케줄)와의 관계 — 중재(arbitration, 2026-07-02 구축)
+agent가 set_relay 실행 → 즉시 그 호기의 주(主) 제어자가 됨, 스케줄(control_ai_environment)은 30분간 해당 호기에서 물러남
+agent가 30분 이상 그 호기를 만지지 않으면 스케줄이 10분 주기로 자동 백업(failover)
+agent가 재개입하면 스케줄은 다시 즉시 물러남 (스케줄 LLM 진행 중 개입 시 그 결정은 적용 취소)
+유예(30분)·주기(10분) 값은 DB(control_arbitration_config)에서 실시간 조정 가능 / 상태는 control_arbitration_state(호기별 active_controller·시작·종료 시각)
+
+7. 채팅과의 관계 — 우선순위 게이트(2026-07-02 구축)
+agent의 LLM 호출(라벨 "agent")이 진행 중이면 채팅은 자동으로 양보(is_llm_busy(labels={"ai_control","agent"}))
+채팅이 실제 Ollama를 호출하는 순간은 agent/제어와 동일한 물리적 락(llm_call_lock)을 공유해 겹침 자체가 불가능
+즉 agent는 채팅에 의해 절대 지연되지 않음 — 반대로 채팅이 agent에 양보 (우선순위: 제어 > agent > 관리자채팅 > 사용자채팅, 사용자 대기열은 최근 1건만 유지+취소 안내)
+
+8. 자율 학습 루프 (2026-07-04 완성)
+결정이력(ai_decision_log) → 룰 후보 마이닝(순수 LLM 결정만, [algorithm_fallback] 제외) → 웹 "룰 후보" 메뉴에서 관리자 승인 → domain_rule + document_collection 이중 저장 → 제어 도메인RAG가 다음 사이클부터 자동 참조.
+별도로 growth_rag_processor 가 매일 00:05 센서·생육 통계를 farm_knowledge 에 적재(유사시기 RAG, 2,800건+) — 제어 프롬프트 [AI 14/14] RAG 단계에서 유사시기+도메인지식이 함께 주입됨.
+agent 사이클 컨텍스트에도 최근 결정·룰 후보 패턴이 주입되어 스스로 참조.
+
+9. 평소(요청 없을 때)
+사용자 지시나 채팅이 전혀 없어도 agent는 10분마다 독립적으로 자율 순찰하며 농장제어 LLM 관리자로서 계속 동작합니다. 이것이 기본 상태이며, 채팅/관리자 지시는 이 기본 동작 위에 얹히는 예외적 개입일 뿐입니다.
+운영 추적: 웹 "Agent 이력" 메뉴에서 사이클별 thought→tool→결과 전체 열람 가능.

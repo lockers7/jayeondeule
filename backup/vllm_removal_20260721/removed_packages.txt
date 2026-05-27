@@ -1,0 +1,9 @@
+compressed-tensors==0.10.2
+outlines==0.1.11
+outlines_core==0.1.26
+torch==2.7.0
+torchaudio==2.7.0
+torchvision==0.22.0
+vllm==0.9.2
+xformers==0.0.30
+xgrammar==0.1.19

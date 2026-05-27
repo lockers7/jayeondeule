@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════════════════
-# Phase 5 통합 테스트 — DB 트리거 → NOTIFY → Python LISTEN 수신 검증.
+# 통합 테스트 — DB 트리거 → NOTIFY → Python LISTEN 수신 검증.
 #
 # 운영 DB 사용. schedule_m_setting 의 임시 row 로 INSERT/UPDATE/DELETE 시
 # 채널 'setting_changed' NOTIFY 가 실제로 발화·수신되는지 확인.

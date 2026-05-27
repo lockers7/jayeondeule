@@ -1,7 +1,7 @@
 # ════════════════════════════════════════════════════════════════
 # LLM 메시지/응답 유틸 — pure helper 함수 모음
 # Ollama 패키지 응답 객체와 dict 응답을 통일된 방식으로 파싱.
-# llm_client.py에서 분리된 순수 유틸로, 외부 상태/통신 없음.
+# 순수 유틸 모듈 — 외부 상태/통신 없음.
 # --->
 # serialize_for_log: 로그용 안전 직렬화 (재귀적 model_dump / __dict__)
 # extract_message_content: 응답에서 assistant content 추출

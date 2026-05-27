@@ -1,6 +1,6 @@
 # ════════════════════════════════════════════════════════════════════════════════
 # LLM Tool — 웹 검색 진입점 + 결과 관련성 필터 + VectorDB 캐싱
-# 엔진 구현은 web_search_engines.py, URL 본문 수집은 web_url_fetcher.py에 분리됨.
+# 엔진 구현은 web_search_engines.py, URL 본문 수집은 web_url_fetcher.py 에 있다.
 # --->
 # _is_location: 지역명 여부 판별 (행정구역 접미사 + 광역시도 약칭)
 # _filter_relevant_results: 쿼리와의 유사도 기반 결과 필터링 (노이즈 제거)

@@ -74,7 +74,7 @@ _PERSIST_COUNT = 7             # 반복 쓰기 횟수 (2초 × 7회 = 14초간 �
 def _persist_relay_values(farm_id, house_id, relay_values, count=_PERSIST_COUNT, interval=_PERSIST_INTERVAL):
     import time
     from datetime import datetime
-    # [2026-04-27] SET_RELAY_VALUE SQL 컬럼 순서(relay_1..relay_16)에 맞춰 항상 정렬된
+    # SET_RELAY_VALUE SQL 컬럼 순서(relay_1..relay_16)에 맞춰 항상 정렬된
     # tuple 을 생성 — dict 입력 순서 의존성 제거(Java HashMap→JSON 직렬화 등).
     ordered = tuple(bool(relay_values.get(f"relay_{i}st_flag", False))
                     for i in range(1, RELAY_COUNT + 1))
@@ -99,13 +99,12 @@ def _persist_relay_values(farm_id, house_id, relay_values, count=_PERSIST_COUNT,
 # 릴레이 값 설정 메인 함수 — 인터록 게이트 통과 후 DB 쓰기.
 # raw_mode=True: 16개 핀 직접 전달 (수동환경제어). False: 시멘틱 부분갱신.
 # skip_emergency_guard=True: 수동 UI 사용자 명령 — 비상 오버라이드 미적용
-#   (사용자 정책 2026-05-17). 스케줄·RPI 자동 호출은 False 유지로 기존 비상가드 작동.
+#   (사용자 정책). 스케줄·RPI 자동 호출은 False 유지로 기존 비상가드 작동.
 # 마이크로초 타임스탬프 + IoT 폴링 생존용 백그라운드 반복 쓰기 자동 트리거.
 # ────────────────────────────────────────────────────────────────────
 def set_relay_value(farm_id, house_id, relay_settings, raw_mode=False,
-                    skip_emergency_guard=True):
-    # [2026-05-17] skip_emergency_guard default 를 True 로 변경 — 운용모드 무관
-    # 모든 비상제어 skip (사용자 정책). 호출자에서 명시적 False 전달 시만 적용.
+                    skip_emergency_guard=False):
+    # skip_emergency_guard default=False — 비상 오버라이드 활성 상태가 기본.
     try:
         # 인터록 게이트는 raw_mode 와 무관하게 항상 통과 — 게이트는 현재 DB 상태 대비
         # target 의 OFF→ON 전이만 검사하므로 이미 ON 인 팬은 영향 없음. raw_mode 의
@@ -114,18 +113,16 @@ def set_relay_value(farm_id, house_id, relay_settings, raw_mode=False,
 
         # raw_mode: 수동환경제어에서 16개 relay_*st_flag를 직접 전달할 때 사용
         # raw_mode=True이면 기본값 초기화/별칭 변환/강제 ON 없이 그대로 사용
-        # [2026-04-27] dict 입력 순서가 SQL 컬럼 순서와 다른 경우(특히 Java HashMap →
+        # dict 입력 순서가 SQL 컬럼 순서와 다른 경우(특히 Java HashMap →
         # JSON 직렬화) 값이 잘못된 컬럼에 들어가던 버그 방지 — 항상 1..16 순서로 재구성.
         if raw_mode:
             relay_values = {
                 f"relay_{i}st_flag": bool(relay_settings.get(f"relay_{i}st_flag", False))
                 for i in range(1, RELAY_COUNT + 1)
             }
-            # ────────────────────────────────────────────────────────────
-            # [2026-05-17] 사용자 정책 — 운용모드 무관 모든 비상제어 skip.
-            #   skip_emergency_guard default=True 로 모든 호출자에서 자동 건너뜀.
-            #   비상가드 복귀 시: default=False 변경 + 본 분기 안 로그 재추가.
-            # ────────────────────────────────────────────────────────────
+            # 비상가드 — 2026-06-25 농장주 지시로 재활성화(default=False).
+            # 자동 경로(스케줄/AI/RPI)는 DB 임계값 기반 비상 오버라이드를 받고,
+            # 수동 UI(rpi_router)만 skip_emergency_guard=True 로 면제된다.
             if not skip_emergency_guard:
                 try:
                     from agri_ai_core.src.postgresql.reader import read_current_sensor_info
@@ -149,6 +146,25 @@ def set_relay_value(farm_id, house_id, relay_settings, raw_mode=False,
                                 )
                 except Exception as _e:
                     logger.error(f"[비상가드] 자동 호출 비상 오버라이드 실패: {_e}")
+                # 수온계 안전 3케이스 — 비상가드 이후 최종 적용 (⛔ 농장주 지정 무조건 규칙.
+                # 관리자지시·인터록은 이후 단계에서 이보다 우선 적용됨)
+                try:
+                    from agri_ai_core.src.control.environment_logic import apply_water_safety
+                    _pin_map_ws = get_pin_map(house_id)
+                    _sem_ws = {}
+                    for _k in ('water_heater_flag', 'fog_occurs_flag', 'drainage_motor_flag'):
+                        _p = _pin_map_ws.get(_k)
+                        if _p and _p in relay_values:
+                            _sem_ws[_k] = relay_values[_p]
+                    _sem_ws, _ws_corr = apply_water_safety(
+                        _sem_ws, _sensor, farm_id, house_id, scope="[relay]")
+                    if _ws_corr:
+                        for _k, _v in _sem_ws.items():
+                            _p = _pin_map_ws.get(_k)
+                            if _p and _p in relay_values:
+                                relay_values[_p] = bool(_v)
+                except Exception as _e:
+                    logger.error(f"[수온계안전] relay 적용 실패: {_e}")
         else:
             # 현재 릴레이 상태를 읽어 기존 상태 보존 (부분 갱신)
             current = current_for_gate
@@ -184,7 +200,40 @@ def set_relay_value(farm_id, house_id, relay_settings, raw_mode=False,
         for pin in forced_unmapped:
             logger.info(f"[미매핑릴레이] {pin} 강제 OFF — 핀맵 미등록")
 
+        # ─── 환경 정합 가드: 고습 → 포그 강제 OFF (모든 모드 공통) ⛔ 농장주 절대룰 ───
+        #   포그는 습도를 높이므로, 냉각 상황이 아닌 고습에 포그를 켠 채 둘 수 없다.
+        #   Agent/AI/수동 어느 제어자든 이 비정합 상태를 최종 관문에서 강제 정정.
+        try:
+            from agri_ai_core.src.postgresql.reader import read_current_sensor_info
+            from agri_ai_core.src.control.ai_thresholds import get_thresholds
+            from agri_ai_core.src.control.environment_logic import apply_humidity_fog_guard
+            _hg_sensor = read_current_sensor_info(farm_id, house_id) or {}
+            relay_values, _hg_corr = apply_humidity_fog_guard(
+                relay_values, _hg_sensor, get_thresholds(farm_id, house_id), get_pin_map(house_id))
+            for _c in _hg_corr:
+                logger.warning(f"[환경가드] {_c} (farm={farm_id} house={house_id})")
+        except Exception as _hg_e:
+            logger.error(f"[환경가드] 고습-포그 가드 실패(제어는 계속): {_hg_e}")
+
+        # ─── 관리자 강제 지시 적용 (모든 모드·모든 경로 공통) ───
+        # ⛔ 절대 제거 금지 — 사용자 명시 지시: 관리자가 지시한 장치
+        #    상태는 해제 전까지 LLM/agent/비상가드 판단보다 우선하여 강제 유지.
+        #    우선순위: 인터록(물리보호) > 관리자지시 > 비상가드 > LLM.
+        #    (인터록보다 앞서 적용 → 물리 보호 불변식은 지시보다도 우선 유지됨)
+        try:
+            from agri_ai_core.src.control.admin_directive import apply_to_relay_values
+            relay_values, _directive_applied = apply_to_relay_values(
+                farm_id, house_id, relay_values, get_pin_map(house_id))
+            for _msg in _directive_applied:
+                logger.warning(f"[관리자지시] {_msg}")
+        except Exception as _e:
+            logger.error(f"[관리자지시] 적용 실패(제어는 계속): {_e}")
+
         # ─── 밸브-팬 인터록 게이트 (모든 모드 공통) ───
+        # ⛔ 절대 제거 금지 — 사용자 명시 지시: 운용모드 무관, 제어
+        #    마지막 단계에서 "흡입팬 ON ⇒ 흡입밸브∨순환밸브 ON / 배출팬 ON ⇒
+        #    배출밸브∨순환밸브 ON" 이 반드시 강제되어야 함(모터 소손 방지).
+        #    구현: interlock.evaluate_interlock — 전이 게이트 + 최종 불변식 강제.
         # 흡입팬/배출팬 OFF→ON 전이 시 선행 밸브 dwell 검증, 위반 시 차단.
         # 밸브 ON→OFF 전이 시 의존 팬 자동 OFF 보정. 위반 사유는 응답에 포함.
         relay_values, interlock_violations = evaluate_interlock(
@@ -196,7 +245,7 @@ def set_relay_value(farm_id, house_id, relay_settings, raw_mode=False,
 
         # SQL 파라미터 준비 (farm_id, hous_id, recd_dttm, relay flags...)
         # 마이크로초 포함 타임스탬프: IoT 4초 폴링 기록보다 항상 "최신"이 되도록 함
-        # [2026-04-27] dict 순서 무관 — 항상 relay_1..16 순서로 정렬된 tuple 생성.
+        # dict 순서 무관 — 항상 relay_1..16 순서로 정렬된 tuple 생성.
         from datetime import datetime
         recd_dttm = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
         ordered_values = tuple(bool(relay_values.get(f"relay_{i}st_flag", False))

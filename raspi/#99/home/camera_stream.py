@@ -42,6 +42,39 @@ WIDTH        = int(os.getenv('CAMERA_WIDTH',      '1280'))
 HEIGHT       = int(os.getenv('CAMERA_HEIGHT',     '720'))
 INTERVAL     = float(os.getenv('CAMERA_FRAME_INTERVAL', '0.5'))
 JPEG_QUALITY = int(os.getenv('CAMERA_JPEG_QUALITY', '85'))
+# 소프트웨어 화이트밸런스 보정 — USB 카메라별 색감 변질(파란색 편향 등) 자동 보정.
+#   CAM_WB_CORRECT=0 으로 끌 수 있다. CAM_WB_SKEW=채널편차 임계(이하면 정상으로 보고 스킵).
+CAM_WB_CORRECT = os.getenv('CAM_WB_CORRECT', '1') == '1'
+CAM_WB_SKEW    = int(os.getenv('CAM_WB_SKEW', '20'))
+
+
+# ────────────────────────────────────────────────────────────────────
+# gray-world 화이트밸런스 보정 — 채널 평균을 균등화해 색 편향(파란색 등) 제거.
+#   ⛔ 카메라 색감 변질(2/3호 파란색 포화)을 소프트웨어로 잡는다. 정상 카메라(1호)는
+#      채널 편차가 작아(<CAM_WB_SKEW) 스킵 → 무해. ImageStat 로 평균은 C레벨(빠름).
+#   보드 교체 시 이 보정도 함께 배포되도록 스트리머(camera_stream.py)에 둔다.
+# ────────────────────────────────────────────────────────────────────
+def _correct_white_balance(jpeg_bytes):
+    if not CAM_WB_CORRECT or not jpeg_bytes:
+        return jpeg_bytes
+    try:
+        from PIL import Image, ImageStat
+        img = Image.open(io.BytesIO(jpeg_bytes)).convert('RGB')
+        r, g, b = ImageStat.Stat(img).mean
+        if (max(r, g, b) - min(r, g, b)) < CAM_WB_SKEW:
+            return jpeg_bytes            # 이미 균형 — 정상 카메라, 보정 불필요
+        gray = (r + g + b) / 3.0
+        kr, kg, kb = gray / max(r, 1.0), gray / max(g, 1.0), gray / max(b, 1.0)
+        R, G, B = img.split()
+        R = R.point(lambda v: min(255, int(v * kr)))
+        G = G.point(lambda v: min(255, int(v * kg)))
+        B = B.point(lambda v: min(255, int(v * kb)))
+        buf = io.BytesIO()
+        Image.merge('RGB', (R, G, B)).save(buf, format='JPEG', quality=JPEG_QUALITY)
+        return buf.getvalue()
+    except Exception as e:
+        logger.warning(f'화이트밸런스 보정 실패(원본 반환): {e}')
+        return jpeg_bytes
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -95,9 +128,10 @@ def capture_jpeg():
     try:
         r = subprocess.run(cmd, capture_output=True, timeout=5)
         if r.returncode == 0 and r.stdout:
-            _last_good_frame = r.stdout
+            frame = _correct_white_balance(r.stdout)   # 색감 변질 자동 보정
+            _last_good_frame = frame
             _consecutive_fail = 0
-            return r.stdout
+            return frame
         _consecutive_fail += 1
         # 5초당 1회만 경고 로그 (rc=255 폭주 시 로그 부피 제어)
         if _consecutive_fail % 10 == 1:

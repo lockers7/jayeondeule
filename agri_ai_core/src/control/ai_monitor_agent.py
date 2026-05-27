@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# AI 모니터링 Agent (Phase 1) [2026-05-25 신규]
+# AI 모니터링 Agent
 #
 # ReAct 패턴: LLM 이 도구를 반복 호출하며 자율 모니터링·보고 작성.
 # 운영 스케줄 제어(`ai_control.py`)와 *완전 분리*. import 단방향.
@@ -10,7 +10,18 @@
 #   ↓ tool 이면 → 도구 실행 → 결과 messages 에 추가 → LLM 재호출 (loop)
 #   ↓ final 이면 → 종료
 # MAX_STEPS = 8 강제. 같은 tool+args 3회 연속 = 종료.
-# 모든 step 은 history 에 기록 → DB 영속 (Phase 2 에서 추가).
+# 모든 step 은 history 에 기록 → DB 영속.
+#
+# 컨텍스트 안정화:
+#   · AI_CONTROL_NUM_CTX / AI_CONTROL_NUM_PREDICT 환경변수 → num_ctx/num_predict 반영
+#   · tool_result LLM 메시지 800자 truncate (history 는 full 보존)
+#   · max_steps-2 step 에서 최종 보고 압박 메시지 주입
+#   · 연속 빈 응답 2회 → 조기 종료 (무한 재시도 방지)
+#   · 조회 도구 최대 2회 제한 (_MAX_READ_TOOL_CALLS) — 3회 이상 시 final 압박
+#   · 쓰기 도구(set_relay 등) 성공 직후 즉시 final 압박 주입
+# 자율 재스케줄:
+#   · final 응답에 next_check_minutes 파싱 → run_agent 반환값에 포함
+#   · 범위 클램프: _NCM_MIN=3 ~ _NCM_MAX=60 분
 #
 # CLI:
 #   python -m agri_ai_core.src.control.ai_monitor_agent \
@@ -21,16 +32,24 @@
 #   _parse_response           : LLM 응답 JSON parse (실패 시 retry 가이드)
 #   _execute_tool             : args dict 로 도구 호출 (validation 포함)
 #   _detect_loop              : 같은 (tool, args) 3회 연속 감지
-#   build_system_prompt       : 시스템 프롬프트 합성 (도구 specs 주입)
+#   _trim_tool_msg            : tool_result → LLM 메시지용 요약 (컨텍스트 보호)
+#   build_system_prompt       : 시스템 프롬프트 합성 (control_prompt_m DB 조회, 도구 specs 주입)
 #   run_agent                 : 메인 ReAct loop
 # ══════════════════════════════════════════════════════════════════════════════
 import json
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from agri_ai_core.config import get_ollama_url
 from agri_ai_core.logs import setup_logger
+from agri_ai_core.src.ai.llm_runtime_guard import (
+    LlmCallLockTimeout,
+    is_llm_busy,
+    llm_activity,
+    llm_call_lock,
+)
 from agri_ai_core.src.utils.http_client import http_json_request
 from agri_ai_core.src.ai.tools_agent_read import (
     TOOL_REGISTRY as _READ_TOOLS,
@@ -40,19 +59,58 @@ from agri_ai_core.src.ai.tools_agent_write import (
     TOOL_REGISTRY as _WRITE_TOOLS,
     tool_specs_text as _write_tool_specs_text,
 )
+from agri_ai_core.src.ai.tools_agent_external import (
+    TOOL_REGISTRY as _EXTERNAL_TOOLS,
+    tool_specs_text as _external_tool_specs_text,
+)
+from agri_ai_core.src.ai.tools_agent_knowledge import (
+    TOOL_REGISTRY as _KNOWLEDGE_TOOLS,
+    tool_specs_text as _knowledge_tool_specs_text,
+)
+from agri_ai_core.src.ai.tools_agent_code import (
+    TOOL_REGISTRY as _CODE_TOOLS,
+    tool_specs_text as _code_tool_specs_text,
+)
+from agri_ai_core.src.ai.tools_agent_trade import (
+    TOOL_REGISTRY as _TRADE_TOOLS,
+    tool_specs_text as _trade_tool_specs_text,
+)
+from agri_ai_core.src.ai.tools_remote import (
+    TOOL_REGISTRY as _REMOTE_TOOLS,
+    tool_specs_text as _remote_tool_specs_text,
+)
 
-# [Phase 3] read + write 도구 merge — _execute_tool 은 write 도구일 때 trigger_type 자동 주입
-TOOL_REGISTRY = {**_READ_TOOLS, **_WRITE_TOOLS}
-_WRITE_TOOL_NAMES = set(_WRITE_TOOLS.keys())
+# read + write 도구 merge — _execute_tool 은 write 도구일 때 trigger_type 자동 주입
+TOOL_REGISTRY = {**_READ_TOOLS, **_WRITE_TOOLS, **_EXTERNAL_TOOLS,
+                 **_KNOWLEDGE_TOOLS, **_CODE_TOOLS, **_TRADE_TOOLS, **_REMOTE_TOOLS}
+_WRITE_TOOL_NAMES = set(_WRITE_TOOLS.keys())  # 외부·코딩·트레이딩·원격은 농장제어-write 아님(미포함)
+# 코딩·원격 도구 — 다호스트·반복 조회가 필요해 조회 2회 캡을 넉넉히 예외 처리한다.
+_CODE_TOOL_NAMES = set(_CODE_TOOLS.keys()) | set(_REMOTE_TOOLS.keys())
+# 트레이딩 도구 — 스캔→후보 다건 저장→승인요청 다단계라 캡을 크게(종목 수만큼 save).
+_TRADE_TOOL_NAMES = set(_TRADE_TOOLS.keys())
 
 
-def tool_specs_text() -> str:
-    """ReAct system prompt 의 ${TOOLS} 자리에 들어갈 도구 명세 텍스트."""
+def tool_specs_text(task: str = None) -> str:
+    """ReAct system prompt 의 ${TOOLS} 자리에 들어갈 도구 명세 텍스트.
+    외부지식 수집 임무는 검색·MCP·지식저장 도구만 노출 — 농장제어 도구를 숨겨
+    LLM 이 제어로 새지 않고 '조사→저장' 에 집중하게 한다(자율 성장루프 핵심)."""
+    if task is not None and _route_block(task) == 'CTRL_AGENT_EXTERNAL':
+        return (
+            "[외부 정보 수집 도구 — 이 임무는 웹/전문검색으로 정보를 조사한다]\n"
+            + _external_tool_specs_text()
+            + "\n\n[지식 저장 도구 — 저장가치(재배 실질도움·재사용·신규)면 반드시 save_knowledge]\n"
+            + _knowledge_tool_specs_text()
+        )
     return (
         "[조회 도구 — 안전, 즉시 결과]\n"
         + _read_tool_specs_text()
         + "\n\n[변경 도구 — 30초 취소 큐 + 일일/cooldown 제한]\n"
         + _write_tool_specs_text()
+        + "\n" + _external_tool_specs_text()
+        + "\n" + _knowledge_tool_specs_text()
+        + "\n" + _code_tool_specs_text()
+        + "\n" + _trade_tool_specs_text()
+        + "\n" + _remote_tool_specs_text()
     )
 
 logger = setup_logger(__name__)
@@ -62,9 +120,60 @@ logger = setup_logger(__name__)
 # 미래 모델 교체 (gemma4, qwen3, Claude API) 도 env 만 변경.
 # ────────────────────────────────────────────────────────────────────
 AGENT_LLM_MODEL  = os.getenv("AGENT_LLM_MODEL",  "gemma3:27b")
-AGENT_TIMEOUT    = int(os.getenv("AGENT_TIMEOUT", "120"))   # 한 LLM 호출 timeout
+AGENT_TIMEOUT    = int(os.getenv("AGENT_TIMEOUT", "240"))   # 한 LLM 호출 timeout
+AGENT_LLM_LOCK_WAIT = int(os.getenv("AGENT_LLM_LOCK_WAIT", str(AGENT_TIMEOUT)))
 AGENT_MAX_STEPS  = int(os.getenv("AGENT_MAX_STEPS", "8"))
 AGENT_LOOP_REPEAT_LIMIT = 3   # 같은 (tool, args) N회 연속 시 loop 감지
+_TOOL_RESULT_MSG_CHARS = 800  # LLM 메시지용 tool_result 최대 길이 — history 는 full 보존
+_NCM_MIN = 3    # next_check_minutes 최솟값 (분)
+_NCM_MAX = 60   # next_check_minutes 최댓값 (분)
+# ⛔ 기본값 16384 — 제어(ai_control)·분석기·답변 등 모든 gemma3:27b 소비자와 동일해야
+#   한다. 과거 이 기본값만 32768 이라, agent 사이클 후 다음 제어/채팅 호출이 매번 90초
+#   모델 리로드를 겪었다(27b 가 16GB VRAM 에 겨우 적재 — 2026-07-19 실측). num_ctx 통일.
+AI_CONTROL_NUM_CTX     = int(os.getenv("AGENT_NUM_CTX", os.getenv("AI_CONTROL_NUM_CTX", "16384")))
+AI_CONTROL_NUM_PREDICT = int(os.getenv("AGENT_NUM_PREDICT", os.getenv("AI_CONTROL_NUM_PREDICT", "800")))
+_MAX_READ_TOOL_CALLS   = 2    # 조회 도구 세션 최대 호출 수 — 초과 시 final 압박 주입
+# 코딩 도구(write_script/run_script/…)는 디버깅 반복(작성→실행→수정→재실행)이 필요해
+# 조회 2회 캡을 훨씬 넉넉히 준다. write→run 짝을 여러 라운드 돌 수 있어야 한다.
+_MAX_CODE_TOOL_CALLS   = int(os.getenv("AGENT_MAX_CODE_TOOL_CALLS", "6"))
+AGENT_CODE_MAX_STEPS   = int(os.getenv("AGENT_CODE_MAX_STEPS", "16"))
+# 트레이딩 — 종목 수만큼 save_trade_candidate 를 부르므로 캡·단계를 크게.
+_MAX_TRADE_TOOL_CALLS  = int(os.getenv("AGENT_MAX_TRADE_TOOL_CALLS", "30"))
+AGENT_TRADE_MAX_STEPS  = int(os.getenv("AGENT_TRADE_MAX_STEPS", "24"))
+_AGENT_RUNTIME_CONTEXT_MAX_CHARS = int(os.getenv("AGENT_RUNTIME_CONTEXT_MAX_CHARS", "4000"))
+_AGENT_RUNTIME_CONTEXT_DECISION_HOURS = int(os.getenv("AGENT_RUNTIME_CONTEXT_DECISION_HOURS", "2"))
+_AGENT_RUNTIME_CONTEXT_AGENT_LIMIT = int(os.getenv("AGENT_RUNTIME_CONTEXT_AGENT_LIMIT", "3"))
+_AGENT_RUNTIME_CONTEXT_RULE_MIN_FREQ = int(os.getenv("AGENT_RUNTIME_CONTEXT_RULE_MIN_FREQ", "3"))
+
+
+def _agent_retry_backoffs() -> List[float]:
+    raw = os.getenv("AGENT_LLM_RETRY_BACKOFFS", "5,15")
+    out: List[float] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            val = float(part)
+        except ValueError:
+            continue
+        if val > 0:
+            out.append(min(val, 60.0))
+    return out
+
+
+def _is_transient_llm_failure(status: int, err: str) -> bool:
+    text = (err or "").lower()
+    return (
+        status in {408, 429, 500, 502, 503, 504}
+        or "timeout" in text
+        or "timed out" in text
+        or "connection refused" in text
+        or "server disconnected" in text
+        or "connection reset" in text
+        or "maximum pending requests" in text
+        or "server busy" in text
+    )
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -76,50 +185,82 @@ AGENT_LOOP_REPEAT_LIMIT = 3   # 같은 (tool, args) N회 연속 시 loop 감지
 # 반환: assistant 의 content 문자열 (또는 None on error).
 # ────────────────────────────────────────────────────────────────────
 def _call_llm(messages: List[Dict[str, str]], json_format: bool = True) -> Optional[str]:
-    # [2026-05-25] LLM_BACKEND=vllm 일 때 vLLM 으로 위임 — default ollama 유지.
-    try:
-        from agri_ai_core.src.ai import llm_backend_vllm as _vllm
-        if _vllm.is_enabled():
-            t0 = time.time()
-            try:
-                opts = {"num_predict": 800, "num_ctx": 16384}
-                if json_format:
-                    opts["format"] = "json"
-                resp = _vllm.vllm_chat(model=AGENT_LLM_MODEL, messages=messages, options=opts)
-                content = (resp.get("message") or {}).get("content")
-                elapsed = time.time() - t0
-                logger.info(f"[Agent LLM] 응답 backend=vllm ({elapsed:.1f}s, {len(content or '')}자)")
-                return content
-            except Exception as e:
-                logger.error(f"[Agent LLM] vLLM 실패 — ollama 폴백: {e}")
-    except Exception:
-        pass
-
     payload = {
         "model": AGENT_LLM_MODEL,
         "messages": messages,
         "stream": False,
-        "options": {"num_predict": 800, "num_ctx": 16384},
+        "options": {"num_predict": AI_CONTROL_NUM_PREDICT, "num_ctx": AI_CONTROL_NUM_CTX},
     }
     if json_format:
         payload["format"] = "json"
 
     url = f"{get_ollama_url()}/api/chat"
-    logger.info(f"[Agent LLM] 요청 model={AGENT_LLM_MODEL} messages={len(messages)} ctx={payload['options']['num_ctx']}")
-    t0 = time.time()
-    try:
-        status, data, err = http_json_request("POST", url, json_body=payload, timeout=AGENT_TIMEOUT)
-    except Exception as e:
-        logger.warning(f"[Agent LLM] HTTP 예외: {e}")
-        return None
+    logger.info(
+        f"[Agent LLM] 요청 model={AGENT_LLM_MODEL} messages={len(messages)} "
+        f"ctx={payload['options']['num_ctx']} timeout={AGENT_TIMEOUT}s"
+    )
 
-    elapsed = time.time() - t0
-    if status != 200 or not isinstance(data, dict):
-        logger.warning(f"[Agent LLM] 실패 status={status} err={err}")
-        return None
-    content = (data.get("message") or {}).get("content")
-    logger.info(f"[Agent LLM] 응답 ({elapsed:.1f}s, {len(content or '')}자)")
-    return content
+    backoffs = [0.0] + _agent_retry_backoffs()
+    last_status = 0
+    last_err = ""
+    for attempt, backoff in enumerate(backoffs):
+        if backoff > 0:
+            logger.warning(
+                f"[Agent LLM] transient failure retry {attempt}/{len(backoffs)-1} "
+                f"after {backoff:.0f}s"
+            )
+            time.sleep(backoff)
+
+        # 농장 제어 우선 — 제어(ai_control)가 LLM 사용 중이면 agent 는 제어가 끝날
+        #   때까지 양보(대기)하고 빈 시간에만 LLM 작업한다. 단일 Ollama 슬롯 경합·
+        #   슬롯 핸드오프 충돌([Errno 22])을 원천 차단하고 제어에 슬롯 우선권 보장.
+        _yield_deadline = time.time() + AGENT_LLM_LOCK_WAIT
+        _yielded = False
+        while is_llm_busy(labels={"ai_control"}, exclude_pid=os.getpid()):
+            _yielded = True
+            if time.time() >= _yield_deadline:
+                logger.info("[Agent LLM] 제어 LLM 장시간 점유 — 양보 대기 한도 도달, 진행")
+                break
+            time.sleep(2)
+        if _yielded:
+            logger.info("[Agent LLM] 제어 LLM 비가동 확인 → agent LLM 작업 진행")
+
+        t0 = time.time()
+        try:
+            with llm_call_lock("agent", wait_sec=AGENT_LLM_LOCK_WAIT):
+                with llm_activity("agent", AGENT_TIMEOUT):
+                    status, data, err = http_json_request(
+                        "POST", url, json_body=payload, timeout=AGENT_TIMEOUT
+                    )
+        except LlmCallLockTimeout as e:
+            status, data, err = 503, None, str(e)
+        except Exception as e:
+            status, data, err = 500, None, str(e)
+
+        elapsed = time.time() - t0
+        last_status, last_err = status, err or ""
+        if status == 200 and isinstance(data, dict):
+            content = (data.get("message") or {}).get("content")
+            if content:
+                logger.info(f"[Agent LLM] 응답 ({elapsed:.1f}s, {len(content)}자)")
+                return content
+            last_err = "empty assistant content"
+            logger.warning(f"[Agent LLM] 빈 응답 ({elapsed:.1f}s)")
+        else:
+            logger.warning(
+                f"[Agent LLM] 실패 status={status} ({elapsed:.1f}s) "
+                f"err={(err or '')[:160]}"
+            )
+
+        if attempt >= len(backoffs) - 1:
+            break
+        if status == 200 and isinstance(data, dict):
+            continue
+        if not _is_transient_llm_failure(status, last_err):
+            break
+
+    logger.warning(f"[Agent LLM] 최종 실패 status={last_status} err={last_err[:160]}")
+    return None
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -150,13 +291,20 @@ def _parse_response(raw: str) -> Optional[Dict[str, Any]]:
 # tool 이름·args 로 도구 호출. 미존재·예외는 dict 형태로 반환 (LLM 이 다음 step 결정).
 # ────────────────────────────────────────────────────────────────────
 def _execute_tool(tool_name: str, args: Dict[str, Any],
-                  trigger_type: str = "user") -> Dict[str, Any]:
+                  trigger_type: str = "user", task: str = None) -> Dict[str, Any]:
+    # 외부지식 수집 임무: 검색·MCP·지식저장 외 도구(농장제어 등) 차단 — 조사·저장에 집중.
+    if task is not None and _route_block(task) == 'CTRL_AGENT_EXTERNAL':
+        _ext_allowed = set(_EXTERNAL_TOOLS) | set(_KNOWLEDGE_TOOLS)
+        if tool_name not in _ext_allowed:
+            return {"error": f"'{tool_name}' 은 외부 정보 수집 임무에서 사용할 수 없습니다. "
+                             f"이 임무는 조사·저장 전용이니 search_web/mcp_call 로 조사하고 "
+                             f"save_knowledge 로 저장하세요. 사용 가능: {sorted(_ext_allowed)}"}
     if tool_name not in TOOL_REGISTRY:
         return {"error": f"unknown tool '{tool_name}'. Available: {list(TOOL_REGISTRY.keys())}"}
     fn = TOOL_REGISTRY[tool_name]
     if not isinstance(args, dict):
         return {"error": f"args 는 dict 여야 합니다. got: {type(args).__name__}"}
-    # [Phase 3] write 도구는 LLM 이 모르는 trigger_type 을 자동 주입.
+    # write 도구는 LLM 이 모르는 trigger_type 을 자동 주입.
     # LLM 이 명시했더라도 schedule/user 결정 권한은 호출자(ai_monitor_agent)에 있음.
     call_args = args
     if tool_name in _WRITE_TOOL_NAMES:
@@ -181,58 +329,270 @@ def _detect_loop(history: List[Dict[str, Any]]) -> bool:
     return len(set(keys)) == 1
 
 
+# ────────────────────────────────────────────────────────────────────
+# tool_result → LLM 메시지용 dict.
+# 길면 핵심 필드(success/error/n/note)만 남기고 preview 로 압축.
+# history 에는 항상 원본 full result 를 저장하므로 DB 기록에 영향 없음.
+# ────────────────────────────────────────────────────────────────────
+def _trim_tool_msg(result: Dict[str, Any]) -> Dict[str, Any]:
+    full = json.dumps(result, ensure_ascii=False)
+    if len(full) <= _TOOL_RESULT_MSG_CHARS:
+        return result
+    core = {k: result[k] for k in ("success", "error", "n", "note") if k in result}
+    core["_truncated"] = True
+    core["_preview"] = full[:_TOOL_RESULT_MSG_CHARS - 80]
+    return core
+
+
 # ════════════════════════════════════════════════════════════════════
 # 시스템 프롬프트 합성
 # ════════════════════════════════════════════════════════════════════
 
 # ────────────────────────────────────────────────────────────────────
-# prompt_block_m 에 'AGENT_MONITOR_SYSTEM' 이 있으면 사용, 없으면 inline 폴백.
-# 도구 목록은 동적으로 주입 (TOOL_SPECS 변경 시 자동 반영).
+# control_prompt_m 의 'CTRL_AGENT_SYSTEM' 을 사용 (DB 단일 소스).
+# 도구 목록·최대단계는 ${TOOLS}/${MAX_STEPS} placeholder 로 동적 주입.
 # ────────────────────────────────────────────────────────────────────
-_INLINE_SYSTEM = """/no_think
-당신은 자연들에 농장의 스마트팜 모니터링 에이전트입니다.
-
-역할:
-- 호기(1-1, 1-2, 1-3 등)의 센서·릴레이·LLM 결정 이력을 자율 분석
-- 위험 추세(수온/내부온도/CO2/습도) 선제 감지
-- 호기 간 비교로 이상치 검출
-- 명백한 위험 시 변경 도구로 자동 대응 (시스템 비상가드 비활성 상태)
-- 최종 보고는 한국어, 운영자가 즉시 이해 가능한 수준
-
-사용 가능 도구:
-{TOOLS}
-
-응답 형식 (반드시 JSON 한 객체. 다른 텍스트 금지):
-  도구 호출:    {{"thought": "왜 이 도구가 필요한지", "tool": "<도구명>", "args": {{...}}}}
-  최종 보고:    {{"thought": "결론에 도달한 사고", "final": "한국어 보고 본문"}}
-
-규칙:
-- 한 응답에 정확히 thought + (tool/args 또는 final) 만 포함
-- args 는 도구 명세에 정의된 키만 사용
-- 최대 {MAX_STEPS}단계 안에 final 도달
-- 같은 도구를 같은 args 로 3회 연속 호출 금지
-
-변경 도구 사용 정책 (매우 중요):
-- 시스템 비상가드가 비활성화되어 자동 대응 권한이 당신에게 있습니다. 신중하게.
-- 모든 변경 도구는 30초 취소 큐를 거칩니다 — 즉시 적용되지 않고 사용자가 취소할 수 있습니다.
-- send_user_alert 만 즉시 실행됩니다. *인지가 필요한 모든 신호* 는 이 도구로 알리세요.
-- 의심 단계 = send_user_alert 만. 확신 단계 = set_relay/set_threshold/set_growth_stage.
-- 호기당 일일 10회 / 같은 도구 60초 cooldown 제한 — 폭주 금지.
-- 변경 도구의 reason 필드는 사용자 화면에 보입니다 — 짧고 명확하게 (예: "수온 18℃ 비상저온, 히터 ON").
-"""
+# 외부정보 조사 임무 판정 — 해당 시 제어프롬프트가 아닌 외부전용 프롬프트로 라우팅.
+# (제어 프레이밍이 강해 gemma3 가 외부임무에도 릴레이 순찰로 빠지는 것을 근본 차단.)
+_EXTERNAL_TASK_RE = re.compile(
+    r"웹\s*검색|검색해|검색하|인터넷|외부\s*정보|외부에서|논문|시세|가격|뉴스|기사|"
+    r"기상\s*예보|날씨|병해충|재배\s*기술|재배\s*정보|재배\s*팁|정보를?\s*찾|알아봐|"
+    r"조사해|search_web|mcp|arxiv|paper[- ]?search|naver", re.IGNORECASE)
 
 
-def build_system_prompt(max_steps: int = AGENT_MAX_STEPS) -> str:
-    # DB 의 prompt_block_m 우선 시도 — 운영자가 web UI 로 수정 가능
+def _is_external_info_task(task: str) -> bool:
+    return bool(task and _EXTERNAL_TASK_RE.search(str(task)))
+
+
+# 코딩·디버깅 임무 판정 — 해당 시 코딩전용 프롬프트(write→run→수정→재실행)로 라우팅.
+_CODING_TASK_RE = re.compile(
+    r"코드|코딩|디버깅|디버그|버그|파이썬|python|스크립트|script|함수|알고리즘|"
+    r"소스\s*분석|구현\s*분석|실행해\s*보|돌려\s*보|write_script|run_script|"
+    r"에러\s*(고쳐|수정|찾)|오류\s*(고쳐|수정|찾)|테스트\s*코드", re.IGNORECASE)
+
+
+# 트레이딩(국내주식 자동매매) 임무 판정 — 해당 시 트레이딩전용 프롬프트로 라우팅.
+_TRADING_TASK_RE = re.compile(
+    r"매매|매수|매도|트레이딩|자동매매|종목\s*(선정|추천|스캔)|공시\s*(이벤트|스캔)|"
+    r"주식|증시|주가|시초가|상장사|후보\s*종목|scan_stock_events|trade_candidate", re.IGNORECASE)
+
+
+def _is_trading_task(task: str) -> bool:
+    return bool(task and _TRADING_TASK_RE.search(str(task)))
+
+
+# 원격 서버(SSH) 유지보수 임무 판정 — 코딩 프롬프트(분석→수정→검증)로 라우팅 + 지식 회상.
+_REMOTE_TASK_RE = re.compile(
+    r"원격|ssh|remote_status|remote_run|라즈베리|raspberry|라즈|서버\s*(상태|점검|유지보수|관리|조사)|"
+    r"유지보수|센서.*(관리|유지|점검|프로그램)|릴레이.*(관리|유지|프로그램)|윈도우\s*서버|linux\s*서버",
+    re.IGNORECASE)
+
+
+def _is_remote_task(task: str) -> bool:
+    if _is_trading_task(task):
+        return False
+    return bool(task and _REMOTE_TASK_RE.search(str(task)))
+
+
+def _is_coding_task(task: str) -> bool:
+    # 외부정보·트레이딩 임무가 우선 — 코딩 키워드가 있어도 그쪽이면 그쪽으로.
+    if _is_external_info_task(task) or _is_trading_task(task):
+        return False
+    return bool(task and _CODING_TASK_RE.search(str(task)))
+
+
+def _route_block(task: str = None) -> str:
+    """임무 → 시스템 프롬프트 블록 라우팅(단일 소스). 도구 노출·컨텍스트 판정도 이 함수를 쓴다."""
+    if _is_trading_task(task):
+        return 'CTRL_AGENT_TRADE'
+    if _is_coding_task(task) or _is_remote_task(task):
+        return 'CTRL_AGENT_CODE'
+    if _is_external_info_task(task):
+        return 'CTRL_AGENT_EXTERNAL'
+    return 'CTRL_AGENT_SYSTEM'
+
+
+def build_system_prompt(max_steps: int = AGENT_MAX_STEPS, task: str = None) -> str:
+    from agri_ai_core.src.prompt_registry import get_control_block
+    block_id = _route_block(task)
+    block = get_control_block(block_id, TOOLS=tool_specs_text(task), MAX_STEPS=str(max_steps))
+    if not block and block_id != 'CTRL_AGENT_SYSTEM':   # 특수블록 부재 시 제어블록 폴백
+        block = get_control_block('CTRL_AGENT_SYSTEM',
+                                  TOOLS=tool_specs_text(task), MAX_STEPS=str(max_steps))
+    if block:
+        return block
+    logger.warning("[Agent] 시스템 프롬프트 DB 조회 실패 — 빈 프롬프트 반환")
+    return ""
+
+
+def _short_text(value: Any, limit: int = 160) -> str:
+    text = str(value or "").replace("\n", " ").strip()
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def _flag_text(value: Any) -> str:
+    if value is True:
+        return "ON"
+    if value is False:
+        return "OFF"
+    return "-"
+
+
+def _build_prompt_management_context() -> str:
     try:
-        from agri_ai_core.src.prompt_registry import get_block
-        db_block = get_block('AGENT_MONITOR_SYSTEM',
-                             TOOLS=tool_specs_text(), MAX_STEPS=str(max_steps))
-        if db_block:
-            return db_block
+        from agri_ai_core.src.postgresql.connection import db_session
+        with db_session() as db:
+            ctrl = db.fetch_one(
+                "SELECT COUNT(*) AS active_count, "
+                "       TO_CHAR(MAX(updt_dttm),'YYYY-MM-DD HH24:MI:SS') AS last_update "
+                "FROM control_prompt_m WHERE active_yn='Y'"
+            ) or {}
+            prompt = db.fetch_one(
+                "SELECT COUNT(*) AS active_count, "
+                "       TO_CHAR(MAX(updt_dttm),'YYYY-MM-DD HH24:MI:SS') AS last_update "
+                "FROM prompt_block_m WHERE active_yn='Y'"
+            ) or {}
+        return (
+            "[프롬프트관리/LLM 제어관리]\n"
+            f"- control_prompt_m 활성 {int(ctrl.get('active_count') or 0)}건, "
+            f"최종수정 {ctrl.get('last_update') or '-'}\n"
+            f"- prompt_block_m 활성 {int(prompt.get('active_count') or 0)}건, "
+            f"최종수정 {prompt.get('last_update') or '-'}"
+        )
     except Exception as e:
-        logger.debug(f"[Agent] DB block read 실패 (inline fallback): {e}")
-    return _INLINE_SYSTEM.format(TOOLS=tool_specs_text(), MAX_STEPS=max_steps)
+        logger.debug(f"[Agent Context] prompt 관리 요약 실패: {e}")
+        return ""
+
+
+def _build_recent_control_decisions_context(farm_id: int) -> str:
+    try:
+        from agri_ai_core.src.postgresql.connection import db_session
+        with db_session() as db:
+            rows = db.fetch_all(
+                "SELECT TO_CHAR(decided_at,'MM-DD HH24:MI') AS at, house_id, action, "
+                "       circulation, water_heater, fog_occurs, drainage_motor, "
+                "       LEFT(COALESCE(reason,''), 160) AS reason "
+                "FROM ai_decision_log "
+                "WHERE farm_id=%s AND decided_at > NOW() - %s::interval "
+                "ORDER BY decided_at DESC LIMIT 10",
+                (int(farm_id), f"{_AGENT_RUNTIME_CONTEXT_DECISION_HOURS} hours"),
+                as_dict=True,
+            )
+        if not rows:
+            return ""
+        lines = [
+            f"[최근 환경제어 LLM 판단(ai_decision_log, 최근 {_AGENT_RUNTIME_CONTEXT_DECISION_HOURS}시간)]"
+        ]
+        for r in rows:
+            lines.append(
+                f"- {r.get('at')} h{r.get('house_id')}: {r.get('action')} "
+                f"circ={r.get('circulation') or '-'} "
+                f"heater={_flag_text(r.get('water_heater'))} "
+                f"fog={_flag_text(r.get('fog_occurs'))} "
+                f"drain={_flag_text(r.get('drainage_motor'))} · "
+                f"{_short_text(r.get('reason'), 120)}"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        logger.debug(f"[Agent Context] 최근 제어결정 요약 실패: {e}")
+        return ""
+
+
+def _build_rule_candidate_context(farm_id: int) -> str:
+    try:
+        from agri_ai_core.src.control.ai_self_evolve import (
+            analyze_decision_patterns, format_candidate_rule,
+        )
+        patterns = analyze_decision_patterns(
+            farm_id=int(farm_id), days=7,
+            min_freq=_AGENT_RUNTIME_CONTEXT_RULE_MIN_FREQ,
+            top_k=5,
+        )
+        if not patterns:
+            return ""
+        lines = [
+            f"[룰 후보 요약(rule-candidates, 최근 7일, 최소 {_AGENT_RUNTIME_CONTEXT_RULE_MIN_FREQ}회)]"
+        ]
+        for p in patterns[:5]:
+            rule = format_candidate_rule(p)
+            lines.append(
+                f"- {rule.get('title')}: {int(rule.get('frequency') or 0)}회 · "
+                f"{_short_text(rule.get('content'), 180)}"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        logger.debug(f"[Agent Context] 룰 후보 요약 실패: {e}")
+        return ""
+
+
+def _build_recent_agent_history_context(farm_id: int) -> str:
+    try:
+        from agri_ai_core.src.postgresql.connection import db_session
+        with db_session() as db:
+            rows = db.fetch_all(
+                "SELECT TO_CHAR(COALESCE(ended_at, started_at),'MM-DD HH24:MI') AS at, "
+                "       trigger_type, farm_id, success, "
+                "       LEFT(COALESCE(final_report, reason, ''), 220) AS summary "
+                "FROM agent_decision_log "
+                "WHERE farm_id=%s OR farm_id IS NULL "
+                "ORDER BY id DESC LIMIT %s",
+                (int(farm_id), _AGENT_RUNTIME_CONTEXT_AGENT_LIMIT),
+                as_dict=True,
+            )
+        if not rows:
+            return ""
+        lines = [f"[최근 Agent 이력(agent-history, {len(rows)}건)]"]
+        for r in rows:
+            status = "성공" if r.get('success') else "실패"
+            scope = f"farm={r.get('farm_id')}" if r.get('farm_id') is not None else "farm=ALL"
+            lines.append(
+                f"- {r.get('at')} {r.get('trigger_type')} {scope} {status}: "
+                f"{_short_text(r.get('summary'), 160)}"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        logger.debug(f"[Agent Context] 최근 Agent 이력 요약 실패: {e}")
+        return ""
+
+
+def _build_admin_directive_context(farm_id: int) -> str:
+    # 관리자 강제 지시 — agent 가 지시된 장치를 건드리지 않도록 주입.
+    # (relay_manager 최종 관문에서도 하드 강제되지만 agent 의 불필요한 시도 자체를 방지)
+    try:
+        from agri_ai_core.src.control.admin_directive import format_prompt_block
+        blocks = []
+        for h in (1, 2, 3):
+            b = format_prompt_block(farm_id, h)
+            if b:
+                blocks.append(f"[{h}호] " + b)
+        return "\n".join(blocks)
+    except Exception:
+        return ""
+
+
+def _build_runtime_context(farm_id: int) -> str:
+    sections = []
+    for builder in (
+        lambda: _build_admin_directive_context(farm_id),
+        lambda: _build_prompt_management_context(),
+        lambda: _build_recent_control_decisions_context(farm_id),
+        lambda: _build_rule_candidate_context(farm_id),
+        lambda: _build_recent_agent_history_context(farm_id),
+    ):
+        block = builder()
+        if block:
+            sections.append(block)
+    if not sections:
+        return ""
+    context = (
+        "[Agent 운영 컨텍스트]\n"
+        "이 블록은 관리 화면의 프롬프트/룰/이력 데이터를 자동 요약한 참고자료입니다. "
+        "현재 센서·릴레이 도구 결과가 더 최신이면 도구 결과를 우선하세요.\n\n"
+        + "\n\n".join(sections)
+    )
+    if len(context) > _AGENT_RUNTIME_CONTEXT_MAX_CHARS:
+        context = context[:_AGENT_RUNTIME_CONTEXT_MAX_CHARS - 1] + "…"
+    return context
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -245,7 +605,7 @@ def build_system_prompt(max_steps: int = AGENT_MAX_STEPS) -> str:
 # ────────────────────────────────────────────────────────────────────
 def _persist_agent_log(result: Dict[str, Any], task: str, farm_id: int,
                        trigger_type: str = "user") -> Optional[int]:
-    # [2026-05-01 패턴 준수] db_session().fetch_all(INSERT...RETURNING) 은 commit 안 됨 —
+    # ⚠ db_session().fetch_all(INSERT...RETURNING) 은 commit 안 됨 —
     # ai_decision_log.record_decision 과 동일한 _getconn() + execute + commit 패턴 사용.
     try:
         from agri_ai_core.src.postgresql.connection import db
@@ -295,7 +655,7 @@ def _persist_agent_log(result: Dict[str, Any], task: str, farm_id: int,
         logger.info(f"[Agent DB] log id={log_id} (trigger={trigger_type}, "
                     f"steps={llm_calls}, tools={tool_counts}, success={result.get('success')})")
 
-        # [Phase 3] 이번 사이클이 등록한 agent_pending_actions 의 agent_log_id 채우기
+        # 이번 사이클이 등록한 agent_pending_actions 의 agent_log_id 채우기
         if log_id is not None:
             try:
                 pending_ids = [
@@ -341,11 +701,37 @@ def _persist_agent_log(result: Dict[str, Any], task: str, farm_id: int,
 # ────────────────────────────────────────────────────────────────────
 def run_agent(task: str, farm_id: int = 1, max_steps: int = None,
               trigger_type: str = "user", persist_db: bool = True) -> Dict[str, Any]:
-    max_steps = max_steps or AGENT_MAX_STEPS
+    # 코딩·트레이딩 임무는 다단계라 기본 단계를 넉넉히.
+    if max_steps is None:
+        if _is_trading_task(task):
+            max_steps = AGENT_TRADE_MAX_STEPS
+        elif _is_coding_task(task) or _is_remote_task(task):
+            max_steps = AGENT_CODE_MAX_STEPS
+        else:
+            max_steps = AGENT_MAX_STEPS
     t_start = time.time()
     history: List[Dict[str, Any]] = []
-    system = build_system_prompt(max_steps=max_steps)
-    user_msg = f"농장 ID: {farm_id}\n\n작업: {task}"
+    system = build_system_prompt(max_steps=max_steps, task=task)
+    # 외부지식 수집 임무엔 농장 운영 컨텍스트(제어이력·비상)를 넣지 않는다 —
+    # 습도100% 같은 비상 맥락이 있으면 LLM 이 조사 대신 제어로 새기 때문(성장루프 보호).
+    runtime_context = "" if _route_block(task) == 'CTRL_AGENT_EXTERNAL' else _build_runtime_context(farm_id)
+    user_parts = [f"농장 ID: {farm_id}"]
+    if runtime_context:
+        user_parts.extend(["", runtime_context])
+        logger.info(f"[Agent Context] runtime context {len(runtime_context)}자 주입")
+    # 코딩·트레이딩·원격 임무엔 system_knowledge(코딩·MCP·시스템관리·원격 SSH) 회상 주입 —
+    # 로컬 LLM이 라즈베리파이 등 원격 유지보수 시 명령·절차 지식을 바로 사용하도록.
+    if _is_coding_task(task) or _is_trading_task(task) or _is_remote_task(task):
+        try:
+            from agri_ai_core.src.ai.system_knowledge import recall_system_knowledge
+            _sk = recall_system_knowledge(task)
+            if _sk:
+                user_parts.extend(["", _sk])
+                logger.info(f"[Agent Context] 시스템지식 {len(_sk)}자 주입")
+        except Exception:
+            pass
+    user_parts.extend(["", f"작업: {task}"])
+    user_msg = "\n".join(user_parts)
 
     messages: List[Dict[str, str]] = [
         {"role": "system", "content": system},
@@ -353,9 +739,28 @@ def run_agent(task: str, farm_id: int = 1, max_steps: int = None,
     ]
 
     logger.info(f"[Agent 시작] farm={farm_id} trigger={trigger_type} task={task!r}")
+    _empty_count = 0  # 연속 빈 응답 카운터 — 컨텍스트 포화 조기 감지
+    _read_counts: Dict[str, int] = {}  # 조회 도구 세션 호출 횟수 (루프 방지용)
 
     for step in range(max_steps):
         raw = _call_llm(messages, json_format=True)
+
+        # 빈 응답 추적 (None 또는 "" 모두 컨텍스트 포화 신호)
+        if not raw:
+            _empty_count += 1
+            logger.warning(f"[Agent step {step}] 빈 응답 {_empty_count}회 연속")
+            if _empty_count >= 2:
+                duration = time.time() - t_start
+                logger.warning(f"[Agent] 빈 응답 {_empty_count}회 → 조기 종료 (컨텍스트 포화 추정)")
+                result = {"success": False,
+                          "reason": f"연속 빈 응답 {_empty_count}회 (컨텍스트 포화)",
+                          "steps": history, "duration_sec": round(duration, 2)}
+                if persist_db:
+                    result["log_id"] = _persist_agent_log(result, task, farm_id, trigger_type)
+                return result
+        else:
+            _empty_count = 0
+
         parsed = _parse_response(raw)
 
         if parsed is None:
@@ -371,12 +776,42 @@ def run_agent(task: str, farm_id: int = 1, max_steps: int = None,
 
         history.append({"step": step, **parsed})
 
+        # LLM 이 "final" 대신 다른 키를 사용한 경우 정규화 (answer/result/report/conclusion 등)
+        if "final" not in parsed and "tool" not in parsed:
+            _ALT_FINAL_KEYS = ("answer", "result", "response", "report",
+                               "conclusion", "summary", "output")
+            for _alt in _ALT_FINAL_KEYS:
+                if _alt in parsed:
+                    _val = parsed.pop(_alt)
+                    parsed["final"] = _val
+                    history[-1].pop(_alt, None)
+                    history[-1]["final"] = _val
+                    logger.info(f"[Agent step {step}] '{_alt}' → 'final' 정규화")
+                    break
+            else:
+                # alt 키도 없으면 — thought 가 100자 이상이면 최종 보고로 처리
+                _thought = parsed.get("thought", "")
+                if len(_thought) > 100:
+                    parsed["final"] = _thought
+                    history[-1]["final"] = _thought
+                    logger.info(f"[Agent step {step}] thought({len(_thought)}자) → final 대체 처리")
+
         # final → 종료
         if "final" in parsed:
             duration = time.time() - t_start
-            logger.info(f"[Agent 완료] step={step} duration={duration:.1f}s final={parsed['final'][:80]!r}")
+            # next_check_minutes 파싱 + 클램프 (자율 재스케줄)
+            ncm = parsed.get("next_check_minutes")
+            if ncm is not None:
+                try:
+                    ncm = max(_NCM_MIN, min(_NCM_MAX, int(ncm)))
+                except (TypeError, ValueError):
+                    ncm = None
+            logger.info(
+                f"[Agent 완료] step={step} duration={duration:.1f}s "
+                f"next_check={ncm}min final={parsed['final'][:80]!r}"
+            )
             result = {"success": True, "final": parsed["final"], "steps": history,
-                      "duration_sec": round(duration, 2)}
+                      "duration_sec": round(duration, 2), "next_check_minutes": ncm}
             if persist_db:
                 result["log_id"] = _persist_agent_log(result, task, farm_id, trigger_type)
             return result
@@ -400,12 +835,61 @@ def run_agent(task: str, farm_id: int = 1, max_steps: int = None,
                 result["log_id"] = _persist_agent_log(result, task, farm_id, trigger_type)
             return result
 
-        result = _execute_tool(tool_name, args, trigger_type=trigger_type)
-        history[-1]["tool_result"] = result
+        # 도구 세션 호출 횟수 제한 — 초과 시 도구 실행 없이 final 압박.
+        #   · 코딩 도구는 디버깅 반복(write→run→수정→재실행)이 정상이라 캡을 넉넉히(_MAX_CODE_TOOL_CALLS).
+        #   · 일반 조회 도구는 2회(_MAX_READ_TOOL_CALLS) — 수집 폭주 방지(제어 프레이밍).
+        if tool_name not in _WRITE_TOOL_NAMES:
+            _read_counts[tool_name] = _read_counts.get(tool_name, 0) + 1
+            _is_code = tool_name in _CODE_TOOL_NAMES or tool_name in _TRADE_TOOL_NAMES
+            _cap = (_MAX_TRADE_TOOL_CALLS if tool_name in _TRADE_TOOL_NAMES
+                    else _MAX_CODE_TOOL_CALLS if tool_name in _CODE_TOOL_NAMES
+                    else _MAX_READ_TOOL_CALLS)
+            if _read_counts[tool_name] > _cap:
+                logger.warning(
+                    f"[Agent step {step}] '{tool_name}' 세션 {_read_counts[tool_name]}회 호출 — 제한({_cap}) 초과, final 압박 주입"
+                )
+                messages.append({"role": "assistant", "content": json.dumps(parsed, ensure_ascii=False)})
+                _press = (
+                    (f"'{tool_name}'을 이미 {_read_counts[tool_name] - 1}회 실행했습니다. "
+                     "무한 반복 대신 지금까지의 실행 결과로 결론(정상 동작/원인/수정내용)을 정리해 "
+                     "최종 보고서를 작성하세요.")
+                    if _is_code else
+                    (f"'{tool_name}'은 이미 {_read_counts[tool_name] - 1}회 조회되었습니다. "
+                     "추가 수집 없이 지금 바로 set_relay 로 제어하거나 최종 보고서를 작성하세요.")
+                )
+                messages.append({"role": "user",
+                    "content": _press + '\n형식: {"thought":"결론","final":"한국어 보고","next_check_minutes":N}'})
+                history[-1]["_skipped"] = f"read_limit_{tool_name}"
+                continue
+
+        result = _execute_tool(tool_name, args, trigger_type=trigger_type, task=task)
+        history[-1]["tool_result"] = result  # history 에는 항상 full result
 
         messages.append({"role": "assistant", "content": json.dumps(parsed, ensure_ascii=False)})
+        # LLM 메시지에는 truncate 버전 — 컨텍스트 보호 (history full 은 유지)
         messages.append({"role": "user",
-            "content": json.dumps({"tool_result": result}, ensure_ascii=False)})
+            "content": json.dumps({"tool_result": _trim_tool_msg(result)}, ensure_ascii=False)})
+
+        # 쓰기 도구 성공 직후 즉시 final 압박 — 컨텍스트 추가 소모 없이 보고 유도
+        if tool_name in _WRITE_TOOL_NAMES and result.get("success"):
+            logger.info(f"[Agent step {step}] '{tool_name}' 성공 → final 즉시 압박 주입")
+            messages.append({
+                "role": "user",
+                "content": (
+                    "제어가 완료되었습니다. 지금까지 수집·제어한 내용을 바탕으로 즉시 최종 보고서를 작성하세요.\n"
+                    '형식: {"thought":"결론 사유","final":"한국어 최종 보고","next_check_minutes":N}'
+                ),
+            })
+        # max_steps-2 step 완료 후 최종 보고 압박 — 다음(마지막) LLM 호출에서 final 유도
+        elif step == max_steps - 2:
+            messages.append({
+                "role": "user",
+                "content": (
+                    "이것이 마지막 데이터 수집입니다. "
+                    "지금까지 수집한 정보로 즉시 최종 보고를 작성하세요.\n"
+                    '형식: {"thought":"결론 사유","final":"한국어 최종 보고","next_check_minutes":N}'
+                ),
+            })
 
     duration = time.time() - t_start
     logger.warning(f"[Agent 종료] MAX_STEPS({max_steps}) 초과")

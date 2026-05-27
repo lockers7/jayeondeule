@@ -1,10 +1,9 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# AI/알고리즘 환경제어 — 재배사별 임계값 동적 로드 모듈 (M18, [2026-04-28 rev2])
-# [Phase 3-a · 2026-05-09] 캐시 invalidate 정책을 TTL → updt_dttm 비교로 변경.
-#                          web UI 변경 즉시 반영(다음 호출에서). TTL 폐기.
+# AI/알고리즘 환경제어 — 재배사별 임계값 동적 로드 모듈 (M18)
+# 캐시 invalidate: updt_dttm 비교 (TTL 캐시 금지) — web UI 변경 즉시 반영(다음 호출에서).
 #
-# 사용자 강제 요구: "센서값은 절대 하드코딩 금지. 테이블 컬럼 값만 변경하면 되어야
-# 한다." → 정상/비상/발이기 모든 임계값을 SENSOR_M_SETTING 테이블에서 직접 조회.
+# ⚠ 센서 임계값 하드코딩 절대 금지 — 테이블 컬럼 값만 변경하면 되어야 한다.
+# 정상/비상/발이기 모든 임계값을 SENSOR_M_SETTING 테이블에서 직접 조회.
 # 자동 도출 폭은 사용하지 않으며, DB 행이 없거나 모든 핵심 컬럼이 NULL 인 경우에만
 # 부팅 안전을 위해 최후 폴백 값으로 동작.
 #
@@ -39,16 +38,16 @@ import agri_ai_core.src.postgresql.queries as dbQry
 logger = setup_logger(__name__)
 
 
-# [Phase 3-a] TTL 폐기. updt_dttm 비교 invalidate 로 전환.
+# TTL 캐시 금지 — updt_dttm 비교 invalidate.
 # 캐시 entry 형식: (last_seen_updt_dttm, ThresholdSet)
 # 매 호출마다 max(updt_dttm) 1건 SELECT — 동일하면 hit, 다르면 전체 재로드.
 _CACHE: Dict[tuple, tuple] = {}
 
 
 # 최후 폴백 — DB 미연결 / 행 부재 / 모든 컬럼 NULL 인 비상 상황에만 사용.
-# 운영에서는 마이그레이션·백필 후 절대 진입하지 않아야 함. 사용자 강조사항
-# "센서값 하드코딩 금지" 에 부합하도록 환경변수로 외부화 — 코드 재배포 없이
-# 운영 환경별로 폴백 값을 바꿀 수 있게 한다.
+# 운영에서는 절대 진입하지 않아야 함. "센서값 하드코딩 금지" 원칙에
+# 따라 환경변수로 외부화 — 코드 재배포 없이 운영 환경별로 폴백 값을
+# 바꿀 수 있게 한다.
 #
 # 환경변수 이름:
 #   AI_FB_TEMP_LOW / AI_FB_TEMP_HIGH / AI_FB_TEMP_CRIT_LOW / AI_FB_TEMP_CRIT_HIGH
@@ -225,7 +224,7 @@ def get_global_default() -> ThresholdSet:
 
 # ────────────────────────────────────────────────────────────────────
 # 재배사별 정상/비상 임계값 한 번에 조회.
-# [Phase 3-a] 캐시 invalidate: SENSOR_M_SETTING.max(updt_dttm) 비교.
+# 캐시 invalidate: SENSOR_M_SETTING.max(updt_dttm) 비교.
 #   - 매 호출마다 max(updt_dttm) 1건 SELECT (가벼움)
 #   - 캐시의 updt_dttm 와 동일 → 캐시 hit (DB 재로드 skip)
 #   - 다르거나 캐시 없음 → 전체 재로드 후 캐시 갱신

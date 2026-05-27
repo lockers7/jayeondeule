@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════════════════
-# Phase 2 단위테스트 — task_scheduler 동적화 (SCHEDULE_M_SETTING 기반).
+# 단위테스트 — task_scheduler 동적 스케줄 (SCHEDULE_M_SETTING 기반).
 #
 # 검증 항목:
 #   1) _add_job_from_row 가 interval row → IntervalTrigger 등록

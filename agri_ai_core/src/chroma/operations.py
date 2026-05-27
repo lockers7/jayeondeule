@@ -388,7 +388,7 @@ def query_documents(collection_name, query_embeddings=None, n_results=5, where=N
 
         _RETRY_EMPTY = {"matches": [], "ids": [], "documents": [], "metadatas": [], "distances": []}
 
-        # 재시도 2회, 타임아웃 10초 — 기존 30초x3회(=90초 블로킹)에서 10초x2회(=20초)로 축소
+        # 재시도 2회, 타임아웃 10초
         for retry in range(2):
             try:
                 status_code, result, text = _http_post(url, payload, timeout=10)

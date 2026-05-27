@@ -37,9 +37,9 @@ def safe_int(value, default=0):
 
 
 # ────────────────────────────────────────────────────────────────────
-# [변경4 · 2026-04-30] STANDARD 5-tuple + E 3-tuple 혼재 흡수.
+# STANDARD 5-tuple + E 3-tuple 혼재 흡수.
 #   STANDARD : 키=relay_Nst_flag (컬럼명) 만 존재 → 시멘틱 키는 RelayDef.sem 으로 보강
-#   E        : 키=시멘틱+컬럼명 혼재 (기존 그대로)
+#   E        : 키=시멘틱+컬럼명 혼재
 # ────────────────────────────────────────────────────────────────────
 def _allowed_relay_keys():
     return (set(RELAY_FIELD_MAPPING)            # STANDARD 컬럼명
@@ -90,7 +90,7 @@ def convert_sensor_relay_data(data_item):
 def extract_relay_data(data_item):
     relay_data = {}
 
-    # STANDARD/E 모두 RelayDef.sem 으로 시멘틱 키 추출 (E는 5-tuple 변경 이후)
+    # STANDARD/E 모두 RelayDef.sem 으로 시멘틱 키 추출
     for d in (RELAY_FIELD_MAPPING, RELAY_FIELD_MAPPING_E):
         for r in d.values():
             if r.sem in data_item and r.sem not in relay_data:

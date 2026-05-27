@@ -1,6 +1,6 @@
 # ════════════════════════════════════════════════════════════
 # LLM 워밍업 — 백그라운드에서 첫 LLM 호출로 모델 VRAM 적재 + 추론 준비.
-# startup.py에서 1회 호출. llm_client.py에서 분리.
+# startup.py에서 1회 호출.
 # --->
 # _perform_llm_warmup: LLM에 ping 요청으로 모델 사전 로드
 # initialize_background_warmup: 백그라운드 스레드로 워밍업 시작

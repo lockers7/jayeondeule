@@ -1,5 +1,5 @@
 # ════════════════════════════════════════════════════════════════════
-# [프롬프트 자동화 · Phase 5] ai_self_evolve 단위 테스트.
+# ai_self_evolve 단위 테스트.
 # DB / HTTP 호출 없이 mock 으로 검증 — CI 안전.
 #
 # 파일 시작 함수 목록:
@@ -137,8 +137,10 @@ def test_register_approved_rule_success():
         )
     assert result['success'] is True
     assert result['rule_id'].startswith('learned_')
-    fake_upsert.assert_called_once()
-    args, _ = fake_upsert.call_args
+    # 승인 룰은 이중 저장:
+    # 1차 domain_rule + 2차 document_collection(제어 도메인RAG 소비, doc_id=rule_ 접두)
+    assert fake_upsert.call_count == 2
+    args, _ = fake_upsert.call_args_list[0]
     assert args[0] == 'domain_rule'
     docs = args[1]
     assert len(docs) == 1
@@ -146,6 +148,9 @@ def test_register_approved_rule_success():
     assert docs[0]['metadata']['farm_id'] == 1
     assert docs[0]['metadata']['house_id'] == 99
     assert docs[0]['metadata']['source'] == 'self_evolve'
+    args2, _ = fake_upsert.call_args_list[1]
+    assert args2[1][0]['doc_id'] == f"rule_{result['rule_id']}"
+    assert args2[1][0]['metadata']['data_type'] == 'domain_knowledge'
     fake_clear.assert_called_once()
 
 

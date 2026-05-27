@@ -1,0 +1,65 @@
+export const products = [
+  {
+    id: 'pl-001',
+    name: '프리미엄 상황버섯 (건조 원물)',
+    subtitle: 'AI 스마트팜 재배 / 국내산',
+    price: 150000,
+    unit: '100g',
+    category: '건조 원물',
+    description: 'AI가 24시간 최적 환경을 유지하는 스마트팜에서 정성껏 재배한 프리미엄 상황버섯입니다. 두꺼운 갓과 진한 색상이 특징이며, 직접 달여서 드시기에 적합합니다.',
+    features: ['AI 환경제어 재배', '무농약 원목재배', '국내산 100%', '두꺼운 갓 엄선'],
+    images: ['/images/products/product-01.jpg'],
+    inStock: true,
+  },
+  {
+    id: 'pl-002',
+    name: '상황버섯 절편 (슬라이스)',
+    subtitle: '간편하게 달여 드세요',
+    price: 80000,
+    unit: '300g',
+    category: '절편',
+    description: '프리미엄 상황버섯을 얇게 슬라이스하여 건조한 제품입니다. 원물 대비 달이는 시간이 단축되어 편리하게 이용하실 수 있습니다.',
+    features: ['AI 스마트팜 재배', '편리한 슬라이스', '빠른 추출', '국내산'],
+    images: ['/images/products/product-02.jpg'],
+    inStock: true,
+  },
+  {
+    id: 'pl-003',
+    name: '상황버섯 선물세트',
+    subtitle: '소중한 분께 건강을 선물하세요',
+    price: 200000,
+    unit: '1세트 (원물 100g + 절편 200g)',
+    category: '선물세트',
+    description: '프리미엄 상황버섯 원물과 절편을 고급 패키지에 담았습니다. 명절, 생일, 감사의 마음을 전하는 건강 선물로 최적입니다.',
+    features: ['고급 패키지', '원물 + 절편 구성', '감사 카드 동봉', '무료 배송'],
+    images: ['/images/products/product-03.jpg'],
+    inStock: true,
+  },
+  {
+    id: 'pl-004',
+    name: '상황버섯 분말',
+    subtitle: '물에 타서 간편하게',
+    price: 60000,
+    unit: '200g',
+    category: '분말',
+    description: '건조 상황버섯을 미세하게 분쇄한 분말 제품입니다. 물이나 우유에 타서 드시거나, 요리에 첨가하여 활용하실 수 있습니다.',
+    features: ['초미세 분쇄', '다양한 활용', '간편 섭취', '밀봉 포장'],
+    images: ['/images/products/product-04.jpg'],
+    inStock: false,
+  },
+];
+
+export const bankInfo = {
+  bankName: '국민은행',
+  accountNumber: '073-24-0581-494',
+  accountHolder: '임 채 균',
+};
+
+export const companyInfo = {
+  name: '자연들에',
+  ceo: '대표자명',
+  bizNumber: '000-00-00000',
+  address: '56148	전북특별자치도 정읍시 영원면 성지1길 17-27 (후지리)\n       전북특별자치도 정읍시 영원면 후지리 461-2',
+  phone: '010-2033-5925',
+  email: 'lockers7@gmail.com',
+};

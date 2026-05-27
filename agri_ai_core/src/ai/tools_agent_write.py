@@ -1,7 +1,7 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# tools_agent_write — AI agent 의 write 도구 + 안전 가드 (Phase 3) [2026-05-25]
+# tools_agent_write — AI agent 의 write 도구 + 안전 가드
 #
-# Phase 3 정책 (비상가드 disable 상태에서 agent 가 유일한 자동 대응 경로):
+# 안전 정책:
 #   ① 모든 write 호출은 *즉시 실행하지 않고* agent_pending_actions 큐에 INSERT
 #   ② 큐에 들어간 row 는 execute_at (NOW()+cancellable_seconds) 도달 시
 #      별도 worker (agent_pending_worker) 가 실제 실행
@@ -47,6 +47,9 @@ logger = setup_logger(__name__)
 CANCELLABLE_SECONDS = int(os.getenv("AGENT_CANCELLABLE_SECONDS", "30"))
 DAILY_LIMIT         = int(os.getenv("AGENT_DAILY_LIMIT",         "10"))
 COOLDOWN_SECONDS    = int(os.getenv("AGENT_COOLDOWN_SECONDS",    "60"))
+# 동일 내용 알림 중복 억제 창(분) — 같은 message 가 이 시간 내
+# 이미 발송됐으면 재발송을 억제하고 LLM 에게 사유를 알려준다(한도 소진 방지).
+ALERT_DEDUP_MINUTES = int(os.getenv("AGENT_ALERT_DEDUP_MINUTES", "30"))
 
 # ── 도구별 기본 cancellable_seconds (override 가능) ──
 # send_user_alert 는 안전한 알림 → 0초 즉시 실행
@@ -56,14 +59,20 @@ TOOL_CANCELLABLE_OVERRIDE: Dict[str, int] = {
 
 # ── 도구별 daily_limit override ──
 # send_user_alert 는 더 관대 (알림은 막힐 일 적음)
+# set_relay 500: agent 는 사이클당 릴레이 2~3개를 개별 호출하므로
+#   하루 144사이클 × 2~3 = 288~432 건이 정상 사용량. 500 은 폭주(오작동 LLM)
+#   차단 전용 최후 안전망 — agent 자율권 원칙상 한도는 정상 운용을 절대 막지
+#   않는 수준으로 유지. 진동 방지는 cooldown(60초)이 담당.
+# send_user_alert 100: dedupe 로 실사용은 적으므로 한도는 폭주 차단 전용 여유값.
 TOOL_DAILY_LIMIT_OVERRIDE: Dict[str, int] = {
-    "send_user_alert": 50,
+    "send_user_alert": 100,
+    "set_relay": 500,
 }
 
 # ── 유효 인자 화이트리스트 ──
-# [2026-05-25 hotfix2] 실제 pin_map (control_common.get_pin_map) 의 키와 정렬.
+# 실제 pin_map (control_common.get_pin_map) 의 키와 정렬.
 # 모든 호기 공통 10개 시멘틱. 임의 영문명 (water_heater 등) 사용 시 relay_manager
-# 가 silent skip 하여 false success 반환하는 사고 방지.
+# 가 silent skip 하여 false success 반환하므로 화이트리스트로 차단.
 VALID_RELAY_SEMANTICS = {
     "water_heater_flag",          # 수온 히터
     "fog_occurs_flag",             # 분무기 (가습)
@@ -116,7 +125,17 @@ def _enqueue(tool_name: str, args: Dict[str, Any], reason: str,
             cur.execute(sql, vals)
             row = cur.fetchone()
             conn.commit()
-        return int(row['id']) if row and 'id' in row else None
+        new_id = int(row['id']) if row and 'id' in row else None
+        # 제어중재 — agent 릴레이 제어 시작 시각 기록(set_relay 큐 적재 시점).
+        if new_id is not None and tool_name == "set_relay":
+            try:
+                from agri_ai_core.src.control import control_arbitration as _arb
+                _fid = args.get("farm_id"); _hid = args.get("house_id")
+                if _fid is not None and _hid is not None:
+                    _arb.stamp_agent_start(_fid, _hid)
+            except Exception:
+                pass
+        return new_id
     except Exception as e:
         logger.warning(f"[Agent Write] _enqueue 실패: {e}")
         try: conn.rollback()
@@ -175,6 +194,31 @@ def _last_call_at(tool_name: str, farm_id: Optional[int],
         return row["created_at"] if row else None
     except Exception as e:
         logger.warning(f"[Agent Write] _last_call_at 실패: {e}")
+        return None
+
+
+# ────────────────────────────────────────────────────────────────────
+# 동일 내용 알림 최근 발송 여부 — dedupe 창 내 같은 message 검색.
+# 실패 시 None(억제 안 함 — 알림 누락보다 중복이 낫다).
+# ────────────────────────────────────────────────────────────────────
+def _same_alert_recent(message: str) -> Optional[datetime]:
+    try:
+        from agri_ai_core.src.postgresql.connection import db_session
+    except Exception:
+        return None
+    try:
+        q = (
+            "SELECT created_at FROM agent_pending_actions "
+            "WHERE tool_name='send_user_alert' "
+            "  AND created_at >= NOW() - (%s || ' minutes')::interval "
+            "  AND args->>'message' = %s "
+            "ORDER BY created_at DESC LIMIT 1"
+        )
+        with db_session() as d:
+            row = d.fetch_one(query=q, vals=(str(ALERT_DEDUP_MINUTES), message))
+        return row["created_at"] if row else None
+    except Exception as e:
+        logger.warning(f"[Agent Write] _same_alert_recent 실패: {e}")
         return None
 
 
@@ -358,6 +402,17 @@ def send_user_alert(*, level: str, message: str, reason: str = "",
         return {"success": False, "reason": "invalid_args",
                 "message": str(e), "action_id": None}
 
+    # 동일 내용 알림 중복 억제 — 한도(일일) 소진으로 정작 새 위기
+    # 알림이 차단되는 것을 방지. LLM 에게 사유를 명확히 알려 스스로 판단하게 한다.
+    dup_at = _same_alert_recent(message)
+    if dup_at is not None:
+        ago_min = max(0, int((datetime.now() - dup_at).total_seconds() // 60))
+        logger.info(f"[Agent Write] send_user_alert 중복 억제 — 동일 내용 {ago_min}분 전 발송")
+        return {"success": False, "reason": "duplicate_alert", "action_id": None,
+                "message": (f"동일 내용 알림이 {ago_min}분 전 이미 발송되어 중복 발송을 "
+                            f"억제했습니다(창 {ALERT_DEDUP_MINUTES}분). 상황이 변했거나 "
+                            f"새 정보가 있을 때만 내용을 갱신해 다시 알리세요.")}
+
     cancellable = TOOL_CANCELLABLE_OVERRIDE.get("send_user_alert", 0)
     args = {"level": level, "message": message}
     aid = _enqueue("send_user_alert", args, reason, trigger_type, cancellable,
@@ -385,7 +440,8 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     {
         "name": "set_relay",
         "description": ("릴레이(장치) ON/OFF 변경 요청. 30초 취소 큐에 들어간 후 실행. "
-                        "비상가드가 비활성화된 상태이므로 신중히 호출 — 호기당 일일 10회 / 60초 cooldown."),
+                        "호기당 일일 500회 안전한도 / 동일 호기 60초 cooldown — 정상 제어를 "
+                        "막지 않는 폭주 차단용이므로 필요한 제어는 주저 없이 수행하라."),
         "args": {
             "farm_id":  "int — 농장 ID",
             "house_id": "int — 호기 ID (0=공통 거부)",
@@ -421,7 +477,9 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     },
     {
         "name": "send_user_alert",
-        "description": "사용자에게 즉시 알림. 안전한 도구 — 취소 큐 0초 (즉시 실행).",
+        "description": ("사용자에게 즉시 알림. 안전한 도구 — 취소 큐 0초 (즉시 실행). "
+                        "동일 내용은 30분 내 중복 발송이 억제되므로, 상황 변화 시 "
+                        "수치·시각 등 새 정보를 담아 내용을 갱신해 알려라."),
         "args": {
             "level":   "str — info / warning / critical",
             "message": "str — 1~1000자",

@@ -1,13 +1,14 @@
 # ════════════════════════════════════════════════════════════════
 # MCP 순수 유틸리티 — 상태/통신 없는 pure helper 함수 모음
-# mcp_client.py에서 분리된 표준 JSON-RPC 빌더, 결과 추출, 검색 결과 포맷,
-# 마크다운 표 파서 등이 포함된다.
+# 표준 JSON-RPC 빌더, 결과 추출, 검색 결과 포맷, 마크다운 표 파서 등이
+# 포함된다 (mcp_client.py 에서 사용).
 # --->
 # build_jsonrpc: JSON-RPC 2.0 요청 payload 생성
 # find_response_line: stdout 줄 단위 스캔으로 응답 ID 매칭
 # extract_text_blocks: MCP result.content 배열에서 텍스트 블록 수집
 # format_search_result: 웹 검색 결과 표준 dict 구성
 # parse_markdown_table: 마크다운 표를 list[dict]로 변환
+# parse_searxng_results: mcp-searxng 의 Title/Description/URL 텍스트 블록 파싱
 # ════════════════════════════════════════════════════════════════
 from typing import Any, Dict, List, Optional
 
@@ -63,6 +64,49 @@ def extract_text_blocks(result: Dict[str, Any]) -> List[str]:
 # ────────────────────────────────────────────────────────────────────
 def format_search_result(title: str, snippet: str, url: str, source: str = "web_search") -> Dict[str, Any]:
     return {"title": title, "snippet": snippet, "url": url, "source": source}
+
+
+# ────────────────────────────────────────────────────────────────────
+# mcp-searxng(searxng_web_search) 응답 파싱.
+# 응답은 JSON 이 아니라 아래 형태의 구조화 텍스트 블록이다:
+#   Title: ...
+#   Description: ...
+#   URL: https://...
+#   Relevance Score: 0.800
+#   (빈 줄로 항목 구분)
+# Title/URL 이 모두 있는 항목만 유효로 본다. 형식이 어긋나면 빈 list 반환 →
+# 호출측이 비구조 텍스트 폴백으로 처리.
+# ────────────────────────────────────────────────────────────────────
+def parse_searxng_results(text: str) -> List[Dict[str, Any]]:
+    if not text or "Title:" not in text:
+        return []
+    out: List[Dict[str, Any]] = []
+    cur: Dict[str, str] = {}
+
+    def _flush():
+        if cur.get("title") and cur.get("url"):
+            out.append(format_search_result(
+                cur["title"], (cur.get("description") or "")[:1000], cur["url"]))
+        cur.clear()
+
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("Title:"):
+            if cur.get("title"):        # 다음 항목 시작 — 직전 항목 확정
+                _flush()
+            cur["title"] = line[len("Title:"):].strip()
+        elif line.startswith("Description:"):
+            cur["description"] = line[len("Description:"):].strip()
+        elif line.startswith("URL:"):
+            cur["url"] = line[len("URL:"):].strip()
+        elif line.startswith("Relevance Score:"):
+            continue
+        elif cur.get("description") is not None and not cur.get("url"):
+            cur["description"] = f"{cur.get('description','')} {line}".strip()
+    _flush()
+    return out
 
 
 # ────────────────────────────────────────────────────────────────────

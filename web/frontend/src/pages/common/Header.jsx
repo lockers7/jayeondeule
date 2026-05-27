@@ -13,6 +13,11 @@ export default function Header() {
     const auth = useSelector(state => state.auth);
     const selectedFarm = useSelector(state => state.auth.selectedFarm);
     const brandName = (auth.token && selectedFarm?.farmName) ? selectedFarm.farmName : "Jayeondeule";
+    // [2026-07-04] 농장별 쇼핑몰 분리 — farm 2(고흥뜰에)=5200, 그 외(자연들에)=5100.
+    // 쇼핑몰은 농장별 독립 인스턴스(shop/goheung — 별도 backend 9092/goheung_shop 스키마).
+    const shopUrl = Number(selectedFarm?.farmId) === 2
+        ? 'http://lockers7.iptime.org:5200'
+        : 'http://lockers7.iptime.org:5100';
 
     return (
         <Navbar bg="light" variant="white" fixed="top" expand="lg">
@@ -24,7 +29,7 @@ export default function Header() {
                         <Nav className="me-auto">
                             <Nav.Link as={Link} to="/ai-chat" style={{fontWeight: "bold"}}>AI 채팅</Nav.Link>
                             {auth.userInfo?.authLvel === "ADMIN" && (
-                                <Nav.Link href="#" onClick={(e) => { e.preventDefault(); window.open('http://lockers7.iptime.org:5100', 'shop_window'); }}
+                                <Nav.Link href="#" onClick={(e) => { e.preventDefault(); window.open(shopUrl, 'shop_window'); }}
                                    style={{fontSize: "0.85rem", color: "#FF7043", fontWeight: "bold"}}>
                                     🛒 쇼핑몰
                                 </Nav.Link>

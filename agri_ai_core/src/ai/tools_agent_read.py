@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# Agent 전용 read-only 도구 모음 (Phase 1) [2026-05-25 신규]
+# Agent 전용 read-only 도구 모음
 #
 # ReAct 패턴의 agent 가 호출하는 read-only 도구 5개:
 #   1. get_sensor_window         — 최근 N분 센서 평균/min/max
@@ -137,7 +137,7 @@ def get_relay_state(farm: int, house: int) -> Dict[str, Any]:
             return {"success": True, "farm": farm, "house": house, "note": "릴레이 기록 없음"}
         row = rows[0]
         recorded_at = row[0]
-        raw_flags = {cols[i]: bool(row[i+1]) for i in range(16)}
+        raw_flags = {cols[i]: _bool_flag(row[i+1]) for i in range(16)}
         pin_map = get_pin_map(house)
         inverse = {pin: sem for sem, pin in pin_map.items()}
         semantic_on: List[str] = []
@@ -178,8 +178,8 @@ def compare_houses(farm: int, metric: str) -> Dict[str, Any]:
         with db_session() as db:
             rows = db.fetch_all(
                 f"SELECT h.hous_id, "
-                f" (SELECT {col} FROM sensor_l_recording WHERE farm_id=%s AND hous_id=h.hous_id ORDER BY recd_dttm DESC LIMIT 1),"
-                f" (SELECT avg({col}) FROM sensor_l_recording WHERE farm_id=%s AND hous_id=h.hous_id AND recd_dttm > NOW() - INTERVAL '60 minutes') "
+                f" (SELECT {col} FROM sensor_l_recording WHERE farm_id=%s AND hous_id=h.hous_id::bigint ORDER BY recd_dttm DESC LIMIT 1),"
+                f" (SELECT avg({col}) FROM sensor_l_recording WHERE farm_id=%s AND hous_id=h.hous_id::bigint AND recd_dttm > NOW() - INTERVAL '60 minutes') "
                 f"FROM farmhouse_m_info h "
                 f"WHERE h.farm_id=%s AND h.hous_id > 0 "
                 f"AND COALESCE(h.dlte_yn,'N') <> 'Y' "
@@ -216,10 +216,9 @@ def get_thresholds(farm: int, house: int) -> Dict[str, Any]:
     try:
         from agri_ai_core.src.postgresql.connection import db_session
         with db_session() as db:
-            # [2026-05-25 hotfix] sensor_m_setting 은 (farm_id, hous_id, setn_dttm) PK 로
-            # 같은 호기에 여러 row 누적. ORDER BY 없이 LIMIT 하면 임의 옛 row 가 선택되어
-            # LLM 이 잘못된 임계값으로 판단 (1호기 water_heater 오작동 사례 2026-05-25).
-            # 최신 setn_dttm 한 건만 잡도록 명시.
+            # sensor_m_setting 은 (farm_id, hous_id, setn_dttm) PK 로 같은 호기에 여러 row 누적.
+            # ORDER BY 없이 LIMIT 하면 임의 옛 row 가 선택되어 LLM 이 잘못된 임계값으로
+            # 판단할 수 있으므로 최신 setn_dttm 한 건만 잡도록 명시.
             rows = db.fetch_all(
                 "SELECT tprt_min, tprt_otml, tprt_max, tprt_crit_min, tprt_crit_max,"
                 " hmdt_min, hmdt_otml, hmdt_max, hmdt_crit_min, hmdt_crit_max,"
@@ -251,6 +250,249 @@ def get_thresholds(farm: int, house: int) -> Dict[str, Any]:
 
 
 # ────────────────────────────────────────────────────────────────────
+# 6) get_all_house_status — 전체 호기 상태를 한 번에 요약
+# ────────────────────────────────────────────────────────────────────
+def get_all_house_status(
+    farm: int,
+    minutes: int = 10,
+    decision_hours: int = 2,
+) -> Dict[str, Any]:
+    """농장 전체 호기의 센서·릴레이·최근 제어판단·임계값을 read-only 로 조회."""
+    if not isinstance(farm, int):
+        return {"error": "farm 은 정수"}
+    if not isinstance(minutes, int) or minutes < 1 or minutes > 1440:
+        return {"error": "minutes 는 1~1440 사이 정수"}
+    if not isinstance(decision_hours, int) or decision_hours < 1 or decision_hours > 24:
+        return {"error": "decision_hours 는 1~24 사이 정수"}
+
+    relay_cols = [f"relay_{i}st_flag" for i in range(1, 17)]
+    try:
+        from agri_ai_core.src.postgresql.connection import db_session
+        from agri_ai_core.src.control.control_common import get_pin_map, SEMANTIC_LABELS
+
+        with db_session() as db:
+            sensor_rows = db.fetch_all(
+                "SELECT h.hous_id, COALESCE(h.hous_name, h.hous_id::text) AS house_name, "
+                "       TO_CHAR(s.recd_dttm,'YYYY-MM-DD HH24:MI:SS') AS sensor_at, "
+                "       s.indr_tprt_valu, s.indr_hmdt_valu, s.co2_valu, "
+                "       s.watr_tprt_valu, s.oudr_tprt_valu, s.oudr_hmdt_valu "
+                "FROM farmhouse_m_info h "
+                "LEFT JOIN LATERAL ( "
+                "    SELECT recd_dttm, indr_tprt_valu, indr_hmdt_valu, co2_valu, "
+                "           watr_tprt_valu, oudr_tprt_valu, oudr_hmdt_valu "
+                "    FROM sensor_l_recording "
+                "    WHERE farm_id=%s AND hous_id=h.hous_id::bigint "
+                "    ORDER BY recd_dttm DESC LIMIT 1 "
+                ") s ON TRUE "
+                "WHERE h.farm_id=%s AND h.hous_id > 0 "
+                "  AND COALESCE(h.dlte_yn,'N') <> 'Y' "
+                "ORDER BY h.hous_id",
+                (farm, farm),
+                as_dict=True,
+            )
+            window_rows = db.fetch_all(
+                "SELECT hous_id, COUNT(*) AS n, "
+                "       AVG(indr_tprt_valu) AS indoor_temp_avg, "
+                "       AVG(indr_hmdt_valu) AS humidity_avg, "
+                "       AVG(co2_valu) AS co2_avg, "
+                "       AVG(watr_tprt_valu) AS water_temp_avg "
+                "FROM sensor_l_recording "
+                "WHERE farm_id=%s AND recd_dttm > NOW() - %s::interval "
+                "GROUP BY hous_id",
+                (farm, f"{minutes} minutes"),
+                as_dict=True,
+            )
+            relay_rows = db.fetch_all(
+                f"SELECT h.hous_id, TO_CHAR(r.recd_dttm,'YYYY-MM-DD HH24:MI:SS') AS relay_at, "
+                f"       {', '.join('r.' + c for c in relay_cols)} "
+                f"FROM farmhouse_m_info h "
+                f"LEFT JOIN LATERAL ( "
+                f"    SELECT recd_dttm, {', '.join(relay_cols)} "
+                f"    FROM relay_l_recording "
+                f"    WHERE farm_id=%s AND hous_id=h.hous_id::bigint "
+                f"    ORDER BY recd_dttm DESC LIMIT 1 "
+                f") r ON TRUE "
+                f"WHERE h.farm_id=%s AND h.hous_id > 0 "
+                f"  AND COALESCE(h.dlte_yn,'N') <> 'Y' "
+                f"ORDER BY h.hous_id",
+                (farm, farm),
+                as_dict=True,
+            )
+            decision_rows = db.fetch_all(
+                "SELECT h.hous_id, TO_CHAR(d.decided_at,'YYYY-MM-DD HH24:MI:SS') AS decided_at, "
+                "       d.action, d.circulation, d.water_heater, d.fog_occurs, "
+                "       d.drainage_motor, LEFT(COALESCE(d.reason,''), 240) AS reason "
+                "FROM farmhouse_m_info h "
+                "LEFT JOIN LATERAL ( "
+                "    SELECT decided_at, action, circulation, water_heater, fog_occurs, "
+                "           drainage_motor, reason "
+                "    FROM ai_decision_log "
+                "    WHERE farm_id=%s AND house_id=h.hous_id::integer "
+                "    ORDER BY decided_at DESC LIMIT 1 "
+                ") d ON TRUE "
+                "WHERE h.farm_id=%s AND h.hous_id > 0 "
+                "  AND COALESCE(h.dlte_yn,'N') <> 'Y' "
+                "ORDER BY h.hous_id",
+                (farm, farm),
+                as_dict=True,
+            )
+            decision_count_rows = db.fetch_all(
+                "SELECT house_id, COUNT(*) AS total, "
+                "       COUNT(*) FILTER (WHERE action='change') AS change_count, "
+                "       COUNT(*) FILTER (WHERE action='keep') AS keep_count "
+                "FROM ai_decision_log "
+                "WHERE farm_id=%s AND decided_at > NOW() - %s::interval "
+                "GROUP BY house_id",
+                (farm, f"{decision_hours} hours"),
+                as_dict=True,
+            )
+            threshold_rows = db.fetch_all(
+                "SELECT h.hous_id, t.tprt_min, t.tprt_otml, t.tprt_max, "
+                "       t.hmdt_min, t.hmdt_otml, t.hmdt_max, "
+                "       t.co2_min, t.co2_otml, t.co2_max, "
+                "       t.watr_tprt_min, t.watr_tprt_otml, t.watr_tprt_max "
+                "FROM farmhouse_m_info h "
+                "LEFT JOIN LATERAL ( "
+                "    SELECT tprt_min, tprt_otml, tprt_max, "
+                "           hmdt_min, hmdt_otml, hmdt_max, "
+                "           co2_min, co2_otml, co2_max, "
+                "           watr_tprt_min, watr_tprt_otml, watr_tprt_max "
+                "    FROM sensor_m_setting "
+                "    WHERE farm_id=%s AND hous_id=h.hous_id::bigint "
+                "    ORDER BY setn_dttm DESC LIMIT 1 "
+                ") t ON TRUE "
+                "WHERE h.farm_id=%s AND h.hous_id > 0 "
+                "  AND COALESCE(h.dlte_yn,'N') <> 'Y' "
+                "ORDER BY h.hous_id",
+                (farm, farm),
+                as_dict=True,
+            )
+
+        windows = {int(r["hous_id"]): r for r in window_rows}
+        relays = {int(r["hous_id"]): r for r in relay_rows}
+        decisions = {int(r["hous_id"]): r for r in decision_rows}
+        decision_counts = {int(r["house_id"]): r for r in decision_count_rows if r.get("house_id") is not None}
+        thresholds = {int(r["hous_id"]): r for r in threshold_rows}
+
+        houses = []
+        for s in sensor_rows:
+            house = int(s["hous_id"])
+            threshold = _compact_thresholds(thresholds.get(house))
+            current = {
+                "at": s.get("sensor_at"),
+                "indoor_temp": _f(s.get("indr_tprt_valu")),
+                "humidity": _f(s.get("indr_hmdt_valu")),
+                "co2": _f(s.get("co2_valu")),
+                "water_temp": _f(s.get("watr_tprt_valu")),
+                "outdoor_temp": _f(s.get("oudr_tprt_valu")),
+                "outdoor_humidity": _f(s.get("oudr_hmdt_valu")),
+            }
+            w = windows.get(house) or {}
+            relay = relays.get(house) or {}
+            pin_map = get_pin_map(house)
+            inverse = {pin: sem for sem, pin in pin_map.items()}
+            semantic_on: List[str] = []
+            raw_flags: Dict[str, bool] = {}
+            for col in relay_cols:
+                on = _bool_flag(relay.get(col))
+                raw_flags[col] = on
+                if on:
+                    sem = inverse.get(col)
+                    if sem:
+                        semantic_on.append(SEMANTIC_LABELS.get(sem, sem))
+            d = decisions.get(house) or {}
+            dc = decision_counts.get(house) or {}
+            houses.append({
+                "house": house,
+                "name": s.get("house_name"),
+                "sensor_current": current,
+                "sensor_window": {
+                    "minutes": minutes,
+                    "n": int(w.get("n") or 0),
+                    "indoor_temp_avg": _f(w.get("indoor_temp_avg")),
+                    "humidity_avg": _f(w.get("humidity_avg")),
+                    "co2_avg": _f(w.get("co2_avg")),
+                    "water_temp_avg": _f(w.get("water_temp_avg")),
+                },
+                "relay": {
+                    "at": relay.get("relay_at"),
+                    "semantic_on": sorted(semantic_on),
+                    "raw_flags": raw_flags,
+                },
+                "latest_decision": {
+                    "at": d.get("decided_at"),
+                    "action": d.get("action"),
+                    "circulation": d.get("circulation"),
+                    "heater": d.get("water_heater"),
+                    "fog": d.get("fog_occurs"),
+                    "drain": d.get("drainage_motor"),
+                    "reason": d.get("reason"),
+                    "recent_hours": decision_hours,
+                    "recent_total": int(dc.get("total") or 0),
+                    "recent_change_count": int(dc.get("change_count") or 0),
+                    "recent_keep_count": int(dc.get("keep_count") or 0),
+                },
+                "thresholds": threshold,
+                "status_flags": _status_flags(current, threshold),
+            })
+        return {
+            "success": True,
+            "farm": farm,
+            "minutes": minutes,
+            "decision_hours": decision_hours,
+            "house_count": len(houses),
+            "houses": houses,
+            "note": "전체 재배사의 센서·릴레이·최근 LLM 판단·임계값을 한 번에 조회한 read-only 결과",
+        }
+    except Exception as e:
+        logger.warning(f"[tools_agent_read] get_all_house_status 실패: {e}")
+        return {"error": f"DB 조회 실패: {e}"}
+
+
+def _compact_thresholds(row: Dict[str, Any]) -> Dict[str, Any]:
+    if not row:
+        return {}
+    return {
+        "indoor_temp": {"min": _f(row.get("tprt_min")), "optimal": _f(row.get("tprt_otml")), "max": _f(row.get("tprt_max"))},
+        "humidity": {"min": _f(row.get("hmdt_min")), "optimal": _f(row.get("hmdt_otml")), "max": _f(row.get("hmdt_max"))},
+        "co2": {"min": _f(row.get("co2_min")), "optimal": _f(row.get("co2_otml")), "max": _f(row.get("co2_max"))},
+        "water_temp": {"min": _f(row.get("watr_tprt_min")), "optimal": _f(row.get("watr_tprt_otml")), "max": _f(row.get("watr_tprt_max"))},
+    }
+
+
+def _status_flags(current: Dict[str, Any], thresholds: Dict[str, Any]) -> List[str]:
+    flags: List[str] = []
+    labels = {
+        "indoor_temp": "내부온도",
+        "humidity": "습도",
+        "co2": "CO2",
+        "water_temp": "수온",
+    }
+    for key, label in labels.items():
+        value = current.get(key)
+        limit = thresholds.get(key) or {}
+        if value is None or not limit:
+            continue
+        low = limit.get("min")
+        high = limit.get("max")
+        if low is not None and value < low:
+            flags.append(f"{label} 낮음({value} < {low})")
+        if high is not None and value > high:
+            flags.append(f"{label} 높음({value} > {high})")
+    return flags
+
+
+def _bool_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in ("1", "t", "true", "y", "yes", "on")
+
+
+# ────────────────────────────────────────────────────────────────────
 # Float 안전 변환 — Decimal/None 모두 처리
 # ────────────────────────────────────────────────────────────────────
 def _f(v):
@@ -272,6 +514,7 @@ TOOL_REGISTRY = {
     "get_relay_state":      get_relay_state,
     "compare_houses":       compare_houses,
     "get_thresholds":       get_thresholds,
+    "get_all_house_status": get_all_house_status,
 }
 
 TOOL_SPECS = [
@@ -315,6 +558,15 @@ TOOL_SPECS = [
         "args": {
             "farm":  {"type": "int"},
             "house": {"type": "int"},
+        },
+    },
+    {
+        "name": "get_all_house_status",
+        "description": "농장 전체 호기의 최신 센서, 최근 N분 평균, 현재 릴레이 ON 목록, 최근 LLM 제어 판단, 임계값을 한 번에 조회",
+        "args": {
+            "farm": {"type": "int"},
+            "minutes": {"type": "int", "desc": "센서 평균 조회 윈도우(분), 기본 10, 1~1440"},
+            "decision_hours": {"type": "int", "desc": "최근 LLM 판단 카운트 윈도우(시간), 기본 2, 1~24"},
         },
     },
 ]

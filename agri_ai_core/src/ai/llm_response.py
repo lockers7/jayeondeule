@@ -324,14 +324,12 @@ def _strip_nav_noise(text: str) -> str:
 # - description이 content와 중복이면 제거
 # - 불필요한 metadata 키 제거
 # - 네비게이션 잡음 제거
-# - content 개별 항목 5000자 제한 + 전체 결과 20000자 제한 (A4 30장 대응)
-# 기존: 1500자 제한 → A4 1장도 못 채우는 빈약한 답변
-# 변경: 20000자로 확장하여 대용량 문서 학습 내용 기반 상세 답변 지원
+# - content 개별 항목 1500자 제한 + 전체 결과 4500자 제한
 # ────────────────────────────────────────────────────────────────────
 def _refine_farm_knowledge(tool_result: str) -> str:
     # 참조 자료 크기 고정 — num_ctx(16384)에서 시스템프롬프트+대화+도구결과+답변 공간 확보
     # 시스템프롬프트 ~3000토큰 + 대화 ~2000토큰 + 답변 ~8192토큰 = ~13000 → 참조 자료 ~3000토큰 ≈ 4500자
-    _MAX_TOTAL_REFINED = 4500   # 전체 참조 자료 최대 (3/14 안정화 1500 → RAG 대응 4500)
+    _MAX_TOTAL_REFINED = 4500   # 전체 참조 자료 최대
     _MAX_CONTENT_PER_ITEM = 1500  # 개별 항목 content 최대
 
     data = safe_json_load(tool_result)
@@ -390,7 +388,7 @@ def _refine_farm_knowledge(tool_result: str) -> str:
             for key in _UNNECESSARY_META_KEYS:
                 meta.pop(key, None)
 
-    # [FIX] file_list가 있으면 (메타 질문: 학습/파일/목록 등) 파일 목록을 우선 포함
+    # file_list가 있으면 (메타 질문: 학습/파일/목록 등) 파일 목록을 우선 포함
     # file_list 중심으로 전달하고, results(검색 내용)는 최소화하여 LLM이 file_list에 집중하도록 함
     _file_list = data.get("file_list")
     if _file_list and isinstance(_file_list, list):

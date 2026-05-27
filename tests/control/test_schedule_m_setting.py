@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════════════════
-# Phase 1 단위테스트 — SCHEDULE_M_SETTING 테이블 + reader 함수.
+# 단위테스트 — SCHEDULE_M_SETTING 테이블 + reader 함수.
 #
 # 검증 항목:
 #   1) read_schedule_settings() 가 seed 13건 반환 + 필수 컬럼 존재
@@ -35,7 +35,6 @@ SEED_CRON_TASKS = {
     'growth_rag_job_midnight': '5 0 * * *',
     'daily_log_cleanup':       '0 0 * * *',
     'chunk_cleanup_job':       '0 3 * * *',
-    'opinet_daily_job':        '0 10 * * *',
     'camera_archive_hourly':   '0 * * * *',
     'camera_archive_cleanup':  '0 4 * * *',
     'lotto_weekly_job':        '0 22 * * 6',

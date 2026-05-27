@@ -52,11 +52,35 @@ def run_3stage_pipeline_sync(user_query, full_query, farm_id, house_id, farm_nam
         required_data = analysis.get("required_data", []) or []
         logger.info(f"[3단계파이프라인] 1단계 완료: type={question_type} 도구={len(required_data)}개")
 
+        # ⛔ 절대 제거 금지 — 분석 자가학습 세이프티넷
+        # "앞으로 ~ 질문에는 ~ 하라"류 가르침 발화는 ANALYZER 분류와 무관하게
+        # 교훈 등록을 보장한다. 2단계 스킵 판정보다 앞에 두어 general/빈 계획
+        # 오분류에도 DataCollector 경로로 강제 진입시킨다. 판정은 사용자 원문만.
+        _force_collect = False
+        try:
+            from agri_ai_core.src.ai.chat_lessons import detect_teaching
+            if (detect_teaching(user_query)
+                    and not any(d.get("tool") == "manage_analysis_lesson"
+                                for d in required_data)):
+                required_data.append({
+                    "tool": "manage_analysis_lesson",
+                    "args": {"action": "register",
+                             "lesson_text": (user_query or "")[:400]},
+                    "priority": 3,
+                })
+                analysis["required_data"] = required_data
+                _force_collect = True
+                logger.warning(
+                    f"[세이프티넷] 가르침 발화 감지 — 분석 교훈 등록 자동 보장 "
+                    f"(query=\"{(user_query or '')[:60]}\")")
+        except Exception:
+            pass
+
         # 2단계 스킵 조건:
         #   - greeting/conversation_ref/general: 도구 불필요 유형
         #   - required_data=[]: LLM이 도구가 필요 없다고 판단한 모든 경우
-        _skip_types = ("greeting", "conversation_ref", "general")
-        _is_light = question_type in _skip_types or not required_data
+        _skip_types = ("greeting", "casual_chat", "conversation_ref", "general")
+        _is_light = (question_type in _skip_types or not required_data) and not _force_collect
         if _is_light:
             logger.info(
                 f"[3단계파이프라인] 2단계 스킵 "
@@ -71,6 +95,7 @@ def run_3stage_pipeline_sync(user_query, full_query, farm_id, house_id, farm_nam
             collector = DataCollector(
                 default_tool_args=default_tool_args,
                 progress_callback=_progress,
+                raw_user_query=user_query,  # 세이프티넷 키워드 판정용 원문
             )
             collected = collector.collect(analysis)
 
@@ -93,7 +118,7 @@ def run_3stage_pipeline_sync(user_query, full_query, farm_id, house_id, farm_nam
         else:
             _progress("수집된 데이터로 답변을 작성하고 있습니다...", "llm_generating")
 
-        farm_info = _build_farm_info_text()
+        farm_info = _build_farm_info_text(farm_id)
 
         result = generate_answer(
             user_query=full_query,

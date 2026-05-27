@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# test_tools_agent_sub — B 단계 도구 4개 검증 [2026-05-25]
+# test_tools_agent_sub — 구독/알림 도구 4개 검증
 #
 # 대상:
 #   · agent_subscribe              : agent_subscriptions INSERT
@@ -97,13 +97,20 @@ class TestSubscribeReal:
     def test_per_user_limit(self):
         from agri_ai_core.src.ai.tools_agent_sub import agent_subscribe
         # 5건 등록
-        for i in range(5):
-            r = agent_subscribe(task=f"__pytest_sub_limit_{i}__",
-                                interval_min=60, farm_id=1,
+        # 유사 구독 자동 대체에 걸리지 않도록 서로 성격이 다른 과제 사용
+        distinct_tasks = [
+            "__pytest__ 야간 저온 임계 이탈만 감시하고 이상 시 알림",
+            "__pytest__ 수확량 집계를 주간 단위로 요약 보고",
+            "__pytest__ 카메라 영상에서 갓 크기 변화를 관찰",
+            "__pytest__ 전력 사용량 급증 여부를 점검",
+            "__pytest__ 배지 오염 징후 키워드를 결정 이력에서 탐지",
+        ]
+        for t in distinct_tasks:
+            r = agent_subscribe(task=t, interval_min=60, farm_id=1,
                                 user_id="pytest_limit_user")
-            assert r["success"] is True
-        # 6번째 차단
-        r6 = agent_subscribe(task="__pytest_sub_limit_6__", interval_min=60,
+            assert r["success"] is True, r
+        # 6번째 차단 (역시 상이한 과제)
+        r6 = agent_subscribe(task="__pytest__ 환기팬 소음 이상 진동 감시", interval_min=60,
                              farm_id=1, user_id="pytest_limit_user")
         assert r6["success"] is False
         assert r6["reason"] == "limit"

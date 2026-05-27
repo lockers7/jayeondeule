@@ -61,6 +61,26 @@ def _classify_topic(query: str) -> str:
 # 하이브리드 대화 컨텍스트 로드 — 직전 N턴(즉시 맥락) + VectorDB 관련 대화.
 # VectorDB 결과 ↔ 직전 대화 교차 중복 제거 후 [system+user/assistant] 리스트 반환.
 # ────────────────────────────────────────────────────────────────────
+# 세션별 직전 답변의 실제 사용 도구(프로세스 메모리, 즉시 후속질문용) — GAP5.
+# "어떤 도구/로그/데이터로 답했나" 후속 질문이 직전 행위를 정직히 답하도록.
+_last_tools = {}
+_LAST_TOOLS_MAX = 500
+
+
+def remember_last_tools(session_id, tools_used):
+    if not session_id or not tools_used:
+        return
+    try:
+        names = ", ".join(dict.fromkeys(str(t) for t in tools_used if t))
+        if not names:
+            return
+        if len(_last_tools) > _LAST_TOOLS_MAX:
+            _last_tools.clear()
+        _last_tools[session_id] = names
+    except Exception:
+        pass
+
+
 def load_hybrid_context(session_id, user_query, farm_id, label=""):
     if not session_id:
         return None
@@ -74,7 +94,7 @@ def load_hybrid_context(session_id, user_query, farm_id, label=""):
     related_context = _search_related_conversations(user_query, farm_id)
 
     # [3] 하이브리드 컨텍스트 조합
-    # [FIX] VectorDB 주제와 직전 대화 교차 중복 제거: 직전 대화에 이미 있는 질문은 VectorDB 주제에서 제외
+    # VectorDB 주제와 직전 대화 교차 중복 제거: 직전 대화에 이미 있는 질문은 VectorDB 주제에서 제외
     if related_context and recent_turns:
         _recent_user_queries = set()
         for t in recent_turns:
@@ -121,6 +141,15 @@ def load_hybrid_context(session_id, user_query, farm_id, label=""):
             f"[{label}하이브리드] session={session_id[:12]}... "
             f"최근={len(recent_turns)}턴, 관련대화={'있음' if related_context else '없음'}"
         )
+    _tools_note = _last_tools.get(session_id)
+    if _tools_note:
+        note = {"role": "system",
+                "content": (f"[직전 답변에서 실제 사용한 도구: {_tools_note}] "
+                            f"'어떤 도구/로그/데이터로 답했나' 류 후속 질문에는 이 목록을 근거로 정직히 답하라.")}
+        if history:
+            history.insert(0, note)
+        else:
+            history = [note]
     return history if history else None
 
 
@@ -141,9 +170,8 @@ def _search_related_conversations(user_query, farm_id):
             return None
 
         _t1 = time.time()
-        # [2026-05-27 hotfix7] 짧은 timeout + 1 retry 로 변경.
-        # default (60s × 5 retry = 5분) 시 채팅 hang. embedder 실패 시 _search_related_conversations
-        # 가 None 반환 → load_hybrid_context 가 recent_turns 만으로 진행 (graceful degradation).
+        # 짧은 timeout + 1 retry — 임베딩 실패 시 _search_related_conversations 가
+        # None 반환 → load_hybrid_context 가 recent_turns 만으로 진행 (graceful degradation).
         query_embedding = embed_text(user_query, timeout=8, max_retries=1)
         _embed_ms = (time.time() - _t1) * 1000
         logger.info(f"[PERF:대화] 관련대화-임베딩={_embed_ms:.0f}ms")
@@ -216,7 +244,7 @@ def _search_related_conversations(user_query, farm_id):
                 _preview_key = query_preview.strip()[:100]
                 if _preview_key in _seen_queries:
                     continue
-                # [FIX] 유사 질문 추가 필터: 기존 질문과 앞 60자 80% 이상 겹치면 중복으로 판정
+                # 유사 질문 추가 필터: 앞 60자가 80% 이상 겹치면 중복으로 판정
                 _is_similar = False
                 _key_prefix = _preview_key[:60]
                 for existing in _seen_queries:
@@ -254,11 +282,12 @@ def _search_related_conversations(user_query, farm_id):
 # SPECIAL 마커 제거 후 user/assistant 두 턴을 add_turn 으로 저장.
 # 환경변수 SYNC_VECTORDB_SAVE=true 면 VectorDB 도 동기 저장.
 # ────────────────────────────────────────────────────────────────────
-def save_conversation_turn_hybrid(session_id, user_query, response_text, farm_id=None, label=""):
+def save_conversation_turn_hybrid(session_id, user_query, response_text, farm_id=None, label="", tools_used=None):
     if not session_id:
         return
+    remember_last_tools(session_id, tools_used)
 
-    # [1] PostgreSQL 저장 (기존 동기 방식)
+    # [1] PostgreSQL 저장 (동기)
     # DB 저장 전 SPECIAL 내부 마커 제거 (오염 방지)
     _clean_response = re.sub(r'<SPECIAL_\d+>.*?(?=\n|$)', '', response_text or '', flags=re.DOTALL | re.IGNORECASE)
     _clean_response = re.sub(r'</?SPECIAL[^>]*>', '', _clean_response, flags=re.IGNORECASE).strip()
@@ -304,13 +333,13 @@ def _async_vectordb_save(session_id, user_query, response_text, farm_id):
         # Q+A 결합 문서
         combined_text = f"질문: {user_query}\n답변: {(response_text or '')[:500]}"
 
-        # [2026-05-27 hotfix7] 저장 임베딩도 짧은 timeout. 실패 시 대화 저장 skip (PostgreSQL 만).
+        # 저장 임베딩도 짧은 timeout — 실패 시 VectorDB 저장 skip (PostgreSQL 만 저장).
         embedding = embed_text(combined_text, timeout=8, max_retries=1)
         if not embedding:
             logger.debug(f"[하이브리드] 저장 임베딩 실패 skip (PG 만 저장됨)")
             return
 
-        # [FIX] 동일 Q&A 중복 저장 방지: 질문+응답 내용 기반 해시 → 같은 내용이면 같은 doc_id로 upsert
+        # 동일 Q&A 중복 저장 방지: 질문+응답 내용 기반 해시 → 같은 내용이면 같은 doc_id로 upsert
         _content_hash = hashlib.md5(
             f"{farm_id}_{user_query[:200]}_{(response_text or '')[:200]}".encode()
         ).hexdigest()[:16]
