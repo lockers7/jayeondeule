@@ -1,5 +1,7 @@
 *.db
 assets/external/
+# KIS 공식 open-trading-api clone(자체 .git 보유, MCP 런타임 의존) — 부모 추적 제외, 디스크엔 유지
+external/kis-open-trading-api/
 .web
 .states
 .ollama/
