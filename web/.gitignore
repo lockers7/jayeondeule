@@ -27,3 +27,7 @@ dist_old/
 
 # 프론트엔드 빌드 산출물 (다양한 이름)
 frontend/dist*/
+
+# 100MB 초과 업로드 영상(GitHub 한도) — git 미추적, 디스크 보존
+goheung/upload/board/post/10/2f05fd67.mp4
+jayeondeule/upload/board/post/10/2f05fd67.mp4
